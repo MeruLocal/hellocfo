@@ -2,3 +2,6 @@ project_id = "ptftkblnvsybcggbecau"
 
 [functions.generate-intent]
 verify_jwt = false
+
+[functions.fetch-mcp-tools]
+verify_jwt = false
