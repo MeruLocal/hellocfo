@@ -1,0 +1,4 @@
+project_id = "ptftkblnvsybcggbecau"
+
+[functions.generate-intent]
+verify_jwt = false
