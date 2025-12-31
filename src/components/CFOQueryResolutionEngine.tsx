@@ -5,6 +5,8 @@
 // ============================================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/hooks/use-toast';
 import {
   Plus, Edit, Trash2, X, Check, Download, Upload, Wand2, Database, Sparkles,
   Loader2, Brain, GitBranch, Layers, Box, Play, Save, Settings, Search,
@@ -3774,97 +3776,73 @@ export default function CFOQueryResolutionEngine() {
     return matchesSearch && matchesModule && matchesStatus;
   });
 
-  // AI Generation Functions - Real Claude API Integration
+  // AI Generation Functions - Using Lovable AI Edge Function
   const generateIntentConfig = async (intent: Intent): Promise<Intent> => {
     const moduleInfo = MODULES.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
     try {
-      // Step 1: Generate Training Phrases (10 by default)
-      console.log('🤖 Generating training phrases...');
-      const phrasesPrompt = generateTrainingPhrasesPrompt(
-        intent.name,
-        moduleInfo?.name || intent.moduleId,
-        subModuleInfo?.name || intent.subModuleId,
-        intent.description,
-        10,
-        []
-      );
-      const phrasesResponse = await callClaudeAPI(
-        [{ role: 'user', content: phrasesPrompt }],
-        llmConfig
-      );
-      const trainingPhrases = parseClaudeJSON<string[]>(phrasesResponse);
+      console.log('🤖 Generating intent config via AI...');
       
-      // Step 2: Generate Entities
-      console.log('🤖 Generating entities...');
-      const entitiesPrompt = generateEntitiesPrompt(
-        intent.name,
-        moduleInfo?.name || intent.moduleId,
-        trainingPhrases
-      );
-      const entitiesResponse = await callClaudeAPI(
-        [{ role: 'user', content: entitiesPrompt }],
-        llmConfig
-      );
-      const entities = parseClaudeJSON<Entity[]>(entitiesResponse);
-      
-      // Step 3: Generate Data Pipeline
-      console.log('🤖 Generating data pipeline...');
-      const pipelinePrompt = generatePipelinePrompt(
-        intent.name,
-        moduleInfo?.name || intent.moduleId,
-        entities,
-        MCP_TOOLS
-      );
-      const pipelineResponse = await callClaudeAPI(
-        [{ role: 'user', content: pipelinePrompt }],
-        llmConfig
-      );
-      const dataPipeline = parseClaudeJSON<PipelineNode[]>(pipelineResponse);
-      
-      // Step 4: Generate Enrichments
-      console.log('🤖 Generating enrichments...');
-      const enrichmentsPrompt = generateEnrichmentsPrompt(
-        intent.name,
-        moduleInfo?.name || intent.moduleId,
-        dataPipeline,
-        ENRICHMENT_TYPES
-      );
-      const enrichmentsResponse = await callClaudeAPI(
-        [{ role: 'user', content: enrichmentsPrompt }],
-        llmConfig
-      );
-      const enrichments = parseClaudeJSON<Enrichment[]>(enrichmentsResponse);
-      
-      // Step 5: Generate Response Template
-      console.log('🤖 Generating response template...');
-      const responsePrompt = generateResponsePrompt(
-        intent.name,
-        moduleInfo?.name || intent.moduleId,
-        dataPipeline,
-        enrichments
-      );
-      const responseResponse = await callClaudeAPI(
-        [{ role: 'user', content: responsePrompt }],
-        llmConfig
-      );
-      const responseConfig = parseClaudeJSON<ResponseConfig>(responseResponse);
-      
-      console.log('✅ AI generation complete!');
-      
+      const { data, error } = await supabase.functions.invoke('generate-intent', {
+        body: {
+          intentName: intent.name,
+          moduleName: moduleInfo?.name || intent.moduleId,
+          subModuleName: subModuleInfo?.name || intent.subModuleId,
+          description: intent.description,
+          section: 'all',
+          phraseCount: 10
+        }
+      });
+
+      if (error) {
+        console.error('Edge function error:', error);
+        throw new Error(error.message || 'Failed to generate intent');
+      }
+
+      if (data?.error) {
+        console.error('AI generation error:', data.error);
+        toast({
+          title: 'AI Generation Error',
+          description: data.error,
+          variant: 'destructive'
+        });
+        throw new Error(data.error);
+      }
+
+      console.log('✅ AI generation complete!', data);
+
+      // Ensure pipeline nodes have required parameters field
+      const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
+        ...node,
+        parameters: node.parameters || []
+      }));
+
       return {
         ...intent,
-        trainingPhrases,
-        entities,
-        resolutionFlow: { dataPipeline, enrichments, responseConfig },
+        trainingPhrases: data.trainingPhrases || [],
+        entities: data.entities || [],
+        resolutionFlow: {
+          dataPipeline,
+          enrichments: data.enrichments || [],
+          responseConfig: data.responseConfig || {
+            type: 'metric_with_trend',
+            template: '📊 Result: {data}',
+            followUpQuestions: []
+          }
+        },
         generatedBy: 'ai',
-        aiConfidence: 0.90 + Math.random() * 0.08, // 90-98% confidence
-        lastGeneratedAt: new Date().toISOString(),
+        aiConfidence: data.aiConfidence || 0.9,
+        lastGeneratedAt: data.generatedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
     } catch (error) {
       console.error('❌ AI Generation Error:', error);
+      toast({
+        title: 'Generation Failed',
+        description: 'Using fallback generation. Check your connection.',
+        variant: 'destructive'
+      });
       // Fall back to basic generation if API fails
       return generateFallbackConfig(intent, moduleInfo, subModuleInfo);
     }
@@ -3943,108 +3921,113 @@ export default function CFOQueryResolutionEngine() {
     const phraseCount = options?.phraseCount || 10;
     
     try {
-      // Generate specific section using Claude API
-      if (section === 'training') {
-        console.log(`🤖 Generating ${phraseCount} training phrases...`);
-        const prompt = generateTrainingPhrasesPrompt(
-          intent.name,
-          moduleInfo?.name || intent.moduleId,
-          subModuleInfo?.name || intent.subModuleId,
-          intent.description,
+      console.log(`🤖 Regenerating ${section || 'all'} via AI...`);
+      
+      const { data, error } = await supabase.functions.invoke('generate-intent', {
+        body: {
+          intentName: intent.name,
+          moduleName: moduleInfo?.name || intent.moduleId,
+          subModuleName: subModuleInfo?.name || intent.subModuleId,
+          description: intent.description,
+          section: section || 'all',
+          existingPhrases: intent.trainingPhrases,
           phraseCount,
-          []
-        );
-        const response = await callClaudeAPI([{ role: 'user', content: prompt }], llmConfig);
-        const trainingPhrases = parseClaudeJSON<string[]>(response);
-        
-        return {
-          trainingPhrases,
-          lastGeneratedAt: new Date().toISOString()
+          existingEntities: intent.entities,
+          existingPipeline: intent.resolutionFlow?.dataPipeline || [],
+          existingEnrichments: intent.resolutionFlow?.enrichments || []
+        }
+      });
+
+      if (error) {
+        console.error('Edge function error:', error);
+        throw new Error(error.message || 'Failed to regenerate');
+      }
+
+      if (data?.error) {
+        console.error('AI generation error:', data.error);
+        toast({
+          title: 'AI Generation Error',
+          description: data.error,
+          variant: 'destructive'
+        });
+        throw new Error(data.error);
+      }
+
+      console.log('✅ Regeneration complete!', data);
+
+      // Build result based on section
+      const result: Partial<Intent> = {
+        lastGeneratedAt: data.generatedAt || new Date().toISOString(),
+        generatedBy: 'ai',
+        aiConfidence: data.aiConfidence
+      };
+
+      if (section === 'training' && data.trainingPhrases) {
+        result.trainingPhrases = data.trainingPhrases;
+      }
+      
+      if (section === 'entities' && data.entities) {
+        result.entities = data.entities;
+      }
+      
+      if (section === 'pipeline' && data.dataPipeline) {
+        const dataPipeline = data.dataPipeline.map((node: any) => ({
+          ...node,
+          parameters: node.parameters || []
+        }));
+        result.resolutionFlow = {
+          ...intent.resolutionFlow!,
+          dataPipeline
         };
       }
       
-      if (section === 'entities') {
-        console.log('🤖 Generating entities...');
-        const prompt = generateEntitiesPrompt(
-          intent.name,
-          moduleInfo?.name || intent.moduleId,
-          intent.trainingPhrases
-        );
-        const response = await callClaudeAPI([{ role: 'user', content: prompt }], llmConfig);
-        const entities = parseClaudeJSON<Entity[]>(response);
-        
-        return {
-          entities,
-          lastGeneratedAt: new Date().toISOString()
+      if (section === 'enrichments' && data.enrichments) {
+        result.resolutionFlow = {
+          ...intent.resolutionFlow!,
+          enrichments: data.enrichments
         };
       }
       
-      if (section === 'pipeline') {
-        console.log('🤖 Generating data pipeline...');
-        const prompt = generatePipelinePrompt(
-          intent.name,
-          moduleInfo?.name || intent.moduleId,
-          intent.entities,
-          MCP_TOOLS
-        );
-        const response = await callClaudeAPI([{ role: 'user', content: prompt }], llmConfig);
-        const dataPipeline = parseClaudeJSON<PipelineNode[]>(response);
-        
-        return {
-          resolutionFlow: {
-            ...intent.resolutionFlow!,
-            dataPipeline
-          },
-          lastGeneratedAt: new Date().toISOString()
+      if (section === 'response' && data.responseConfig) {
+        result.resolutionFlow = {
+          ...intent.resolutionFlow!,
+          responseConfig: data.responseConfig
         };
       }
       
-      if (section === 'enrichments') {
-        console.log('🤖 Generating enrichments...');
-        const prompt = generateEnrichmentsPrompt(
-          intent.name,
-          moduleInfo?.name || intent.moduleId,
-          intent.resolutionFlow?.dataPipeline || [],
-          ENRICHMENT_TYPES
-        );
-        const response = await callClaudeAPI([{ role: 'user', content: prompt }], llmConfig);
-        const enrichments = parseClaudeJSON<Enrichment[]>(response);
-        
-        return {
-          resolutionFlow: {
-            ...intent.resolutionFlow!,
-            enrichments
-          },
-          lastGeneratedAt: new Date().toISOString()
+      if (section === 'all') {
+        const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
+          ...node,
+          parameters: node.parameters || []
+        }));
+        result.trainingPhrases = data.trainingPhrases || [];
+        result.entities = data.entities || [];
+        result.resolutionFlow = {
+          dataPipeline,
+          enrichments: data.enrichments || [],
+          responseConfig: data.responseConfig || {
+            type: 'metric_with_trend',
+            template: '📊 Result: {data}',
+            followUpQuestions: []
+          }
         };
       }
-      
-      if (section === 'response') {
-        console.log('🤖 Generating response template...');
-        const prompt = generateResponsePrompt(
-          intent.name,
-          moduleInfo?.name || intent.moduleId,
-          intent.resolutionFlow?.dataPipeline || [],
-          intent.resolutionFlow?.enrichments || []
-        );
-        const response = await callClaudeAPI([{ role: 'user', content: prompt }], llmConfig);
-        const responseConfig = parseClaudeJSON<ResponseConfig>(response);
-        
-        return {
-          resolutionFlow: {
-            ...intent.resolutionFlow!,
-            responseConfig
-          },
-          lastGeneratedAt: new Date().toISOString()
-        };
-      }
-      
-      // For 'all' or unspecified, regenerate everything
-      const fullIntent = await generateIntentConfig(intent);
-      return fullIntent;
+
+      toast({
+        title: 'Generation Complete',
+        description: `Successfully regenerated ${section || 'all sections'} with AI`
+      });
+
+      return result;
       
     } catch (error) {
       console.error('❌ Regeneration Error:', error);
+      toast({
+        title: 'Regeneration Failed',
+        description: error instanceof Error ? error.message : 'Check your connection and try again',
+        variant: 'destructive'
+      });
+      
       // Fall back to basic generation
       if (section === 'training') {
         const basePhrases = [
