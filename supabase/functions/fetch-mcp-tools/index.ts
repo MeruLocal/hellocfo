@@ -5,8 +5,33 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Parse SSE events from a buffer
+function parseSSEEvents(buffer: string): { events: Array<{type: string, data: string}>, remaining: string } {
+  const events: Array<{type: string, data: string}> = [];
+  const lines = buffer.split('\n');
+  let currentEvent = { type: 'message', data: '' };
+  let remaining = '';
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    if (line.startsWith('event:')) {
+      currentEvent.type = line.substring(6).trim();
+    } else if (line.startsWith('data:')) {
+      currentEvent.data = line.substring(5).trim();
+    } else if (line === '' && currentEvent.data) {
+      events.push({ ...currentEvent });
+      currentEvent = { type: 'message', data: '' };
+    } else if (i === lines.length - 1 && line !== '') {
+      // Incomplete line, keep as remaining
+      remaining = line;
+    }
+  }
+  
+  return { events, remaining };
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -24,15 +49,19 @@ serve(async (req) => {
       );
     }
 
+    const mcpHeaders = {
+      "Authorization": `Bearer ${authToken}`,
+      "X-Entity-Id": entityId,
+      "X-Org-Id": orgId,
+    };
+
     console.log("Connecting to MCP SSE endpoint...");
 
-    // Step 1: Connect to SSE endpoint to get the message endpoint
+    // Connect to SSE endpoint
     const sseResponse = await fetch("https://mcp.hellobooks.ai/sse", {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${authToken}`,
-        "X-Entity-Id": entityId,
-        "X-Org-Id": orgId,
+        ...mcpHeaders,
         "Accept": "text/event-stream",
         "Cache-Control": "no-cache",
       },
@@ -42,197 +71,145 @@ serve(async (req) => {
 
     if (!sseResponse.ok) {
       const errorText = await sseResponse.text();
-      console.error("SSE connection failed:", sseResponse.status, errorText);
+      console.error("SSE connection failed:", errorText);
       return new Response(
-        JSON.stringify({ error: "Failed to connect to MCP SSE endpoint", status: sseResponse.status, details: errorText }),
+        JSON.stringify({ error: "Failed to connect to MCP SSE", details: errorText }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Read SSE stream to find the endpoint event
     const reader = sseResponse.body?.getReader();
     if (!reader) {
       return new Response(
-        JSON.stringify({ error: "Failed to get SSE stream reader" }),
+        JSON.stringify({ error: "Failed to get SSE reader" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const decoder = new TextDecoder();
-    let messageEndpoint = "";
     let buffer = "";
+    let messageEndpoint = "";
+    let tools: unknown[] = [];
+    let initializeSent = false;
+    let toolsListSent = false;
+    const startTime = Date.now();
+    const timeout = 30000; // 30 second timeout
 
-    // Read SSE events to find the endpoint
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      buffer += decoder.decode(value, { stream: true });
-      
-      // Parse SSE events - look for endpoint event
-      const endpointMatch = buffer.match(/event:\s*endpoint\s*\ndata:\s*([^\n]+)/);
-      if (endpointMatch) {
-        const data = endpointMatch[1].trim();
-        messageEndpoint = data.startsWith('http') ? data : `https://mcp.hellobooks.ai${data}`;
-        console.log("Found message endpoint:", messageEndpoint);
-        break;
-      }
-
-      // Also check for /messages pattern
-      const messagesMatch = buffer.match(/data:\s*(\/messages[^\n]*)/);
-      if (messagesMatch) {
-        messageEndpoint = `https://mcp.hellobooks.ai${messagesMatch[1].trim()}`;
-        console.log("Found message endpoint:", messageEndpoint);
-        break;
-      }
-    }
-
-    reader.cancel();
-
-    if (!messageEndpoint) {
-      return new Response(
-        JSON.stringify({ error: "Could not find message endpoint from SSE" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Step 2: Send initialize request first (required by MCP protocol)
-    console.log("Sending initialize request to:", messageEndpoint);
-    
-    const initResponse = await fetch(messageEndpoint, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${authToken}`,
-        "X-Entity-Id": entityId,
-        "X-Org-Id": orgId,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "lovable-client", version: "1.0.0" }
-        }
-      }),
-    });
-
-    console.log("Initialize response status:", initResponse.status);
-    
-    // The server returns 202 Accepted for async processing - we need to wait for the SSE response
-    // For now, proceed to tools/list - the server should handle the session
-    
-    // Step 3: Send tools/list request
-    console.log("Sending tools/list request to:", messageEndpoint);
-    
-    const toolsResponse = await fetch(messageEndpoint, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${authToken}`,
-        "X-Entity-Id": entityId,
-        "X-Org-Id": orgId,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-        params: {}
-      }),
-    });
-
-    console.log("Tools request HTTP status:", toolsResponse.status);
-
-    // Server returns 202 Accepted - response comes via SSE
-    // We need to reconnect to SSE and listen for the response
-    if (toolsResponse.status === 202) {
-      console.log("Server returned 202 - listening for response via SSE...");
-      
-      // Reconnect to SSE to get the response
-      const sseResponse2 = await fetch("https://mcp.hellobooks.ai/sse", {
-        method: "GET",
+    // Helper to send JSON-RPC request
+    async function sendRequest(endpoint: string, body: object) {
+      console.log("Sending request to:", endpoint, JSON.stringify(body));
+      const response = await fetch(endpoint, {
+        method: "POST",
         headers: {
-          "Authorization": `Bearer ${authToken}`,
-          "X-Entity-Id": entityId,
-          "X-Org-Id": orgId,
-          "Accept": "text/event-stream",
+          "Content-Type": "application/json",
+          ...mcpHeaders,
         },
+        body: JSON.stringify(body),
       });
+      console.log("Request response status:", response.status);
+      if (!response.ok) {
+        const text = await response.text();
+        console.error("Request failed:", text);
+      }
+    }
 
-      if (!sseResponse2.ok) {
-        return new Response(
-          JSON.stringify({ error: "Failed to reconnect to SSE for response" }),
-          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+    // Read SSE stream and handle events
+    while (Date.now() - startTime < timeout) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log("SSE stream ended");
+        break;
       }
 
-      const reader2 = sseResponse2.body?.getReader();
-      if (!reader2) {
-        return new Response(
-          JSON.stringify({ error: "Failed to get SSE reader for response" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+      buffer += decoder.decode(value, { stream: true });
+      const { events, remaining } = parseSSEEvents(buffer);
+      buffer = remaining;
 
-      let responseBuffer = "";
-      let tools: unknown[] = [];
-      const timeout = Date.now() + 10000; // 10 second timeout
+      for (const event of events) {
+        console.log("SSE event:", event.type, event.data);
 
-      while (Date.now() < timeout) {
-        const { done, value } = await reader2.read();
-        if (done) break;
-        
-        responseBuffer += decoder.decode(value, { stream: true });
-        console.log("SSE response buffer:", responseBuffer);
+        if (event.type === "endpoint") {
+          // Server sends the message endpoint URL
+          messageEndpoint = event.data;
+          if (!messageEndpoint.startsWith("http")) {
+            messageEndpoint = `https://mcp.hellobooks.ai${messageEndpoint}`;
+          }
+          console.log("Message endpoint:", messageEndpoint);
 
-        // Look for message event with JSON-RPC response containing tools
-        const messageMatch = responseBuffer.match(/event:\s*message\s*\ndata:\s*(\{[^}]*"tools"[^}]*\}|\{.*\})/s);
-        if (messageMatch) {
+          // Send initialize request
+          if (!initializeSent) {
+            initializeSent = true;
+            await sendRequest(messageEndpoint, {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2024-11-05",
+                capabilities: {},
+                clientInfo: { name: "lovable-mcp-client", version: "1.0.0" }
+              }
+            });
+          }
+        }
+
+        if (event.type === "message") {
           try {
-            const jsonData = JSON.parse(messageMatch[1]);
-            tools = jsonData.result?.tools || jsonData.tools || [];
-            console.log("Received tools via SSE, count:", tools.length);
-            break;
+            const data = JSON.parse(event.data);
+            console.log("Received message:", JSON.stringify(data));
+
+            // Check for initialize response (id: 1)
+            if (data.id === 1 && data.result && !toolsListSent) {
+              console.log("Initialize successful, requesting tools list...");
+              toolsListSent = true;
+              await sendRequest(messageEndpoint, {
+                jsonrpc: "2.0",
+                id: 2,
+                method: "tools/list",
+                params: {}
+              });
+            }
+
+            // Check for tools/list response (id: 2)
+            if (data.id === 2 && data.result) {
+              tools = data.result.tools || [];
+              console.log("Received tools:", tools.length);
+              reader.cancel();
+              break;
+            }
+
+            // Handle errors
+            if (data.error) {
+              console.error("MCP error:", data.error);
+              reader.cancel();
+              return new Response(
+                JSON.stringify({ error: data.error.message || "MCP error" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
           } catch (e) {
-            console.log("Failed to parse SSE message as JSON:", e);
+            console.log("Failed to parse message:", e);
           }
         }
       }
 
-      reader2.cancel();
-
-      return new Response(
-        JSON.stringify({ tools, source: "mcp_sse" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // Exit if we got tools
+      if (tools.length > 0) break;
     }
 
-    // If we got a direct response
-    const responseText = await toolsResponse.text();
-    console.log("Direct response:", responseText);
-    
-    try {
-      const data = JSON.parse(responseText);
-      const tools = data.result?.tools || data.tools || [];
-      return new Response(
-        JSON.stringify({ tools, source: "mcp_direct" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    } catch {
-      return new Response(
-        JSON.stringify({ error: "Invalid JSON response", details: responseText }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    reader.cancel();
+
+    console.log("Final tools count:", tools.length);
+
+    return new Response(
+      JSON.stringify({ tools, source: "mcp_sse" }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
 
   } catch (error: unknown) {
     console.error("Error fetching MCP tools:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    const errorStack = error instanceof Error ? error.stack : undefined;
     return new Response(
-      JSON.stringify({ error: errorMessage, stack: errorStack }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
