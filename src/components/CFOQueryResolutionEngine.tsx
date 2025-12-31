@@ -3046,70 +3046,168 @@ function IntentListView({
 // ============================================================================
 
 // MCP Tools View
-function MCPToolsView({ tools }: { tools: MCPTool[] }) {
+function MCPToolsView({ 
+  tools, 
+  helloBookTools,
+  isLoading,
+  error,
+  onRefresh
+}: { 
+  tools: MCPTool[];
+  helloBookTools: MCPTool[];
+  isLoading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
+  const [activeSource, setActiveSource] = useState<'static' | 'hellobooks'>('hellobooks');
+
+  const displayTools = activeSource === 'static' ? tools : helloBookTools;
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">MCP Tools</h1>
-      <p className="text-gray-500 mb-6">Available data sources for resolution flows (read-only)</p>
-
-      <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-1 space-y-2">
-          {tools.map(tool => (
-            <button
-              key={tool.id}
-              onClick={() => setSelectedTool(tool)}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                selectedTool?.id === tool.id
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'hover:bg-gray-100'
-              }`}
-            >
-              @{tool.id}
-            </button>
-          ))}
-        </div>
-        <div className="col-span-2">
-          {selectedTool ? (
-            <div className="p-4 border rounded-lg bg-white">
-              <h3 className="font-bold text-lg mb-2">@{selectedTool.id}</h3>
-              <p className="text-gray-600 mb-4">{selectedTool.description}</p>
-              
-              <div className="mb-4">
-                <div className="text-sm font-medium text-gray-700 mb-2">Endpoint</div>
-                <code className="text-sm bg-gray-100 px-2 py-1 rounded">{selectedTool.method} {selectedTool.endpoint}</code>
-              </div>
-              
-              <div className="mb-4">
-                <div className="text-sm font-medium text-gray-700 mb-2">Parameters</div>
-                <div className="space-y-1">
-                  {selectedTool.parameters.map(p => (
-                    <div key={p.name} className="text-sm flex items-center gap-2">
-                      <code className="bg-gray-100 px-1 rounded">{p.name}</code>
-                      <span className="text-gray-500">({p.type})</span>
-                      {p.required && <span className="text-red-500 text-xs">required</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              
-              <div>
-                <div className="text-sm font-medium text-gray-700 mb-2">Response Fields</div>
-                <div className="flex flex-wrap gap-1">
-                  {selectedTool.responseFields.map(f => (
-                    <code key={f} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{f}</code>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="p-8 text-center text-gray-500">
-              Select a tool to view details
-            </div>
-          )}
-        </div>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-bold text-gray-900">MCP Tools</h1>
+        <button
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+          Refresh HelloBooks
+        </button>
       </div>
+      <p className="text-gray-500 mb-4">Available data sources for resolution flows</p>
+      
+      {/* Source Toggle */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setActiveSource('hellobooks')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeSource === 'hellobooks'
+              ? 'bg-purple-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          🔌 HelloBooks MCP ({helloBookTools.length})
+        </button>
+        <button
+          onClick={() => setActiveSource('static')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeSource === 'static'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          📊 Built-in Tools ({tools.length})
+        </button>
+      </div>
+
+      {/* Error State */}
+      {error && activeSource === 'hellobooks' && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center gap-2 text-red-700">
+            <AlertCircle size={16} />
+            <span className="font-medium">Error loading HelloBooks tools</span>
+          </div>
+          <p className="text-sm text-red-600 mt-1">{error}</p>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {isLoading && activeSource === 'hellobooks' && (
+        <div className="flex items-center justify-center py-12">
+          <div className="flex items-center gap-3 text-gray-500">
+            <Loader2 size={24} className="animate-spin" />
+            <span>Connecting to HelloBooks MCP server...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Tools List */}
+      {!isLoading && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="col-span-1 space-y-2 max-h-[500px] overflow-y-auto">
+            {displayTools.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                {activeSource === 'hellobooks' 
+                  ? 'No tools loaded. Click Refresh to fetch from HelloBooks.'
+                  : 'No built-in tools available.'
+                }
+              </div>
+            ) : (
+              displayTools.map(tool => (
+                <button
+                  key={tool.id}
+                  onClick={() => setSelectedTool(tool)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                    selectedTool?.id === tool.id
+                      ? activeSource === 'hellobooks' 
+                        ? 'bg-purple-100 text-purple-700'
+                        : 'bg-blue-100 text-blue-700'
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="font-medium">@{tool.id}</div>
+                  <div className="text-xs text-gray-500 truncate">{tool.description}</div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="col-span-2">
+            {selectedTool ? (
+              <div className="p-4 border rounded-lg bg-white">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    activeSource === 'hellobooks' 
+                      ? 'bg-purple-100 text-purple-700' 
+                      : 'bg-blue-100 text-blue-700'
+                  }`}>
+                    {activeSource === 'hellobooks' ? 'HelloBooks' : 'Built-in'}
+                  </span>
+                  <h3 className="font-bold text-lg">@{selectedTool.id}</h3>
+                </div>
+                <p className="text-gray-600 mb-4">{selectedTool.description}</p>
+                
+                <div className="mb-4">
+                  <div className="text-sm font-medium text-gray-700 mb-2">Endpoint</div>
+                  <code className="text-sm bg-gray-100 px-2 py-1 rounded">{selectedTool.method} {selectedTool.endpoint}</code>
+                </div>
+                
+                <div className="mb-4">
+                  <div className="text-sm font-medium text-gray-700 mb-2">Parameters ({selectedTool.parameters.length})</div>
+                  {selectedTool.parameters.length === 0 ? (
+                    <p className="text-sm text-gray-500">No parameters</p>
+                  ) : (
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {selectedTool.parameters.map(p => (
+                        <div key={p.name} className="text-sm flex items-center gap-2">
+                          <code className="bg-gray-100 px-1 rounded">{p.name}</code>
+                          <span className="text-gray-500">({p.type})</span>
+                          {p.required && <span className="text-red-500 text-xs">required</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">Response Fields</div>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedTool.responseFields.map(f => (
+                      <code key={f} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{f}</code>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 text-center text-gray-500">
+                Select a tool to view details
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3736,6 +3834,11 @@ export default function CFOQueryResolutionEngine() {
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
   const [showCreateModal, setShowCreateModal] = useState(false);
   
+  // MCP Tools from HelloBooks server
+  const [helloBooksMcpTools, setHelloBooksMcpTools] = useState<MCPTool[]>([]);
+  const [isFetchingMcpTools, setIsFetchingMcpTools] = useState(false);
+  const [mcpToolsError, setMcpToolsError] = useState<string | null>(null);
+  
   const [llmConfig, setLlmConfig] = useState<LLMConfig>({
     provider: 'azure-anthropic',
     model: 'claude-opus-4-5',
@@ -3756,6 +3859,72 @@ export default function CFOQueryResolutionEngine() {
     currency: 'INR',
     complianceFrameworks: ['GST', 'TDS', 'RERA']
   });
+
+  // Fetch MCP tools from HelloBooks server
+  const fetchHelloBooksMcpTools = useCallback(async () => {
+    setIsFetchingMcpTools(true);
+    setMcpToolsError(null);
+    
+    try {
+      console.log('🔌 Fetching MCP tools from HelloBooks...');
+      const { data, error } = await supabase.functions.invoke('fetch-mcp-tools');
+      
+      if (error) {
+        console.error('Error fetching MCP tools:', error);
+        setMcpToolsError(error.message || 'Failed to fetch MCP tools');
+        return;
+      }
+      
+      if (data?.tools && Array.isArray(data.tools)) {
+        // Map the MCP tools to our MCPTool interface
+        const mappedTools: MCPTool[] = data.tools.map((tool: any, index: number) => ({
+          id: tool.name || tool.id || `hb_tool_${index}`,
+          name: tool.name || tool.id || `HelloBooks Tool ${index + 1}`,
+          description: tool.description || 'No description available',
+          endpoint: tool.endpoint || `/hellobooks/${tool.name || tool.id}`,
+          method: tool.method || 'POST',
+          parameters: (tool.inputSchema?.properties ? 
+            Object.entries(tool.inputSchema.properties).map(([key, value]: [string, any]) => ({
+              name: key,
+              type: value.type || 'string',
+              required: tool.inputSchema?.required?.includes(key) || false,
+              enumValues: value.enum
+            })) : 
+            (tool.parameters || [])
+          ),
+          responseFields: tool.outputSchema?.properties ? 
+            Object.keys(tool.outputSchema.properties) : 
+            (tool.responseFields || ['result'])
+        }));
+        
+        console.log('✅ Fetched MCP tools:', mappedTools.length);
+        setHelloBooksMcpTools(mappedTools);
+        
+        toast({
+          title: 'MCP Tools Loaded',
+          description: `Fetched ${mappedTools.length} tools from HelloBooks`
+        });
+      } else {
+        console.log('No tools found in response:', data);
+        setMcpToolsError('No tools found');
+      }
+    } catch (err) {
+      console.error('Error fetching MCP tools:', err);
+      setMcpToolsError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setIsFetchingMcpTools(false);
+    }
+  }, []);
+
+  // Fetch MCP tools on mount when MCP tab is active
+  useEffect(() => {
+    if (activeTab === 'mcp' && helloBooksMcpTools.length === 0 && !isFetchingMcpTools) {
+      fetchHelloBooksMcpTools();
+    }
+  }, [activeTab, helloBooksMcpTools.length, isFetchingMcpTools, fetchHelloBooksMcpTools]);
+
+  // Combined MCP tools (static + dynamic)
+  const allMcpTools = [...MCP_TOOLS, ...helloBooksMcpTools];
 
   // Computed values
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
@@ -4190,7 +4359,7 @@ export default function CFOQueryResolutionEngine() {
   // Sidebar tabs
   const sidebarTabs = [
     { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
-    { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: MCP_TOOLS.length },
+    { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: allMcpTools.length },
     { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={18} />, count: ENRICHMENT_TYPES.length },
     { id: 'business', label: 'Business Context', icon: <Building2 size={18} /> },
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
@@ -4204,7 +4373,7 @@ export default function CFOQueryResolutionEngine() {
       <IntentDetailScreen
         intent={selectedIntent}
         modules={MODULES}
-        mcpTools={MCP_TOOLS}
+        mcpTools={allMcpTools}
         enrichmentTypes={ENRICHMENT_TYPES}
         businessContext={businessContext}
         onBack={() => setSelectedIntentId(null)}
@@ -4296,7 +4465,15 @@ export default function CFOQueryResolutionEngine() {
           />
         )}
         
-        {activeTab === 'mcp' && <MCPToolsView tools={MCP_TOOLS} />}
+        {activeTab === 'mcp' && (
+          <MCPToolsView 
+            tools={MCP_TOOLS} 
+            helloBookTools={helloBooksMcpTools}
+            isLoading={isFetchingMcpTools}
+            error={mcpToolsError}
+            onRefresh={fetchHelloBooksMcpTools}
+          />
+        )}
         {activeTab === 'enrichments' && <EnrichmentsView enrichmentTypes={ENRICHMENT_TYPES} />}
         {activeTab === 'business' && <BusinessContextView context={businessContext} countryConfigs={COUNTRY_CONFIGS} onChange={(updates) => setBusinessContext(prev => ({ ...prev, ...updates }))} />}
         {activeTab === 'countries' && <CountryConfigView countryConfigs={COUNTRY_CONFIGS} />}
