@@ -292,8 +292,12 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
   
   // Azure Anthropic
   if (provider === 'azure-anthropic') {
-    console.log('Using Azure Anthropic endpoint...');
-    const response = await fetch(`${endpoint}/v1/messages`, {
+    const baseEndpoint = (endpoint || '').replace(/\/$/, '');
+    const url = baseEndpoint.endsWith('/v1/messages') ? baseEndpoint : `${baseEndpoint}/v1/messages`;
+
+    console.log('Using Azure Anthropic endpoint:', baseEndpoint);
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -313,6 +317,13 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Azure Anthropic error:', response.status, errorText);
+
+      if (response.status === 401) {
+        throw new Error(
+          'Azure Anthropic unauthorized (401). Please verify your subscription key and that the endpoint is the correct regional endpoint for your Azure resource.'
+        );
+      }
+
       throw new Error(`Azure Anthropic error: ${response.status} - ${errorText}`);
     }
 
