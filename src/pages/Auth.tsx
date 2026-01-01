@@ -73,9 +73,12 @@ export default function Auth() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-xl font-semibold">Sign in</CardTitle>
-          <CardDescription>Enter your credentials to continue</CardDescription>
+        <CardHeader className="space-y-3 text-center">
+          <h1 className="text-2xl font-bold tracking-tight">HelloCRM</h1>
+          <div className="space-y-1">
+            <CardTitle className="text-xl font-semibold">Sign in</CardTitle>
+            <CardDescription>Enter your credentials to continue</CardDescription>
+          </div>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
