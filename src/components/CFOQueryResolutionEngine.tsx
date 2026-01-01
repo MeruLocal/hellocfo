@@ -7,6 +7,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/useAuth';
+import { UsersManagement } from '@/components/UsersManagement';
 import {
   useModules,
   useCountryConfigs,
@@ -43,7 +45,7 @@ import {
   MessageSquare, FlaskConical, ChevronDown, ChevronRight, ChevronUp, Copy, Code,
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
-  ListOrdered, Variable, FileText
+  ListOrdered, Variable, FileText, Users, LogOut
 } from 'lucide-react';
 
 // PipelineParameter is only used locally
@@ -3213,6 +3215,9 @@ function TestConsoleView({
 // ============================================================================
 
 export default function CFOQueryResolutionEngine() {
+  // Auth hook
+  const { user, isAdmin, signOut } = useAuth();
+
   // Database hooks for dynamic data
   const { modules, loading: modulesLoading } = useModules();
   const { countryConfigs, loading: countryLoading } = useCountryConfigs();
@@ -3715,7 +3720,7 @@ export default function CFOQueryResolutionEngine() {
     URL.revokeObjectURL(url);
   };
 
-  // Sidebar tabs
+  // Sidebar tabs (include Users tab only for admins)
   const sidebarTabs = [
     { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
     { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: allMcpTools.length },
@@ -3724,6 +3729,7 @@ export default function CFOQueryResolutionEngine() {
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
+    ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
 
   // Loading state
@@ -3815,6 +3821,23 @@ export default function CFOQueryResolutionEngine() {
             </div>
           </div>
         )}
+
+        {/* User Info & Logout */}
+        <div className="p-3 mx-3 mb-3 border-t border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="truncate">
+              <p className="text-xs text-slate-400">Signed in as</p>
+              <p className="text-xs font-medium truncate">{user?.email}</p>
+            </div>
+            <button
+              onClick={() => signOut()}
+              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+              title="Sign out"
+            >
+              <LogOut size={16} className="text-slate-400" />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Main Content */}
@@ -3856,6 +3879,11 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
         {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} />}
+        {activeTab === 'users' && isAdmin && (
+          <div className="p-6">
+            <UsersManagement />
+          </div>
+        )}
       </div>
 
       {/* Create Intent Modal */}
