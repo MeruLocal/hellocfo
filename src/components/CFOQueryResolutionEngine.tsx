@@ -884,12 +884,14 @@ function EntitiesTab({
   intent, 
   onChange,
   onRegenerate,
-  isRegenerating
+  isRegenerating,
+  entityTypes
 }: { 
   intent: Intent; 
   onChange: (updates: Partial<Intent>) => void;
   onRegenerate: () => void;
   isRegenerating: boolean;
+  entityTypes: EntityType[];
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
@@ -949,7 +951,7 @@ function EntitiesTab({
                   onChange={(e) => updateEntity(index, { type: e.target.value })}
                   className="w-full px-2 py-1.5 border rounded text-sm bg-white"
                 >
-                  {ENTITY_TYPES.map(t => (
+                  {entityTypes.map(t => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
@@ -1515,12 +1517,14 @@ function ResponseConfigTab({
   intent, 
   onChange,
   onRegenerate,
-  isRegenerating
+  isRegenerating,
+  responseTypes
 }: { 
   intent: Intent; 
   onChange: (updates: Partial<Intent>) => void;
   onRegenerate: () => void;
   isRegenerating: boolean;
+  responseTypes: ResponseType[];
 }) {
   const responseConfig = intent.resolutionFlow?.responseConfig;
   const [newQuestion, setNewQuestion] = useState('');
@@ -1584,7 +1588,7 @@ function ResponseConfigTab({
               onChange={(e) => updateResponseConfig({ type: e.target.value })}
               className="w-full px-3 py-2 border rounded-lg bg-white"
             >
-              {RESPONSE_TYPES.map(t => (
+              {responseTypes.map(t => (
                 <option key={t.id} value={t.id}>{t.name} - {t.description}</option>
               ))}
             </select>
@@ -1654,10 +1658,12 @@ function ResponseConfigTab({
 // Tab: Test (Run test query)
 function TestTab({ 
   intent,
-  businessContext
+  businessContext,
+  countryConfigs
 }: { 
   intent: Intent;
   businessContext: BusinessContext;
+  countryConfigs: CountryConfig[];
 }) {
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -1735,7 +1741,7 @@ function TestTab({
       <div className="p-3 bg-gray-50 rounded-lg">
         <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
         <div className="flex gap-4 text-sm text-gray-600">
-          <span>{COUNTRY_CONFIGS.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
+          <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
           <span>📊 {businessContext.entitySize}</span>
           <span>🏭 {businessContext.industry}</span>
           <span>💰 {businessContext.currency}</span>
@@ -1781,6 +1787,9 @@ interface IntentDetailScreenProps {
   modules: Module[];
   mcpTools: MCPTool[];
   enrichmentTypes: EnrichmentType[];
+  entityTypes: EntityType[];
+  responseTypes: ResponseType[];
+  countryConfigs: CountryConfig[];
   businessContext: BusinessContext;
   onBack: () => void;
   onSave: (intent: Intent) => void;
@@ -1793,6 +1802,9 @@ function IntentDetailScreen({
   modules,
   mcpTools,
   enrichmentTypes,
+  entityTypes,
+  responseTypes,
+  countryConfigs,
   businessContext,
   onBack,
   onSave,
@@ -1996,6 +2008,7 @@ function IntentDetailScreen({
               onChange={handleChange}
               onRegenerate={() => handleRegenerate('entities')}
               isRegenerating={isRegenerating === 'entities'}
+              entityTypes={entityTypes}
             />
           )}
           
@@ -2025,6 +2038,7 @@ function IntentDetailScreen({
               onChange={handleChange}
               onRegenerate={() => handleRegenerate('response')}
               isRegenerating={isRegenerating === 'response'}
+              responseTypes={responseTypes}
             />
           )}
           
@@ -2032,6 +2046,7 @@ function IntentDetailScreen({
             <TestTab
               intent={editingIntent}
               businessContext={businessContext}
+              countryConfigs={countryConfigs}
             />
           )}
         </div>
@@ -2973,10 +2988,12 @@ function LLMConfigView({
 // Test Console View
 function TestConsoleView({ 
   intents, 
-  businessContext 
+  businessContext,
+  countryConfigs
 }: { 
   intents: Intent[]; 
   businessContext: BusinessContext;
+  countryConfigs: CountryConfig[];
 }) {
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -3038,7 +3055,7 @@ function TestConsoleView({
           <div className="mt-4 p-3 bg-gray-50 rounded-lg">
             <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
             <div className="flex gap-4 text-sm text-gray-600">
-              <span>{COUNTRY_CONFIGS.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
+              <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
               <span>📊 {businessContext.entitySize}</span>
               <span>🏭 {businessContext.industry}</span>
               <span>💰 {businessContext.currency}</span>
@@ -3151,7 +3168,7 @@ export default function CFOQueryResolutionEngine() {
 
   // AI Generation Functions - Using Lovable AI Edge Function
   const generateIntentConfig = async (intent: Intent): Promise<Intent> => {
-    const moduleInfo = MODULES.find(m => m.id === intent.moduleId);
+    const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
     try {
@@ -3289,7 +3306,7 @@ export default function CFOQueryResolutionEngine() {
     const intent = intents.find(i => i.id === intentId);
     if (!intent) throw new Error('Intent not found');
     
-    const moduleInfo = MODULES.find(m => m.id === intent.moduleId);
+    const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     const phraseCount = options?.phraseCount || 10;
     
@@ -3421,41 +3438,58 @@ export default function CFOQueryResolutionEngine() {
 
   // Intent CRUD handlers
   const handleCreateIntent = async (intentData: Partial<Intent>) => {
-    const newIntent: Intent = {
-      id: `intent_${Date.now()}`,
+    const newIntentData = {
       name: intentData.name || '',
       moduleId: intentData.moduleId || '',
       subModuleId: intentData.subModuleId || '',
       description: intentData.description,
       isActive: true,
-      trainingPhrases: [],
-      entities: [],
-      generatedBy: 'pending',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      trainingPhrases: [] as string[],
+      entities: [] as Entity[],
+      generatedBy: 'pending' as const,
     };
     
-    setIntents(prev => [...prev, newIntent]);
-    
-    // Auto-generate with AI
-    setIsGenerating(newIntent.id);
     try {
-      const generated = await generateIntentConfig(newIntent);
-      setIntents(prev => prev.map(i => i.id === newIntent.id ? generated : i));
-      setSelectedIntentId(newIntent.id);
-    } finally {
-      setIsGenerating(null);
+      // Create in database
+      const created = await createIntent(newIntentData);
+      if (!created) return;
+      
+      // Auto-generate with AI
+      setIsGenerating(created.id);
+      try {
+        const tempIntent: Intent = {
+          id: created.id,
+          ...newIntentData,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        const generated = await generateIntentConfig(tempIntent);
+        await updateIntent(created.id, generated);
+        setSelectedIntentId(created.id);
+      } finally {
+        setIsGenerating(null);
+      }
+    } catch (error) {
+      console.error('Error creating intent:', error);
     }
   };
 
-  const handleSaveIntent = (intent: Intent) => {
-    setIntents(prev => prev.map(i => i.id === intent.id ? intent : i));
+  const handleSaveIntent = async (intent: Intent) => {
+    try {
+      await updateIntent(intent.id, intent);
+    } catch (error) {
+      console.error('Error saving intent:', error);
+    }
   };
 
-  const handleDeleteIntent = (intentId: string) => {
-    setIntents(prev => prev.filter(i => i.id !== intentId));
-    if (selectedIntentId === intentId) {
-      setSelectedIntentId(null);
+  const handleDeleteIntent = async (intentId: string) => {
+    try {
+      await deleteIntent(intentId);
+      if (selectedIntentId === intentId) {
+        setSelectedIntentId(null);
+      }
+    } catch (error) {
+      console.error('Error deleting intent:', error);
     }
   };
 
@@ -3465,7 +3499,7 @@ export default function CFOQueryResolutionEngine() {
       const intent = intents.find(i => i.id === intentId);
       if (intent) {
         const generated = await generateIntentConfig(intent);
-        setIntents(prev => prev.map(i => i.id === intentId ? generated : i));
+        await updateIntent(intentId, generated);
       }
     } finally {
       setIsGenerating(null);
@@ -3480,39 +3514,40 @@ export default function CFOQueryResolutionEngine() {
       const content = await file.text();
       const importedData = parseImportedIntents(content);
       
-      const newIntents: Intent[] = importedData.map(data => ({
-        id: `intent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: data.name || '',
-        moduleId: data.moduleId || '',
-        subModuleId: data.subModuleId || '',
-        description: data.description,
-        isActive: data.isActive ?? true,
-        trainingPhrases: [],
-        entities: [],
-        generatedBy: 'pending' as const,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }));
+      // Create all intents in database
+      for (const data of importedData) {
+        const intentData = {
+          name: data.name || '',
+          moduleId: data.moduleId || '',
+          subModuleId: data.subModuleId || '',
+          description: data.description,
+          isActive: data.isActive ?? true,
+          trainingPhrases: [] as string[],
+          entities: [] as Entity[],
+          generatedBy: 'pending' as const,
+        };
+        await createIntent(intentData);
+      }
       
-      setIntents(prev => [...prev, ...newIntents]);
+      // Refetch and generate configurations
+      await fetchIntents();
       setIsImporting(false);
       
-      // Auto-generate configurations
-      setGenerationProgress({ current: 0, total: newIntents.length });
+      // Get newly created intents for generation
+      const pendingIntents = intents.filter(i => i.generatedBy === 'pending');
+      setGenerationProgress({ current: 0, total: pendingIntents.length });
       
-      for (let i = 0; i < newIntents.length; i++) {
-        setGenerationProgress({ current: i + 1, total: newIntents.length });
-        const generated = await generateIntentConfig(newIntents[i]);
-        setIntents(prev => prev.map(intent => 
-          intent.id === newIntents[i].id ? generated : intent
-        ));
+      for (let i = 0; i < pendingIntents.length; i++) {
+        setGenerationProgress({ current: i + 1, total: pendingIntents.length });
+        const generated = await generateIntentConfig(pendingIntents[i]);
+        await updateIntent(pendingIntents[i].id, generated);
       }
       
       setGenerationProgress({ current: 0, total: 0 });
-      alert(`Successfully imported and configured ${newIntents.length} intents!`);
+      toast({ title: `Successfully imported ${importedData.length} intents!` });
     } catch (error) {
       console.error('Import error:', error);
-      alert('Error importing intents. Please check the file format.');
+      toast({ title: 'Error importing intents', variant: 'destructive' });
       setIsImporting(false);
       setGenerationProgress({ current: 0, total: 0 });
     }
@@ -3535,8 +3570,8 @@ export default function CFOQueryResolutionEngine() {
       exportedAt: new Date().toISOString(),
       llmConfig: { provider: llmConfig.provider, model: llmConfig.model },
       businessContext,
-      countryConfigs: COUNTRY_CONFIGS,
-      modules: MODULES,
+      countryConfigs: countryConfigs,
+      modules: modules,
       intents
     };
     
@@ -3591,6 +3626,9 @@ export default function CFOQueryResolutionEngine() {
         modules={modules}
         mcpTools={allMcpTools}
         enrichmentTypes={enrichmentTypes}
+        entityTypes={entityTypes}
+        responseTypes={responseTypes}
+        countryConfigs={countryConfigs}
         businessContext={businessContext}
         onBack={() => setSelectedIntentId(null)}
         onSave={handleSaveIntent}
@@ -3697,7 +3735,7 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
         {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
-        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} />}
+        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} />}
       </div>
 
       {/* Create Intent Modal */}
