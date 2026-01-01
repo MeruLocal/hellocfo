@@ -261,6 +261,29 @@ Respond with ONLY JSON:
 }`;
 };
 
+// Validate LLM config
+const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
+  if (!llmConfig) {
+    throw new Error('LLM configuration is not set. Please configure your LLM settings in the LLM Settings section.');
+  }
+  
+  if (!llmConfig.provider) {
+    throw new Error('LLM provider is not set. Please select a provider in LLM Settings.');
+  }
+  
+  if (!llmConfig.model) {
+    throw new Error('LLM model is not set. Please enter a model name in LLM Settings.');
+  }
+  
+  if (!llmConfig.apiKey) {
+    throw new Error('API key is not set. Please enter your API key in LLM Settings.');
+  }
+  
+  if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
+    throw new Error('API endpoint is required for Azure Anthropic. Please set it in LLM Settings.');
+  }
+};
+
 // Call AI based on provider config
 const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => {
   const { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
@@ -268,13 +291,13 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
   console.log(`Calling AI with provider: ${provider}, model: ${model}`);
   
   // Azure Anthropic
-  if (provider === 'azure-anthropic' && endpoint && apiKey) {
+  if (provider === 'azure-anthropic') {
     console.log('Using Azure Anthropic endpoint...');
     const response = await fetch(`${endpoint}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'api-key': apiKey,
+        'api-key': apiKey!,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
@@ -298,7 +321,7 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
   }
   
   // OpenAI
-  if (provider === 'openai' && apiKey) {
+  if (provider === 'openai') {
     console.log('Using OpenAI endpoint...');
     const openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
     const response = await fetch(openaiEndpoint, {
@@ -328,42 +351,7 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
     return data.choices?.[0]?.message?.content || '';
   }
   
-  // Fallback to Lovable AI Gateway
-  console.log('Using Lovable AI Gateway as fallback...');
-  const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-  if (!LOVABLE_API_KEY) {
-    throw new Error('No valid LLM configuration and LOVABLE_API_KEY is not available');
-  }
-
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: getSystemPrompt() },
-        { role: 'user', content: prompt }
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    if (response.status === 429) {
-      throw new Error('Rate limit exceeded. Please try again later.');
-    }
-    if (response.status === 402) {
-      throw new Error('AI credits exhausted. Please add more credits.');
-    }
-    const errorText = await response.text();
-    console.error('AI Gateway error:', response.status, errorText);
-    throw new Error(`AI Gateway error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
+  throw new Error(`Unsupported LLM provider: ${provider}. Please configure Azure Anthropic or OpenAI in LLM Settings.`);
 };
 
 serve(async (req) => {
@@ -388,15 +376,11 @@ serve(async (req) => {
     } = request;
 
     console.log(`Generating ${section} for intent: ${intentName}`);
-    console.log('LLM Config:', llmConfig ? `${llmConfig.provider}/${llmConfig.model}` : 'Using fallback');
+    console.log('LLM Config:', llmConfig ? `${llmConfig.provider}/${llmConfig.model}` : 'Not provided');
 
-    // Default LLM config if not provided
-    const config: LLMConfig = llmConfig || {
-      provider: 'lovable',
-      model: 'google/gemini-2.5-flash',
-      temperature: 0.3,
-      maxTokens: 4096
-    };
+    // Validate LLM config - no fallback
+    validateLLMConfig(llmConfig);
+    const config = llmConfig!;
 
     const parseJSON = <T>(response: string): T => {
       let cleaned = response.trim();
