@@ -3230,6 +3230,25 @@ export default function CFOQueryResolutionEngine() {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
+    // Validate LLM config before calling API
+    if (!llmConfig?.apiKey) {
+      toast({
+        title: 'LLM Configuration Required',
+        description: 'Please configure your API key in LLM Settings before generating intents.',
+        variant: 'destructive'
+      });
+      throw new Error('LLM configuration not set');
+    }
+    
+    if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
+      toast({
+        title: 'LLM Configuration Required',
+        description: 'Please configure your API endpoint in LLM Settings for Azure Anthropic.',
+        variant: 'destructive'
+      });
+      throw new Error('LLM endpoint not set');
+    }
+    
     try {
       console.log('🤖 Generating intent config via AI...');
       console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
@@ -3242,20 +3261,27 @@ export default function CFOQueryResolutionEngine() {
           description: intent.description,
           section: 'all',
           phraseCount: 10,
-          llmConfig: llmConfig ? {
+          llmConfig: {
             provider: llmConfig.provider,
             endpoint: llmConfig.endpoint,
             model: llmConfig.model,
             apiKey: llmConfig.apiKey,
             temperature: llmConfig.temperature,
             maxTokens: llmConfig.maxTokens
-          } : undefined
+          }
         }
       });
 
       if (error) {
         console.error('Edge function error:', error);
-        throw new Error(error.message || 'Failed to generate intent');
+        // Try to parse error message from response
+        const errorMsg = error.message || 'Failed to generate intent';
+        toast({
+          title: 'AI Generation Error',
+          description: errorMsg,
+          variant: 'destructive'
+        });
+        throw new Error(errorMsg);
       }
 
       if (data?.error) {
@@ -3374,6 +3400,25 @@ export default function CFOQueryResolutionEngine() {
     const intent = intents.find(i => i.id === intentId);
     if (!intent) throw new Error('Intent not found');
     
+    // Validate LLM config before calling API
+    if (!llmConfig?.apiKey) {
+      toast({
+        title: 'LLM Configuration Required',
+        description: 'Please configure your API key in LLM Settings before regenerating.',
+        variant: 'destructive'
+      });
+      throw new Error('LLM configuration not set');
+    }
+    
+    if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
+      toast({
+        title: 'LLM Configuration Required',
+        description: 'Please configure your API endpoint in LLM Settings for Azure Anthropic.',
+        variant: 'destructive'
+      });
+      throw new Error('LLM endpoint not set');
+    }
+    
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     const phraseCount = options?.phraseCount || 10;
@@ -3393,30 +3438,26 @@ export default function CFOQueryResolutionEngine() {
           existingEntities: intent.entities,
           existingPipeline: intent.resolutionFlow?.dataPipeline || [],
           existingEnrichments: intent.resolutionFlow?.enrichments || [],
-          llmConfig: llmConfig ? {
+          llmConfig: {
             provider: llmConfig.provider,
             endpoint: llmConfig.endpoint,
             model: llmConfig.model,
             apiKey: llmConfig.apiKey,
             temperature: llmConfig.temperature,
             maxTokens: llmConfig.maxTokens
-          } : undefined
+          }
         }
       });
 
       if (error) {
         console.error('Edge function error:', error);
-        throw new Error(error.message || 'Failed to regenerate');
-      }
-
-      if (data?.error) {
-        console.error('AI generation error:', data.error);
+        const errorMsg = error.message || 'Failed to regenerate';
         toast({
           title: 'AI Generation Error',
-          description: data.error,
+          description: errorMsg,
           variant: 'destructive'
         });
-        throw new Error(data.error);
+        throw new Error(errorMsg);
       }
 
       console.log('✅ Regeneration complete!', data);
