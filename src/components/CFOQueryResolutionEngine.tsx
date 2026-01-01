@@ -3257,7 +3257,7 @@ export default function CFOQueryResolutionEngine() {
       console.log('🤖 Generating intent config via AI...');
       console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
       
-      const { data, error } = await supabase.functions.invoke('generate-intent', {
+      const { data, error, response: invokeResponse } = await supabase.functions.invoke('generate-intent', {
         body: {
           intentName: intent.name,
           moduleName: moduleInfo?.name || intent.moduleId,
@@ -3278,13 +3278,25 @@ export default function CFOQueryResolutionEngine() {
 
       if (error) {
         console.error('Edge function error:', error);
-        // Try to parse error message from response
-        const errorMsg = error.message || 'Failed to generate intent';
-        toast({
-          title: 'AI Generation Error',
-          description: errorMsg,
-          variant: 'destructive'
-        });
+
+        let errorMsg = error.message || 'Failed to generate intent';
+        if (invokeResponse) {
+          try {
+            const cloned = invokeResponse.clone();
+            const ct = cloned.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+              const body = await cloned.json();
+              if (body?.error) errorMsg = body.error;
+            } else {
+              const text = await cloned.text();
+              if (text) errorMsg = text;
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        toast({ title: 'AI Generation Error', description: errorMsg, variant: 'destructive' });
         throw new Error(errorMsg);
       }
 
@@ -3367,7 +3379,7 @@ export default function CFOQueryResolutionEngine() {
     try {
       console.log(`🤖 Regenerating ${section || 'all'} via AI...`);
       
-      const { data, error } = await supabase.functions.invoke('generate-intent', {
+      const { data, error, response: invokeResponse } = await supabase.functions.invoke('generate-intent', {
         body: {
           intentName: intent.name,
           moduleName: moduleInfo?.name || intent.moduleId,
@@ -3392,12 +3404,25 @@ export default function CFOQueryResolutionEngine() {
 
       if (error) {
         console.error('Edge function error:', error);
-        const errorMsg = error.message || 'Failed to regenerate';
-        toast({
-          title: 'AI Generation Error',
-          description: errorMsg,
-          variant: 'destructive'
-        });
+
+        let errorMsg = error.message || 'Failed to regenerate';
+        if (invokeResponse) {
+          try {
+            const cloned = invokeResponse.clone();
+            const ct = cloned.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+              const body = await cloned.json();
+              if (body?.error) errorMsg = body.error;
+            } else {
+              const text = await cloned.text();
+              if (text) errorMsg = text;
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        toast({ title: 'AI Generation Error', description: errorMsg, variant: 'destructive' });
         throw new Error(errorMsg);
       }
 
