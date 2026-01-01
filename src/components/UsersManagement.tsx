@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { z } from 'zod';
 import { useUsers } from '@/hooks/useUsers';
+import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,8 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Trash2, Loader2, Users, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Loader2, Users, Eye, EyeOff, Shield } from 'lucide-react';
 import type { AppRole } from '@/hooks/useAuth';
 
 const createUserSchema = z.object({
@@ -21,6 +23,7 @@ const createUserSchema = z.object({
 
 export function UsersManagement() {
   const { users, isLoading, createUser, deleteUser } = useUsers();
+  const { user: currentUser, isSuperAdmin, superAdminEmail } = useAuth();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -187,31 +190,73 @@ export function UsersManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((user) => (
-                  <TableRow key={user.id} className="text-sm">
-                    <TableCell className="font-mono text-xs">{user.email}</TableCell>
-                    <TableCell>{user.full_name || '-'}</TableCell>
-                    <TableCell>
-                      <Badge 
-                        variant={user.role === 'admin' ? 'default' : 'secondary'}
-                        className="text-xs"
-                      >
-                        {user.role || 'user'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        onClick={() => handleDelete(user.id, user.email)}
-                        disabled={deleteUser.isPending}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {users.map((user) => {
+                  const isUserSuperAdmin = superAdminEmail && user.email === superAdminEmail;
+                  const isAdmin = user.role === 'admin';
+                  
+                  // Super admin can delete anyone except themselves
+                  // Regular admins can only delete non-admin users
+                  const canDelete = isSuperAdmin 
+                    ? user.id !== currentUser?.id 
+                    : !isAdmin && !isUserSuperAdmin;
+
+                  return (
+                    <TableRow key={user.id} className="text-sm">
+                      <TableCell className="font-mono text-xs">
+                        <div className="flex items-center gap-2">
+                          {user.email}
+                          {isUserSuperAdmin && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Shield className="h-3.5 w-3.5 text-amber-500" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Super Admin</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>{user.full_name || '-'}</TableCell>
+                      <TableCell>
+                        <Badge 
+                          variant={isUserSuperAdmin ? 'default' : isAdmin ? 'default' : 'secondary'}
+                          className={`text-xs ${isUserSuperAdmin ? 'bg-amber-500 hover:bg-amber-600' : ''}`}
+                        >
+                          {isUserSuperAdmin ? 'Super Admin' : user.role || 'user'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {canDelete ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => handleDelete(user.id, user.email)}
+                            disabled={deleteUser.isPending}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="h-7 w-7 flex items-center justify-center">
+                                  <Shield className="h-3.5 w-3.5 text-muted-foreground/50" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{isUserSuperAdmin ? 'Super admin cannot be deleted' : 'Only super admin can delete admins'}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

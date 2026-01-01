@@ -4,15 +4,16 @@ import { supabase } from '@/integrations/supabase/client';
 
 export type AppRole = 'admin' | 'user';
 
-interface UserWithRole {
-  user: User;
-  role: AppRole | null;
+interface SuperAdminInfo {
+  isSuperAdmin: boolean;
+  superAdminEmail: string | null;
 }
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [superAdminInfo, setSuperAdminInfo] = useState<SuperAdminInfo>({ isSuperAdmin: false, superAdminEmail: null });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,9 +27,11 @@ export function useAuth() {
         if (session?.user) {
           setTimeout(() => {
             fetchUserRole(session.user.id);
+            checkSuperAdmin();
           }, 0);
         } else {
           setRole(null);
+          setSuperAdminInfo({ isSuperAdmin: false, superAdminEmail: null });
         }
       }
     );
@@ -39,6 +42,7 @@ export function useAuth() {
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchUserRole(session.user.id);
+        checkSuperAdmin();
       }
       setLoading(false);
     });
@@ -57,6 +61,20 @@ export function useAuth() {
       setRole(data.role as AppRole);
     } else {
       setRole(null);
+    }
+  };
+
+  const checkSuperAdmin = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('check-super-admin');
+      if (!error && data) {
+        setSuperAdminInfo({
+          isSuperAdmin: data.isSuperAdmin || false,
+          superAdminEmail: data.superAdminEmail || null,
+        });
+      }
+    } catch (err) {
+      console.error('Error checking super admin:', err);
     }
   };
 
@@ -90,17 +108,21 @@ export function useAuth() {
       setUser(null);
       setSession(null);
       setRole(null);
+      setSuperAdminInfo({ isSuperAdmin: false, superAdminEmail: null });
     }
     return { error };
   };
 
   const isAdmin = role === 'admin';
+  const isSuperAdmin = superAdminInfo.isSuperAdmin;
 
   return {
     user,
     session,
     role,
     isAdmin,
+    isSuperAdmin,
+    superAdminEmail: superAdminInfo.superAdminEmail,
     loading,
     signIn,
     signUp,
