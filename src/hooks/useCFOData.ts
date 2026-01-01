@@ -611,11 +611,48 @@ export function useLLMConfig() {
   return { llmConfig, loading, updateConfig, refetch: fetchConfig };
 }
 
-// Hook for LLM usage logs
-export function useLLMUsageLogs(intentId?: string, limit: number = 50) {
+// Model pricing per 1M tokens (in USD)
+export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  // Anthropic Claude models
+  'claude-opus-4-5': { input: 15.00, output: 75.00 },
+  'claude-sonnet-4-5': { input: 3.00, output: 15.00 },
+  'claude-3-opus': { input: 15.00, output: 75.00 },
+  'claude-3-sonnet': { input: 3.00, output: 15.00 },
+  'claude-3-haiku': { input: 0.25, output: 1.25 },
+  // OpenAI models
+  'gpt-4-turbo': { input: 10.00, output: 30.00 },
+  'gpt-4': { input: 30.00, output: 60.00 },
+  'gpt-4o': { input: 2.50, output: 10.00 },
+  'gpt-4o-mini': { input: 0.15, output: 0.60 },
+  'gpt-3.5-turbo': { input: 0.50, output: 1.50 },
+  // Default fallback
+  'default': { input: 5.00, output: 15.00 }
+};
+
+export interface ModelUsage {
+  model: string;
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requestCount: number;
+  estimatedCostUsd: number;
+}
+
+// Calculate cost in USD
+export const calculateCost = (model: string, inputTokens: number, outputTokens: number): number => {
+  const pricing = MODEL_PRICING[model] || MODEL_PRICING['default'];
+  const inputCost = (inputTokens / 1_000_000) * pricing.input;
+  const outputCost = (outputTokens / 1_000_000) * pricing.output;
+  return inputCost + outputCost;
+};
+
+// Hook for LLM usage logs with model breakdown
+export function useLLMUsageLogs(intentId?: string, limit: number = 100) {
   const [logs, setLogs] = useState<LLMUsageLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [totalUsage, setTotalUsage] = useState({ inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0 });
+  const [totalUsage, setTotalUsage] = useState({ inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0, totalCostUsd: 0 });
+  const [usageByModel, setUsageByModel] = useState<ModelUsage[]>([]);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -649,14 +686,45 @@ export function useLLMUsageLogs(intentId?: string, limit: number = 50) {
       }));
       setLogs(mappedLogs);
 
-      // Calculate total usage
-      const totals = mappedLogs.reduce((acc, log) => ({
-        inputTokens: acc.inputTokens + log.inputTokens,
-        outputTokens: acc.outputTokens + log.outputTokens,
-        totalTokens: acc.totalTokens + log.totalTokens,
-        requestCount: acc.requestCount + 1
-      }), { inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0 });
-      setTotalUsage(totals);
+      // Calculate total usage with cost
+      let totalCostUsd = 0;
+      const totals = mappedLogs.reduce((acc, log) => {
+        const cost = calculateCost(log.model, log.inputTokens, log.outputTokens);
+        totalCostUsd += cost;
+        return {
+          inputTokens: acc.inputTokens + log.inputTokens,
+          outputTokens: acc.outputTokens + log.outputTokens,
+          totalTokens: acc.totalTokens + log.totalTokens,
+          requestCount: acc.requestCount + 1
+        };
+      }, { inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0 });
+      setTotalUsage({ ...totals, totalCostUsd });
+
+      // Group by model
+      const modelMap = new Map<string, ModelUsage>();
+      mappedLogs.forEach(log => {
+        const key = `${log.provider}:${log.model}`;
+        const existing = modelMap.get(key);
+        const cost = calculateCost(log.model, log.inputTokens, log.outputTokens);
+        if (existing) {
+          existing.inputTokens += log.inputTokens;
+          existing.outputTokens += log.outputTokens;
+          existing.totalTokens += log.totalTokens;
+          existing.requestCount += 1;
+          existing.estimatedCostUsd += cost;
+        } else {
+          modelMap.set(key, {
+            model: log.model,
+            provider: log.provider,
+            inputTokens: log.inputTokens,
+            outputTokens: log.outputTokens,
+            totalTokens: log.totalTokens,
+            requestCount: 1,
+            estimatedCostUsd: cost
+          });
+        }
+      });
+      setUsageByModel(Array.from(modelMap.values()).sort((a, b) => b.totalTokens - a.totalTokens));
     }
     setLoading(false);
   }, [intentId, limit]);
@@ -665,5 +733,5 @@ export function useLLMUsageLogs(intentId?: string, limit: number = 50) {
     fetchLogs();
   }, [fetchLogs]);
 
-  return { logs, loading, totalUsage, refetch: fetchLogs };
+  return { logs, loading, totalUsage, usageByModel, refetch: fetchLogs };
 }
