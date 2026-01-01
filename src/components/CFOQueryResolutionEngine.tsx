@@ -2822,7 +2822,7 @@ function BusinessContextView({
   );
 }
 
-// LLM Config View
+// LLM Config View - Compact & Minimal Design
 function LLMConfigView({ 
   config, 
   onChange 
@@ -2831,15 +2831,14 @@ function LLMConfigView({
   onChange: (updates: Partial<LLMConfig>) => void;
 }) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [testMessage, setTestMessage] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editedConfig, setEditedConfig] = useState<Partial<LLMConfig>>({});
+  const [showUsageDetails, setShowUsageDetails] = useState(false);
   
-  // Fetch usage logs with model breakdown
   const { totalUsage, usageByModel, loading: usageLoading, refetch: refetchUsage } = useLLMUsageLogs();
 
   const providers = [
-    { id: 'azure-anthropic', name: 'Azure Anthropic', icon: '🔷' },
+    { id: 'azure-anthropic', name: 'Azure', icon: '🔷' },
     { id: 'openai', name: 'OpenAI', icon: '🟢' }
   ];
 
@@ -2858,27 +2857,18 @@ function LLMConfigView({
   const handleSave = () => {
     onChange(editedConfig);
     setIsEditing(false);
-    toast({ title: 'LLM Configuration saved successfully' });
-  };
-
-  const handleCancel = () => {
-    setEditedConfig({});
-    setIsEditing(false);
+    toast({ title: 'Saved' });
   };
 
   const currentConfig = isEditing ? { ...config, ...editedConfig } : config;
   const updateField = (updates: Partial<LLMConfig>) => {
     if (isEditing) {
       setEditedConfig(prev => ({ ...prev, ...updates }));
-    } else {
-      onChange(updates);
     }
   };
 
   const testConnection = async () => {
     setTestStatus('testing');
-    setTestMessage('Testing connection...');
-    
     try {
       const response = await fetch(`${currentConfig.endpoint}/v1/messages`, {
         method: 'POST',
@@ -2890,134 +2880,118 @@ function LLMConfigView({
         body: JSON.stringify({
           model: currentConfig.model,
           max_tokens: 50,
-          messages: [{ role: 'user', content: 'Say "Connection successful!" in exactly those words.' }]
+          messages: [{ role: 'user', content: 'Say OK' }]
         })
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        setTestStatus('success');
-        setTestMessage(`✅ Connected! Response: ${data.content[0]?.text?.slice(0, 50) || 'OK'}`);
-      } else {
-        const errorText = await response.text();
-        setTestStatus('error');
-        setTestMessage(`❌ Error ${response.status}: ${errorText.slice(0, 100)}`);
-      }
-    } catch (error) {
+      setTestStatus(response.ok ? 'success' : 'error');
+    } catch {
       setTestStatus('error');
-      setTestMessage(`❌ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
-  // Format currency
-  const formatUsd = (amount: number) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(amount);
-  };
+  const formatUsd = (amount: number) => `$${amount.toFixed(4)}`;
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-bold text-gray-900">LLM Configuration</h1>
+    <div className="p-6 max-w-3xl">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">LLM Settings</h1>
+          <p className="text-sm text-gray-500">AI model configuration</p>
+        </div>
         {!isEditing ? (
-          <button
-            onClick={handleStartEdit}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            <Edit size={16} />
+          <button onClick={handleStartEdit} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-md hover:bg-gray-800">
             Edit
           </button>
         ) : (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCancel}
-              className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
-              <X size={16} />
+          <div className="flex gap-2">
+            <button onClick={() => setIsEditing(false)} className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50">
               Cancel
             </button>
-            <button
-              onClick={handleSave}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              <Save size={16} />
+            <button onClick={handleSave} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-md hover:bg-gray-800">
               Save
             </button>
           </div>
         )}
       </div>
-      <p className="text-gray-500 mb-6">Configure the AI model for intent generation</p>
 
-      <div className="max-w-4xl space-y-6">
-        <div className="bg-white p-6 rounded-xl border">
-          {/* Provider Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-3">Provider</label>
-            <div className="grid grid-cols-2 gap-3">
-              {providers.map(provider => (
-                <button
-                  key={provider.id}
-                  onClick={() => isEditing && updateField({ provider: provider.id })}
-                  disabled={!isEditing}
-                  className={`p-3 border rounded-lg text-center transition-colors ${
-                    currentConfig.provider === provider.id
-                      ? 'border-blue-500 bg-blue-50'
-                      : isEditing ? 'hover:bg-gray-50' : 'opacity-60'
-                  } ${!isEditing ? 'cursor-default' : ''}`}
-                >
-                  <span className="text-2xl">{provider.icon}</span>
-                  <div className="text-xs mt-1">{provider.name}</div>
-                </button>
-              ))}
+      {/* Cost Summary Card */}
+      <div className="mb-6 p-4 bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg text-white">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide">Total Cost</p>
+            <p className="text-2xl font-bold">{formatUsd(totalUsage.totalCostUsd)}</p>
+          </div>
+          <div className="flex gap-6 text-right">
+            <div>
+              <p className="text-xs text-gray-400">Tokens</p>
+              <p className="font-semibold">{totalUsage.totalTokens.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Requests</p>
+              <p className="font-semibold">{totalUsage.requestCount}</p>
             </div>
           </div>
+        </div>
+      </div>
 
-          {/* Endpoint */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">API Endpoint</label>
+      {/* Configuration */}
+      <div className="space-y-4 mb-6">
+        {/* Provider */}
+        <div className="flex gap-2">
+          {providers.map(p => (
+            <button
+              key={p.id}
+              onClick={() => isEditing && updateField({ provider: p.id })}
+              disabled={!isEditing}
+              className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
+                currentConfig.provider === p.id
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              } ${!isEditing ? 'opacity-70 cursor-default' : 'cursor-pointer'}`}
+            >
+              {p.icon} {p.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Form Grid */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className="text-xs text-gray-500 mb-1 block">Endpoint</label>
             <input
               type="text"
               value={currentConfig.endpoint || ''}
               onChange={(e) => updateField({ endpoint: e.target.value })}
               disabled={!isEditing}
-              placeholder="https://your-resource.openai.azure.com/anthropic"
-              className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+              placeholder="https://..."
+              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
             />
-            <p className="text-xs text-gray-500 mt-1">Full URL to the API endpoint</p>
           </div>
-
-          {/* Model - Text Input */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Model</label>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Model</label>
             <input
               type="text"
               value={currentConfig.model || ''}
               onChange={(e) => updateField({ model: e.target.value })}
               disabled={!isEditing}
-              placeholder="claude-opus-4-5"
-              className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+              placeholder="claude-3-opus"
+              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
             />
-            <p className="text-xs text-gray-500 mt-1">Enter the model name (e.g., claude-opus-4-5, gpt-4-turbo)</p>
           </div>
-
-          {/* API Key */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">API Key</label>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
             <input
               type="password"
               value={currentConfig.apiKey || ''}
               onChange={(e) => updateField({ apiKey: e.target.value })}
               disabled={!isEditing}
-              placeholder="Enter your API key..."
-              className={`w-full px-3 py-2 border rounded-lg font-mono ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+              placeholder="••••••••"
+              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
             />
-            <p className="text-xs text-gray-500 mt-1">Your API key is stored locally and never sent anywhere except to the configured endpoint</p>
           </div>
-
-          {/* Temperature */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Temperature: {currentConfig.temperature}
-            </label>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Temperature ({currentConfig.temperature})</label>
             <input
               type="range"
               min="0"
@@ -3026,172 +3000,89 @@ function LLMConfigView({
               value={currentConfig.temperature}
               onChange={(e) => updateField({ temperature: parseFloat(e.target.value) })}
               disabled={!isEditing}
-              className={`w-full ${!isEditing ? 'opacity-60' : ''}`}
+              className="w-full disabled:opacity-60"
             />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>Deterministic (0.0)</span>
-              <span>Creative (1.0)</span>
-            </div>
           </div>
-
-          {/* Max Tokens */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Max Tokens</label>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Max Tokens</label>
             <input
               type="number"
               value={currentConfig.maxTokens}
               onChange={(e) => updateField({ maxTokens: parseInt(e.target.value) || 4096 })}
               disabled={!isEditing}
-              className={`w-full px-3 py-2 border rounded-lg ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-gray-50 disabled:opacity-60"
             />
           </div>
-
-          {/* Test Connection Button */}
-          <div className="pt-4 border-t">
-            <button
-              onClick={testConnection}
-              disabled={testStatus === 'testing' || !currentConfig.apiKey || !currentConfig.endpoint}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {testStatus === 'testing' ? (
-                <Loader2 size={16} className="animate-spin" />
-              ) : (
-                <Play size={16} />
-              )}
-              Test Connection
-            </button>
-            
-            {testMessage && (
-              <div className={`mt-3 p-3 rounded-lg text-sm ${
-                testStatus === 'success' ? 'bg-green-50 text-green-700' :
-                testStatus === 'error' ? 'bg-red-50 text-red-700' :
-                'bg-gray-50 text-gray-700'
-              }`}>
-                {testMessage}
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* Current Configuration Summary */}
-        <div className="p-4 bg-gray-50 rounded-lg">
-          <h4 className="font-medium text-gray-900 mb-2">Current Configuration</h4>
-          <div className="text-sm text-gray-600 space-y-1 font-mono">
-            <p>Provider: {config.provider}</p>
-            <p>Model: {config.model}</p>
-            <p>Endpoint: {config.endpoint}</p>
-            <p>Temperature: {config.temperature}</p>
-            <p>Max Tokens: {config.maxTokens}</p>
-            <p>API Key: {config.apiKey ? '••••••••' + config.apiKey.slice(-8) : 'Not set'}</p>
-          </div>
+        {/* Test Connection */}
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            onClick={testConnection}
+            disabled={testStatus === 'testing' || !currentConfig.apiKey}
+            className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+          >
+            {testStatus === 'testing' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            Test
+          </button>
+          {testStatus === 'success' && <span className="text-sm text-green-600">✓ Connected</span>}
+          {testStatus === 'error' && <span className="text-sm text-red-600">✗ Failed</span>}
         </div>
-
-        {/* Total Cost & Usage Overview */}
-        <div className="bg-white p-6 rounded-xl border">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-medium text-gray-900 flex items-center gap-2">
-              <Zap size={18} className="text-purple-500" /> API Usage & Cost Overview
-            </h3>
-            <button
-              onClick={() => refetchUsage()}
-              disabled={usageLoading}
-              className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
-            >
-              <RefreshCw size={14} className={usageLoading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-          </div>
-          
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-            <div className="p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-lg text-center border border-green-200">
-              <p className="text-2xl font-bold text-green-700">{formatUsd(totalUsage.totalCostUsd)}</p>
-              <p className="text-xs text-green-600 font-medium">Total Cost (USD)</p>
-            </div>
-            <div className="p-4 bg-purple-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-purple-700">{totalUsage.totalTokens.toLocaleString()}</p>
-              <p className="text-xs text-purple-600">Total Tokens</p>
-            </div>
-            <div className="p-4 bg-blue-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-blue-700">{totalUsage.requestCount.toLocaleString()}</p>
-              <p className="text-xs text-blue-600">Total Requests</p>
-            </div>
-            <div className="p-4 bg-cyan-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-cyan-700">{totalUsage.inputTokens.toLocaleString()}</p>
-              <p className="text-xs text-cyan-600">Input Tokens</p>
-            </div>
-            <div className="p-4 bg-orange-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-orange-700">{totalUsage.outputTokens.toLocaleString()}</p>
-              <p className="text-xs text-orange-600">Output Tokens</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Usage By Model */}
-        {usageByModel.length > 0 && (
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <Database size={18} className="text-blue-500" /> Usage By Model
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-2 px-3 font-medium text-gray-700">Model</th>
-                    <th className="text-left py-2 px-3 font-medium text-gray-700">Provider</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-700">Requests</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-700">Input Tokens</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-700">Output Tokens</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-700">Total Tokens</th>
-                    <th className="text-right py-2 px-3 font-medium text-green-700">Cost (USD)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {usageByModel.map((usage, index) => (
-                    <tr key={index} className="border-b hover:bg-gray-50">
-                      <td className="py-2 px-3 font-mono text-xs">{usage.model}</td>
-                      <td className="py-2 px-3">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          usage.provider === 'azure-anthropic' ? 'bg-blue-100 text-blue-700' :
-                          usage.provider === 'openai' ? 'bg-green-100 text-green-700' :
-                          'bg-gray-100 text-gray-700'
-                        }`}>
-                          {usage.provider}
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 text-right">{usage.requestCount.toLocaleString()}</td>
-                      <td className="py-2 px-3 text-right">{usage.inputTokens.toLocaleString()}</td>
-                      <td className="py-2 px-3 text-right">{usage.outputTokens.toLocaleString()}</td>
-                      <td className="py-2 px-3 text-right font-medium">{usage.totalTokens.toLocaleString()}</td>
-                      <td className="py-2 px-3 text-right font-medium text-green-700">{formatUsd(usage.estimatedCostUsd)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-gray-50 font-medium">
-                    <td className="py-2 px-3" colSpan={2}>Total</td>
-                    <td className="py-2 px-3 text-right">{totalUsage.requestCount.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right">{totalUsage.inputTokens.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right">{totalUsage.outputTokens.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right">{totalUsage.totalTokens.toLocaleString()}</td>
-                    <td className="py-2 px-3 text-right text-green-700">{formatUsd(totalUsage.totalCostUsd)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <p className="text-xs text-gray-500 mt-4">
-              💡 Cost estimates are based on standard API pricing. Actual costs may vary based on your provider agreement.
-            </p>
-          </div>
-        )}
-
-        {usageByModel.length === 0 && !usageLoading && (
-          <div className="bg-white p-6 rounded-xl border text-center">
-            <Database size={32} className="mx-auto mb-2 text-gray-300" />
-            <p className="text-gray-500">No usage data yet</p>
-            <p className="text-sm text-gray-400 mt-1">Usage will be tracked when you generate intent configurations</p>
-          </div>
-        )}
       </div>
+
+      {/* Usage by Model - Collapsible */}
+      {usageByModel.length > 0 && (
+        <div className="border rounded-lg overflow-hidden">
+          <button
+            onClick={() => setShowUsageDetails(!showUsageDetails)}
+            className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition-colors"
+          >
+            <span className="text-sm font-medium text-gray-700">Usage by Model</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={(e) => { e.stopPropagation(); refetchUsage(); }}
+                disabled={usageLoading}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <RefreshCw size={14} className={usageLoading ? 'animate-spin' : ''} />
+              </button>
+              {showUsageDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </div>
+          </button>
+          
+          {showUsageDetails && (
+            <div className="divide-y">
+              {usageByModel.map((usage, idx) => (
+                <div key={idx} className="px-4 py-2 flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${usage.provider === 'azure-anthropic' ? 'bg-blue-500' : 'bg-green-500'}`} />
+                    <span className="font-mono text-xs text-gray-600">{usage.model}</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-gray-500">
+                    <span>{usage.requestCount} req</span>
+                    <span>{usage.totalTokens.toLocaleString()} tok</span>
+                    <span className="font-medium text-gray-900">{formatUsd(usage.estimatedCostUsd)}</span>
+                  </div>
+                </div>
+              ))}
+              <div className="px-4 py-2 flex items-center justify-between text-sm bg-gray-50 font-medium">
+                <span>Total</span>
+                <div className="flex items-center gap-4 text-gray-700">
+                  <span>{totalUsage.requestCount} req</span>
+                  <span>{totalUsage.totalTokens.toLocaleString()} tok</span>
+                  <span className="text-gray-900">{formatUsd(totalUsage.totalCostUsd)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {usageByModel.length === 0 && !usageLoading && (
+        <div className="text-center py-6 text-gray-400 text-sm">
+          No usage data yet
+        </div>
+      )}
     </div>
   );
 }
