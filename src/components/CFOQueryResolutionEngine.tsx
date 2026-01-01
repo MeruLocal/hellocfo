@@ -3134,12 +3134,10 @@ export default function CFOQueryResolutionEngine() {
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // Fetch MCP tools on mount when MCP tab is active
+  // Fetch MCP tools on initial mount
   useEffect(() => {
-    if (activeTab === 'mcp' && helloBooksMcpTools.length === 0 && !isFetchingMcpTools) {
-      fetchHelloBooksMcpTools();
-    }
-  }, [activeTab, helloBooksMcpTools.length, isFetchingMcpTools, fetchHelloBooksMcpTools]);
+    fetchHelloBooksMcpTools();
+  }, []);
 
   // MCP tools from HelloBooks
   const allMcpTools = helloBooksMcpTools;
