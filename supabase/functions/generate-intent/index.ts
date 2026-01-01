@@ -301,16 +301,18 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // Azure services vary in header name; send the common variants
+        'x-api-key': apiKey!,
         'api-key': apiKey!,
+        'Ocp-Apim-Subscription-Key': apiKey!,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: model,
+        model,
         max_tokens: maxTokens,
-        temperature: temperature,
-        messages: [
-          { role: 'user', content: getSystemPrompt() + '\n\n' + prompt }
-        ]
+        temperature,
+        system: getSystemPrompt(),
+        messages: [{ role: 'user', content: prompt }]
       }),
     });
 
