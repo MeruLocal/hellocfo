@@ -3781,9 +3781,7 @@ export default function CFOQueryResolutionEngine() {
       {/* Sidebar */}
       <div className="w-64 bg-slate-800 text-white flex flex-col">
         <div className="p-4 border-b border-slate-700">
-          <h1 className="text-lg font-bold flex items-center gap-2">
-            <Brain size={22} /> CFO AI Engine
-          </h1>
+          <h1 className="text-xl font-bold">HelloCRM</h1>
           <p className="text-xs text-slate-400 mt-1">Query Resolution Platform v3.0</p>
         </div>
 
@@ -3837,8 +3835,8 @@ export default function CFOQueryResolutionEngine() {
         <div className="p-3 mx-3 mb-3 border-t border-slate-700">
           <div className="flex items-center justify-between">
             <div className="truncate">
-              <p className="text-xs text-slate-400">Signed in as</p>
               <p className="text-xs font-medium truncate">{user?.email}</p>
+              <p className="text-xs text-slate-400">{isAdmin ? 'Admin' : 'User'}</p>
             </div>
             <AlertDialog>
               <AlertDialogTrigger asChild>
