@@ -2796,30 +2796,60 @@ function LLMConfigView({
 }) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedConfig, setEditedConfig] = useState<Partial<LLMConfig>>({});
 
   const providers = [
-    { id: 'azure-anthropic', name: 'Azure Anthropic', icon: '🔷', models: ['claude-opus-4-5', 'claude-sonnet-4', 'claude-haiku-3'] },
-    { id: 'anthropic', name: 'Anthropic Direct', icon: '🟠', models: ['claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'] },
-    { id: 'openai', name: 'OpenAI', icon: '🟢', models: ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'] },
-    { id: 'ollama', name: 'Ollama (Local)', icon: '⚫', models: ['codellama', 'llama2', 'mistral'] }
+    { id: 'azure-anthropic', name: 'Azure Anthropic', icon: '🔷' },
+    { id: 'openai', name: 'OpenAI', icon: '🟢' }
   ];
 
-  const selectedProvider = providers.find(p => p.id === config.provider);
+  const handleStartEdit = () => {
+    setEditedConfig({
+      provider: config.provider,
+      endpoint: config.endpoint,
+      model: config.model,
+      apiKey: config.apiKey,
+      temperature: config.temperature,
+      maxTokens: config.maxTokens
+    });
+    setIsEditing(true);
+  };
+
+  const handleSave = () => {
+    onChange(editedConfig);
+    setIsEditing(false);
+    toast({ title: 'LLM Configuration saved successfully' });
+  };
+
+  const handleCancel = () => {
+    setEditedConfig({});
+    setIsEditing(false);
+  };
+
+  const currentConfig = isEditing ? { ...config, ...editedConfig } : config;
+  const updateField = (updates: Partial<LLMConfig>) => {
+    if (isEditing) {
+      setEditedConfig(prev => ({ ...prev, ...updates }));
+    } else {
+      onChange(updates);
+    }
+  };
 
   const testConnection = async () => {
     setTestStatus('testing');
     setTestMessage('Testing connection...');
     
     try {
-      const response = await fetch(`${config.endpoint}/v1/messages`, {
+      const response = await fetch(`${currentConfig.endpoint}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'api-key': config.apiKey,
+          'api-key': currentConfig.apiKey || '',
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: config.model,
+          model: currentConfig.model,
           max_tokens: 50,
           messages: [{ role: 'user', content: 'Say "Connection successful!" in exactly those words.' }]
         })
@@ -2842,7 +2872,35 @@ function LLMConfigView({
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">LLM Configuration</h1>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-bold text-gray-900">LLM Configuration</h1>
+        {!isEditing ? (
+          <button
+            onClick={handleStartEdit}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            <Edit size={16} />
+            Edit
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCancel}
+              className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              <X size={16} />
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+            >
+              <Save size={16} />
+              Save
+            </button>
+          </div>
+        )}
+      </div>
       <p className="text-gray-500 mb-6">Configure the AI model for intent generation</p>
 
       <div className="max-w-2xl space-y-6">
@@ -2850,16 +2908,17 @@ function LLMConfigView({
           {/* Provider Selection */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-3">Provider</label>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               {providers.map(provider => (
                 <button
                   key={provider.id}
-                  onClick={() => onChange({ provider: provider.id, model: provider.models[0] })}
+                  onClick={() => isEditing && updateField({ provider: provider.id })}
+                  disabled={!isEditing}
                   className={`p-3 border rounded-lg text-center transition-colors ${
-                    config.provider === provider.id
+                    currentConfig.provider === provider.id
                       ? 'border-blue-500 bg-blue-50'
-                      : 'hover:bg-gray-50'
-                  }`}
+                      : isEditing ? 'hover:bg-gray-50' : 'opacity-60'
+                  } ${!isEditing ? 'cursor-default' : ''}`}
                 >
                   <span className="text-2xl">{provider.icon}</span>
                   <div className="text-xs mt-1">{provider.name}</div>
@@ -2868,33 +2927,32 @@ function LLMConfigView({
             </div>
           </div>
 
-          {/* Endpoint (for Azure) */}
-          {(config.provider === 'azure-anthropic' || config.provider === 'ollama') && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">API Endpoint</label>
-              <input
-                type="text"
-                value={config.endpoint}
-                onChange={(e) => onChange({ endpoint: e.target.value })}
-                placeholder="https://your-resource.openai.azure.com/anthropic"
-                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-              />
-              <p className="text-xs text-gray-500 mt-1">Full URL to the API endpoint</p>
-            </div>
-          )}
+          {/* Endpoint */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">API Endpoint</label>
+            <input
+              type="text"
+              value={currentConfig.endpoint || ''}
+              onChange={(e) => updateField({ endpoint: e.target.value })}
+              disabled={!isEditing}
+              placeholder="https://your-resource.openai.azure.com/anthropic"
+              className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+            />
+            <p className="text-xs text-gray-500 mt-1">Full URL to the API endpoint</p>
+          </div>
 
-          {/* Model Selection */}
+          {/* Model - Text Input */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">Model</label>
-            <select
-              value={config.model}
-              onChange={(e) => onChange({ model: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg bg-white"
-            >
-              {selectedProvider?.models.map(model => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
+            <input
+              type="text"
+              value={currentConfig.model || ''}
+              onChange={(e) => updateField({ model: e.target.value })}
+              disabled={!isEditing}
+              placeholder="claude-opus-4-5"
+              className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
+            />
+            <p className="text-xs text-gray-500 mt-1">Enter the model name (e.g., claude-opus-4-5, gpt-4-turbo)</p>
           </div>
 
           {/* API Key */}
@@ -2902,10 +2960,11 @@ function LLMConfigView({
             <label className="block text-sm font-medium text-gray-700 mb-2">API Key</label>
             <input
               type="password"
-              value={config.apiKey}
-              onChange={(e) => onChange({ apiKey: e.target.value })}
+              value={currentConfig.apiKey || ''}
+              onChange={(e) => updateField({ apiKey: e.target.value })}
+              disabled={!isEditing}
               placeholder="Enter your API key..."
-              className="w-full px-3 py-2 border rounded-lg font-mono"
+              className={`w-full px-3 py-2 border rounded-lg font-mono ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
             />
             <p className="text-xs text-gray-500 mt-1">Your API key is stored locally and never sent anywhere except to the configured endpoint</p>
           </div>
@@ -2913,16 +2972,17 @@ function LLMConfigView({
           {/* Temperature */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Temperature: {config.temperature}
+              Temperature: {currentConfig.temperature}
             </label>
             <input
               type="range"
               min="0"
               max="1"
               step="0.1"
-              value={config.temperature}
-              onChange={(e) => onChange({ temperature: parseFloat(e.target.value) })}
-              className="w-full"
+              value={currentConfig.temperature}
+              onChange={(e) => updateField({ temperature: parseFloat(e.target.value) })}
+              disabled={!isEditing}
+              className={`w-full ${!isEditing ? 'opacity-60' : ''}`}
             />
             <div className="flex justify-between text-xs text-gray-500 mt-1">
               <span>Deterministic (0.0)</span>
@@ -2935,9 +2995,10 @@ function LLMConfigView({
             <label className="block text-sm font-medium text-gray-700 mb-2">Max Tokens</label>
             <input
               type="number"
-              value={config.maxTokens}
-              onChange={(e) => onChange({ maxTokens: parseInt(e.target.value) || 4096 })}
-              className="w-full px-3 py-2 border rounded-lg"
+              value={currentConfig.maxTokens}
+              onChange={(e) => updateField({ maxTokens: parseInt(e.target.value) || 4096 })}
+              disabled={!isEditing}
+              className={`w-full px-3 py-2 border rounded-lg ${!isEditing ? 'bg-gray-50 cursor-default' : ''}`}
             />
           </div>
 
@@ -2945,7 +3006,7 @@ function LLMConfigView({
           <div className="pt-4 border-t">
             <button
               onClick={testConnection}
-              disabled={testStatus === 'testing' || !config.apiKey || !config.endpoint}
+              disabled={testStatus === 'testing' || !currentConfig.apiKey || !currentConfig.endpoint}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {testStatus === 'testing' ? (
