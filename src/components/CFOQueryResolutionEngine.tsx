@@ -1840,6 +1840,10 @@ function IntentDetailScreen({
       const generated = await onRegenerate(editingIntent.id, section, options);
       setEditingIntent(prev => ({ ...prev, ...generated }));
       setHasChanges(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to regenerate';
+      console.error('Regenerate failed:', err);
+      toast({ title: 'AI Generation Error', description: message, variant: 'destructive' });
     } finally {
       setIsRegenerating(null);
     }
@@ -3321,80 +3325,17 @@ export default function CFOQueryResolutionEngine() {
         updatedAt: new Date().toISOString()
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Generation failed';
       console.error('❌ AI Generation Error:', error);
       toast({
         title: 'Generation Failed',
-        description: 'Using fallback generation. Check your connection.',
+        description: message,
         variant: 'destructive'
       });
-      // Fall back to basic generation if API fails
-      return generateFallbackConfig(intent, moduleInfo, subModuleInfo);
+      throw error;
     }
   };
 
-  // Fallback generation if API fails
-  const generateFallbackConfig = (
-    intent: Intent, 
-    moduleInfo: Module | undefined,
-    subModuleInfo: SubModule | undefined
-  ): Intent => {
-    const trainingPhrases = [
-      `What is our ${intent.name.toLowerCase()}?`,
-      `Show me the ${intent.name.toLowerCase()}`,
-      `Tell me about ${subModuleInfo?.name.toLowerCase() || intent.name.toLowerCase()}`,
-      `How is our ${subModuleInfo?.name.toLowerCase() || intent.name.toLowerCase()} looking?`,
-      `${intent.name} status`,
-      `Give me the ${intent.name.toLowerCase()} report`,
-      `${intent.name.toLowerCase()} analysis`,
-      `Current ${intent.name.toLowerCase()}`,
-      `Check our ${intent.name.toLowerCase()}`,
-      `${intent.name.toLowerCase()} summary`
-    ];
-
-    const pipelines: Record<string, PipelineNode[]> = {
-      cash_management: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_cash_balance', parameters: [], outputVariable: 'cashData', description: 'Fetch cash balance' },
-        { nodeId: 'n2', nodeType: 'api_call', sequence: 2, mcpTool: 'get_cash_flow', parameters: [{ name: 'period', value: '90d', source: 'static' }], outputVariable: 'flowData', description: 'Fetch cash flow' }
-      ],
-      payables: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_vendor_bills', parameters: [{ name: 'status', value: 'pending', source: 'static' }], outputVariable: 'billsData', description: 'Fetch vendor bills' }
-      ],
-      receivables: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_receivables', parameters: [], outputVariable: 'arData', description: 'Fetch receivables' }
-      ],
-      compliance: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_gst_summary', parameters: [], outputVariable: 'gstData', description: 'Fetch GST summary' }
-      ],
-      project_costing: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_project_costs', parameters: [{ name: 'projectName', value: 'projectName', source: 'entity' }], outputVariable: 'projectData', description: 'Fetch project costs' }
-      ]
-    };
-
-    const dataPipeline = pipelines[intent.moduleId] || pipelines.cash_management;
-
-    const enrichments: Enrichment[] = [
-      { id: `e_${Date.now()}_1`, type: 'trend_analysis', config: { compareWith: 'previous_period' }, description: 'Trend comparison' },
-      { id: `e_${Date.now()}_2`, type: 'alert_evaluation', config: { useContextThresholds: true }, description: 'Alert evaluation' },
-      { id: `e_${Date.now()}_3`, type: 'recommendation', config: {}, description: 'Recommendations' }
-    ];
-
-    const responseConfig: ResponseConfig = {
-      type: 'metric_with_trend',
-      template: `📊 ${intent.name}\n\n{#data}\n\n💡 {recommendation}`,
-      followUpQuestions: ['Show more details', 'Compare to last period', 'What actions should I take?']
-    };
-
-    return {
-      ...intent,
-      trainingPhrases,
-      entities: [],
-      resolutionFlow: { dataPipeline, enrichments, responseConfig },
-      generatedBy: 'ai',
-      aiConfidence: 0.75,
-      lastGeneratedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-  };
 
   const regenerateSection = async (intentId: string, section?: string, options?: { phraseCount?: number }): Promise<Partial<Intent>> => {
     const intent = intents.find(i => i.id === intentId);
