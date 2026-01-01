@@ -4,9 +4,36 @@
 // TypeScript + shadcn/ui + Tailwind
 // ============================================================================
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import {
+  useModules,
+  useCountryConfigs,
+  useEntityTypes,
+  useEnrichmentTypes,
+  useLLMProviders,
+  useResponseTypes,
+  useIntents,
+  useBusinessContext,
+  useLLMConfig,
+  type Module,
+  type SubModule,
+  type CountryConfig,
+  type EntityType,
+  type EnrichmentType,
+  type LLMProvider,
+  type ResponseType,
+  type Intent,
+  type BusinessContext,
+  type LLMConfig,
+  type Entity,
+  type ResolutionFlow,
+  type PipelineNode,
+  type Enrichment,
+  type ResponseConfig
+} from '@/hooks/useCFOData';
+import { useMCPTools, type MCPTool } from '@/hooks/useMCPTools';
 import {
   Plus, Edit, Trash2, X, Check, Download, Upload, Wand2, Database, Sparkles,
   Loader2, Brain, GitBranch, Layers, Box, Play, Save, Settings, Search,
@@ -16,604 +43,13 @@ import {
   ListOrdered, Variable, FileText
 } from 'lucide-react';
 
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
-
-interface Entity {
-  name: string;
-  type: string;
-  required: boolean;
-  defaultValue?: string;
-  prompt?: string;
-  enumValues?: string[];
-}
-
-interface Intent {
-  id: string;
-  name: string;
-  moduleId: string;
-  subModuleId: string;
-  description?: string;
-  isActive: boolean;
-  
-  // AI Generated Fields (Human can edit)
-  trainingPhrases: string[];
-  entities: Entity[];
-  
-  // Resolution Flow (AI Generated, Human can edit)
-  resolutionFlow?: ResolutionFlow;
-  
-  // Metadata
-  generatedBy: 'ai' | 'manual' | 'pending';
-  aiConfidence?: number;
-  createdAt: string;
-  updatedAt: string;
-  lastGeneratedAt?: string;
-}
-
+// PipelineParameter is only used locally
 interface PipelineParameter {
   name: string;
   value: string;
   source: 'static' | 'entity' | 'context' | 'previous_node';
 }
-
-interface PipelineNode {
-  nodeId: string;
-  nodeType: 'api_call' | 'computation' | 'conditional';
-  sequence: number;
-  mcpTool?: string;
-  parameters: PipelineParameter[];
-  formula?: string;
-  condition?: string;
-  outputVariable: string;
-  description: string;
-}
-
-interface EnrichmentConfig {
-  [key: string]: any;
-}
-
-interface Enrichment {
-  id: string;
-  type: string;
-  config: EnrichmentConfig;
-  description: string;
-}
-
-interface ResponseConfig {
-  type: string;
-  template: string;
-  followUpQuestions: string[];
-}
-
-interface ResolutionFlow {
-  dataPipeline: PipelineNode[];
-  enrichments: Enrichment[];
-  responseConfig: ResponseConfig;
-}
-
-interface LLMConfig {
-  provider: string;
-  model: string;
-  apiKey: string;
-  endpoint: string;
-  temperature: number;
-  maxTokens: number;
-  systemPromptOverride: string;
-}
-
-interface BusinessContext {
-  country: string;
-  industry: string;
-  subIndustry?: string;
-  entitySize: string;
-  annualRevenue?: number;
-  employeeCount?: number;
-  fiscalYearEnd: string;
-  currency: string;
-  complianceFrameworks: string[];
-}
-
-interface SubModule {
-  id: string;
-  name: string;
-}
-
-interface Module {
-  id: string;
-  name: string;
-  icon: string;
-  color: string;
-  subModules: SubModule[];
-}
-
-interface CountryConfig {
-  code: string;
-  name: string;
-  flag: string;
-  currency: string;
-  currencySymbol: string;
-  sizeThresholds: {
-    micro: { max: number };
-    small: { min: number; max: number };
-    medium: { min: number; max: number };
-    large: { min: number };
-  };
-  displayThresholds: {
-    micro: string;
-    small: string;
-    medium: string;
-    large: string;
-  };
-}
-
-interface MCPTool {
-  id: string;
-  name: string;
-  description: string;
-  endpoint: string;
-  method: string;
-  parameters: {
-    name: string;
-    type: string;
-    required: boolean;
-    enumValues?: string[];
-  }[];
-  responseFields: string[];
-}
-
-interface EnrichmentType {
-  id: string;
-  name: string;
-  icon: string;
-  description: string;
-  configFields: string[];
-}
-
-// ============================================================================
-// CONSTANTS - MODULES (Will be fetched from backend in production)
-// ============================================================================
-
-const MODULES: Module[] = [
-  {
-    id: 'cash_management',
-    name: 'Cash Management',
-    icon: '💰',
-    color: 'blue',
-    subModules: [
-      { id: 'cash_flow', name: 'Cash Flow' },
-      { id: 'cash_runway', name: 'Cash Runway' },
-      { id: 'liquidity', name: 'Liquidity Analysis' },
-      { id: 'bank_reconciliation', name: 'Bank Reconciliation' }
-    ]
-  },
-  {
-    id: 'receivables',
-    name: 'Receivables',
-    icon: '📥',
-    color: 'green',
-    subModules: [
-      { id: 'ar_aging', name: 'AR Aging' },
-      { id: 'collections', name: 'Collections' },
-      { id: 'customer_dues', name: 'Customer Dues' },
-      { id: 'dso', name: 'Days Sales Outstanding' }
-    ]
-  },
-  {
-    id: 'payables',
-    name: 'Payables',
-    icon: '📤',
-    color: 'red',
-    subModules: [
-      { id: 'ap_aging', name: 'AP Aging' },
-      { id: 'vendor_payments', name: 'Vendor Payments' },
-      { id: 'payment_scheduling', name: 'Payment Scheduling' },
-      { id: 'dpo', name: 'Days Payable Outstanding' }
-    ]
-  },
-  {
-    id: 'profitability',
-    name: 'Profitability',
-    icon: '📈',
-    color: 'purple',
-    subModules: [
-      { id: 'gross_margin', name: 'Gross Margin' },
-      { id: 'net_profit', name: 'Net Profit' },
-      { id: 'ebitda', name: 'EBITDA' },
-      { id: 'segment_analysis', name: 'Segment Analysis' }
-    ]
-  },
-  {
-    id: 'compliance',
-    name: 'Compliance & Tax',
-    icon: '📋',
-    color: 'amber',
-    subModules: [
-      { id: 'gst', name: 'GST/VAT' },
-      { id: 'tds', name: 'TDS/Withholding' },
-      { id: 'statutory', name: 'Statutory Compliance' },
-      { id: 'audit', name: 'Audit Readiness' }
-    ]
-  },
-  {
-    id: 'project_costing',
-    name: 'Project Costing',
-    icon: '🏗️',
-    color: 'slate',
-    subModules: [
-      { id: 'project_cost', name: 'Project Costs' },
-      { id: 'budget_variance', name: 'Budget Variance' },
-      { id: 'wip', name: 'Work in Progress' },
-      { id: 'milestone_tracking', name: 'Milestone Tracking' }
-    ]
-  },
-  {
-    id: 'inventory',
-    name: 'Inventory',
-    icon: '📦',
-    color: 'orange',
-    subModules: [
-      { id: 'stock_levels', name: 'Stock Levels' },
-      { id: 'inventory_turnover', name: 'Inventory Turnover' },
-      { id: 'reorder_alerts', name: 'Reorder Alerts' },
-      { id: 'dead_stock', name: 'Dead Stock' }
-    ]
-  },
-  {
-    id: 'executive',
-    name: 'Executive Summary',
-    icon: '📊',
-    color: 'indigo',
-    subModules: [
-      { id: 'dashboard_kpi', name: 'Dashboard KPIs' },
-      { id: 'financial_health', name: 'Financial Health' },
-      { id: 'trend_summary', name: 'Trend Summary' },
-      { id: 'alerts_summary', name: 'Alerts Summary' }
-    ]
-  }
-];
-
-// ============================================================================
-// COUNTRY CONFIGURATIONS
-// ============================================================================
-
-const COUNTRY_CONFIGS: CountryConfig[] = [
-  {
-    code: 'IN',
-    name: 'India',
-    flag: '🇮🇳',
-    currency: 'INR',
-    currencySymbol: '₹',
-    sizeThresholds: {
-      micro: { max: 2500000 },
-      small: { min: 2500000, max: 20000000 },
-      medium: { min: 20000000, max: 250000000 },
-      large: { min: 250000000 }
-    },
-    displayThresholds: {
-      micro: '< ₹25 Lakhs',
-      small: '₹25 Lakhs – ₹2 Crores',
-      medium: '₹2 Crores – ₹25 Crores',
-      large: '> ₹25 Crores'
-    }
-  },
-  {
-    code: 'US',
-    name: 'USA',
-    flag: '🇺🇸',
-    currency: 'USD',
-    currencySymbol: '$',
-    sizeThresholds: {
-      micro: { max: 50000 },
-      small: { min: 50000, max: 500000 },
-      medium: { min: 500000, max: 5000000 },
-      large: { min: 5000000 }
-    },
-    displayThresholds: {
-      micro: '< $50,000',
-      small: '$50,000 – $500,000',
-      medium: '$500,000 – $5 Million',
-      large: '> $5 Million'
-    }
-  },
-  {
-    code: 'GB',
-    name: 'UK',
-    flag: '🇬🇧',
-    currency: 'GBP',
-    currencySymbol: '£',
-    sizeThresholds: {
-      micro: { max: 50000 },
-      small: { min: 50000, max: 500000 },
-      medium: { min: 500000, max: 10000000 },
-      large: { min: 10000000 }
-    },
-    displayThresholds: {
-      micro: '< £50,000',
-      small: '£50,000 – £500,000',
-      medium: '£500,000 – £10 Million',
-      large: '> £10 Million'
-    }
-  },
-  {
-    code: 'SG',
-    name: 'Singapore',
-    flag: '🇸🇬',
-    currency: 'SGD',
-    currencySymbol: 'S$',
-    sizeThresholds: {
-      micro: { max: 100000 },
-      small: { min: 100000, max: 1000000 },
-      medium: { min: 1000000, max: 10000000 },
-      large: { min: 10000000 }
-    },
-    displayThresholds: {
-      micro: '< SGD 100,000',
-      small: 'SGD 100,000 – 1 Million',
-      medium: 'SGD 1M – SGD 10 Million',
-      large: '> SGD 10 Million'
-    }
-  },
-  {
-    code: 'AE',
-    name: 'UAE',
-    flag: '🇦🇪',
-    currency: 'AED',
-    currencySymbol: 'د.إ',
-    sizeThresholds: {
-      micro: { max: 200000 },
-      small: { min: 200000, max: 1000000 },
-      medium: { min: 1000000, max: 10000000 },
-      large: { min: 10000000 }
-    },
-    displayThresholds: {
-      micro: '< AED 200,000',
-      small: 'AED 200,000 – 1 Million',
-      medium: 'AED 1M – AED 10 Million',
-      large: '> AED 10 Million'
-    }
-  },
-  {
-    code: 'ZA',
-    name: 'South Africa',
-    flag: '🇿🇦',
-    currency: 'ZAR',
-    currencySymbol: 'R',
-    sizeThresholds: {
-      micro: { max: 1000000 },
-      small: { min: 1000000, max: 10000000 },
-      medium: { min: 10000000, max: 100000000 },
-      large: { min: 100000000 }
-    },
-    displayThresholds: {
-      micro: '< ZAR 1 Million',
-      small: 'ZAR 1M – ZAR 10 Million',
-      medium: 'ZAR 10M – ZAR 100 Million',
-      large: '> ZAR 100 Million'
-    }
-  },
-  {
-    code: 'CA',
-    name: 'Canada',
-    flag: '🇨🇦',
-    currency: 'CAD',
-    currencySymbol: 'C$',
-    sizeThresholds: {
-      micro: { max: 75000 },
-      small: { min: 75000, max: 500000 },
-      medium: { min: 500000, max: 5000000 },
-      large: { min: 5000000 }
-    },
-    displayThresholds: {
-      micro: '< CAD 75,000',
-      small: 'CAD 75K – CAD 500K',
-      medium: 'CAD 500K – CAD 5 Million',
-      large: '> CAD 5 Million'
-    }
-  }
-];
-
-// ============================================================================
-// ENTITY TYPES
-// ============================================================================
-
-const ENTITY_TYPES = [
-  { id: 'project', name: 'Project', description: 'Project name or ID' },
-  { id: 'vendor', name: 'Vendor', description: 'Vendor/Supplier name' },
-  { id: 'customer', name: 'Customer', description: 'Customer name' },
-  { id: 'date', name: 'Date', description: 'Single date' },
-  { id: 'date_range', name: 'Date Range', description: 'Start and end date' },
-  { id: 'number', name: 'Number', description: 'Numeric value' },
-  { id: 'amount', name: 'Amount', description: 'Currency amount' },
-  { id: 'percentage', name: 'Percentage', description: 'Percentage value' },
-  { id: 'period', name: 'Period', description: 'Time period (MTD, QTD, YTD)' },
-  { id: 'enum', name: 'Enum', description: 'Predefined options' },
-  { id: 'string', name: 'String', description: 'Free text' }
-];
-
-// ============================================================================
-// MCP TOOLS - Loaded dynamically from HelloBooks
-// ============================================================================
-
-// ============================================================================
-// ENRICHMENT TYPES
-// ============================================================================
-
-const ENRICHMENT_TYPES: EnrichmentType[] = [
-  { id: 'trend_analysis', name: 'Trend Analysis', icon: '📈', description: 'Compare to previous period', configFields: ['compareWith', 'metric', 'showPercentage'] },
-  { id: 'benchmark_comparison', name: 'Benchmark Comparison', icon: '🎯', description: 'Compare to industry standards', configFields: ['metric', 'benchmarkSource', 'showPercentile'] },
-  { id: 'days_calculation', name: 'Days Calculation', icon: '⏱️', description: 'Calculate days overdue/remaining', configFields: ['dateField', 'calculation', 'outputField'] },
-  { id: 'percentage_of_total', name: 'Percentage of Total', icon: '📊', description: 'Show as percentage of total', configFields: ['valueField', 'totalField', 'outputField', 'decimals'] },
-  { id: 'ranking', name: 'Ranking', icon: '🏆', description: 'Add numbered ranking', configFields: ['outputField', 'startFrom'] },
-  { id: 'alert_evaluation', name: 'Alert Evaluation', icon: '🚨', description: 'Evaluate thresholds', configFields: ['metric', 'criticalThreshold', 'warningThreshold', 'direction', 'useContextThresholds'] },
-  { id: 'recommendation', name: 'Recommendation', icon: '💡', description: 'Generate recommendations', configFields: ['triggerCondition'] },
-  { id: 'projection', name: 'Projection', icon: '🔮', description: 'Forecast future values', configFields: ['metric', 'periods', 'method'] },
-  { id: 'anomaly_detection', name: 'Anomaly Detection', icon: '⚠️', description: 'Flag unusual values', configFields: ['metric', 'sensitivity'] },
-  { id: 'currency_format', name: 'Currency Format', icon: '💵', description: 'Format with currency symbol', configFields: ['fields', 'useContextCurrency'] }
-];
-
-// ============================================================================
-// LLM PROVIDERS
-// ============================================================================
-
-const LLM_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', icon: '🟢', models: ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'] },
-  { id: 'anthropic', name: 'Anthropic', icon: '🟠', models: ['claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'] },
-  { id: 'azure', name: 'Azure OpenAI', icon: '🔷', models: ['gpt-4', 'gpt-35-turbo'] },
-  { id: 'ollama', name: 'Ollama (Local)', icon: '⚫', models: ['codellama', 'llama2', 'mistral'] }
-];
-
-// ============================================================================
-// RESPONSE TYPES
-// ============================================================================
-
-const RESPONSE_TYPES = [
-  { id: 'metric', name: 'Metric', description: 'Single value' },
-  { id: 'metric_with_trend', name: 'Metric with Trend', description: 'Value + comparison' },
-  { id: 'ranked_list', name: 'Ranked List', description: 'Numbered items' },
-  { id: 'table', name: 'Table', description: 'Tabular data' },
-  { id: 'comparison', name: 'Comparison', description: 'Side-by-side' },
-  { id: 'diagnostic', name: 'Diagnostic', description: 'Health check' }
-];
-
-// ============================================================================
-// INITIAL SAMPLE DATA
-// ============================================================================
-
-const INITIAL_INTENTS: Intent[] = [
-  {
-    id: 'cash_runway',
-    name: 'Cash Runway Analysis',
-    moduleId: 'cash_management',
-    subModuleId: 'cash_runway',
-    description: 'Calculate how long current cash will last at current burn rate',
-    isActive: true,
-    trainingPhrases: [
-      'What is our cash runway?',
-      'How many months can we survive?',
-      'When will we run out of cash?',
-      'Cash runway at current burn rate',
-      'How long will our money last?'
-    ],
-    entities: [],
-    resolutionFlow: {
-      dataPipeline: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_cash_balance', parameters: [], outputVariable: 'cashData', description: 'Fetch current cash balance' },
-        { nodeId: 'n2', nodeType: 'api_call', sequence: 2, mcpTool: 'get_cash_flow', parameters: [{ name: 'flowType', value: 'outflow', source: 'static' }, { name: 'period', value: '90d', source: 'static' }], outputVariable: 'outflowData', description: 'Fetch 90-day outflow data' },
-        { nodeId: 'n3', nodeType: 'computation', sequence: 3, parameters: [], formula: 'outflowData.totalOutflow / 3', outputVariable: 'avgMonthlyBurn', description: 'Calculate average monthly burn rate' },
-        { nodeId: 'n4', nodeType: 'computation', sequence: 4, parameters: [], formula: 'cashData.totalBalance / avgMonthlyBurn', outputVariable: 'runwayMonths', description: 'Calculate runway in months' }
-      ],
-      enrichments: [
-        { id: 'e1', type: 'trend_analysis', config: { compareWith: 'previous_period', metric: 'runwayMonths' }, description: 'Compare to last month' },
-        { id: 'e2', type: 'benchmark_comparison', config: { metric: 'runwayMonths', benchmarkSource: 'industry' }, description: 'Compare to industry' },
-        { id: 'e3', type: 'alert_evaluation', config: { metric: 'runwayMonths', criticalThreshold: 3, warningThreshold: 6, direction: 'below', useContextThresholds: true }, description: 'Check runway thresholds' },
-        { id: 'e4', type: 'recommendation', config: { triggerCondition: 'runwayMonths < 6' }, description: 'Generate recommendations' }
-      ],
-      responseConfig: {
-        type: 'metric_with_trend',
-        template: `💰 Cash Runway: {runwayMonths | number:1} months
-
-📊 Current Cash: {cashData.totalBalance | currency}
-📉 Avg Monthly Burn: {avgMonthlyBurn | currency}
-📈 Trend: {trendDescription}
-
-{#if alertStatus == 'critical'}
-🚨 CRITICAL: Runway below threshold!
-{#elseif alertStatus == 'warning'}
-⚠️ WARNING: Runway needs attention
-{#else}
-✅ Healthy runway position
-{/if}
-
-🎯 Industry Benchmark: {benchmarkComparison}
-
-💡 {recommendation}`,
-        followUpQuestions: [
-          'What are upcoming large expenses?',
-          'Show expected collections this month',
-          'Which payments can be deferred?'
-        ]
-      }
-    },
-    generatedBy: 'ai',
-    aiConfidence: 0.94,
-    createdAt: '2024-01-15T10:30:00Z',
-    updatedAt: '2024-01-20T14:45:00Z',
-    lastGeneratedAt: '2024-01-15T10:30:00Z'
-  },
-  {
-    id: 'top_payables',
-    name: 'Top Payables Query',
-    moduleId: 'payables',
-    subModuleId: 'vendor_payments',
-    description: 'Show largest outstanding payables',
-    isActive: true,
-    trainingPhrases: [
-      'Show me top {{limit}} biggest payables',
-      'Largest outstanding bills',
-      'Who do we owe the most?',
-      'Top vendors by amount due',
-      'Show top {{limit}} overdue payments'
-    ],
-    entities: [
-      { name: 'limit', type: 'number', required: false, defaultValue: '3', prompt: 'How many top payables would you like to see?' }
-    ],
-    resolutionFlow: {
-      dataPipeline: [
-        { nodeId: 'n1', nodeType: 'api_call', sequence: 1, mcpTool: 'get_vendor_bills', parameters: [{ name: 'status', value: 'pending', source: 'static' }, { name: 'sortBy', value: 'amount', source: 'static' }, { name: 'sortOrder', value: 'desc', source: 'static' }, { name: 'limit', value: 'limit', source: 'entity' }], outputVariable: 'billsData', description: 'Fetch top pending bills' }
-      ],
-      enrichments: [
-        { id: 'e1', type: 'days_calculation', config: { dateField: 'dueDate', calculation: 'days_since', outputField: 'daysOverdue' }, description: 'Calculate days overdue' },
-        { id: 'e2', type: 'percentage_of_total', config: { valueField: 'amount', totalField: 'billsData.totalAmount', outputField: 'percentOfTotal' }, description: 'Calculate percentage' },
-        { id: 'e3', type: 'ranking', config: { outputField: 'rank' }, description: 'Add ranking' },
-        { id: 'e4', type: 'alert_evaluation', config: { metric: 'daysOverdue', criticalThreshold: 30, warningThreshold: 15, direction: 'above' }, description: 'Flag overdue bills' },
-        { id: 'e5', type: 'recommendation', config: { triggerCondition: 'any daysOverdue > 30' }, description: 'Payment recommendations' }
-      ],
-      responseConfig: {
-        type: 'ranked_list',
-        template: `📤 Top {limit} Payables:
-
-{#each billsData.bills}
-{rank}. {vendorName}
-   💰 {amount | currency} ({percentOfTotal}% of total)
-   📅 Due: {dueDate | date}
-   ⏱️ {#if daysOverdue > 0}{daysOverdue} days overdue {#if daysOverdue > 30}🔴{#elseif daysOverdue > 15}⚠️{/if}{#else}Due in {daysUntil} days{/if}
-{/each}
-
-━━━━━━━━━━━━━━━━━━━━
-📊 Summary:
-• Total Outstanding: {billsData.totalAmount | currency}
-• Overdue Amount: {billsData.overdueAmount | currency}
-
-💡 {recommendation}`,
-        followUpQuestions: [
-          'Show payment history for {topVendor}',
-          'Which payments can be deferred?',
-          'Schedule payments for this week'
-        ]
-      }
-    },
-    generatedBy: 'ai',
-    aiConfidence: 0.91,
-    createdAt: '2024-01-16T09:15:00Z',
-    updatedAt: '2024-01-18T11:20:00Z',
-    lastGeneratedAt: '2024-01-16T09:15:00Z'
-  },
-  {
-    id: 'working_capital',
-    name: 'Working Capital Position',
-    moduleId: 'cash_management',
-    subModuleId: 'liquidity',
-    description: 'Calculate and analyze working capital',
-    isActive: true,
-    trainingPhrases: [],
-    entities: [],
-    generatedBy: 'pending',
-    createdAt: '2024-01-20T08:00:00Z',
-    updatedAt: '2024-01-20T08:00:00Z'
-  }
-];
+// All constants are now loaded from the database via hooks
 
 // ============================================================================
 // CSV IMPORT/EXPORT (Simplified - only basic fields)
@@ -3658,8 +3094,19 @@ function TestConsoleView({
 // ============================================================================
 
 export default function CFOQueryResolutionEngine() {
-  // State
-  const [intents, setIntents] = useState<Intent[]>(INITIAL_INTENTS);
+  // Database hooks for dynamic data
+  const { modules, loading: modulesLoading } = useModules();
+  const { countryConfigs, loading: countryLoading } = useCountryConfigs();
+  const { entityTypes, loading: entityTypesLoading } = useEntityTypes();
+  const { enrichmentTypes, loading: enrichmentTypesLoading } = useEnrichmentTypes();
+  const { llmProviders, loading: llmProvidersLoading } = useLLMProviders();
+  const { responseTypes, loading: responseTypesLoading } = useResponseTypes();
+  const { intents, loading: intentsLoading, createIntent, updateIntent, deleteIntent, fetchIntents } = useIntents();
+  const { businessContext, loading: businessContextLoading, updateContext } = useBusinessContext();
+  const { llmConfig, loading: llmConfigLoading, updateConfig } = useLLMConfig();
+  const { tools: helloBooksMcpTools, loading: isFetchingMcpTools, error: mcpToolsError, fetchTools: fetchHelloBooksMcpTools } = useMCPTools();
+
+  // Local UI state
   const [selectedIntentId, setSelectedIntentId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>('intents');
   const [searchTerm, setSearchTerm] = useState('');
@@ -3669,88 +3116,6 @@ export default function CFOQueryResolutionEngine() {
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
   const [showCreateModal, setShowCreateModal] = useState(false);
-  
-  // MCP Tools from HelloBooks server
-  const [helloBooksMcpTools, setHelloBooksMcpTools] = useState<MCPTool[]>([]);
-  const [isFetchingMcpTools, setIsFetchingMcpTools] = useState(false);
-  const [mcpToolsError, setMcpToolsError] = useState<string | null>(null);
-  
-  const [llmConfig, setLlmConfig] = useState<LLMConfig>({
-    provider: 'azure-anthropic',
-    model: 'claude-opus-4-5',
-    apiKey: 'CDlgP3ZoVvrCEPUuN76FsV73c49zEfVd7eWnwg3ZFeCcIwucb1ewJQQJ99BLACrJL3JXJ3w3AAAAACOGuXGw',
-    endpoint: 'https://cursor-api-west-us-resource.openai.azure.com/anthropic',
-    temperature: 0.3,
-    maxTokens: 4096,
-    systemPromptOverride: ''
-  });
-  
-  const [businessContext, setBusinessContext] = useState<BusinessContext>({
-    country: 'IN',
-    industry: 'real_estate',
-    subIndustry: 'residential_construction',
-    entitySize: 'medium',
-    annualRevenue: 50000000,
-    fiscalYearEnd: 'march',
-    currency: 'INR',
-    complianceFrameworks: ['GST', 'TDS', 'RERA']
-  });
-
-  // Fetch MCP tools from HelloBooks server
-  const fetchHelloBooksMcpTools = useCallback(async () => {
-    setIsFetchingMcpTools(true);
-    setMcpToolsError(null);
-    
-    try {
-      console.log('🔌 Fetching MCP tools from HelloBooks...');
-      const { data, error } = await supabase.functions.invoke('fetch-mcp-tools');
-      
-      if (error) {
-        console.error('Error fetching MCP tools:', error);
-        setMcpToolsError(error.message || 'Failed to fetch MCP tools');
-        return;
-      }
-      
-      if (data?.tools && Array.isArray(data.tools)) {
-        // Map the MCP tools to our MCPTool interface
-        const mappedTools: MCPTool[] = data.tools.map((tool: any, index: number) => ({
-          id: tool.name || tool.id || `hb_tool_${index}`,
-          name: tool.name || tool.id || `HelloBooks Tool ${index + 1}`,
-          description: tool.description || 'No description available',
-          endpoint: tool.endpoint || `/hellobooks/${tool.name || tool.id}`,
-          method: tool.method || 'POST',
-          parameters: (tool.inputSchema?.properties ? 
-            Object.entries(tool.inputSchema.properties).map(([key, value]: [string, any]) => ({
-              name: key,
-              type: value.type || 'string',
-              required: tool.inputSchema?.required?.includes(key) || false,
-              enumValues: value.enum
-            })) : 
-            (tool.parameters || [])
-          ),
-          responseFields: tool.outputSchema?.properties ? 
-            Object.keys(tool.outputSchema.properties) : 
-            (tool.responseFields || ['result'])
-        }));
-        
-        console.log('✅ Fetched MCP tools:', mappedTools.length);
-        setHelloBooksMcpTools(mappedTools);
-        
-        toast({
-          title: 'MCP Tools Loaded',
-          description: `Fetched ${mappedTools.length} tools from HelloBooks`
-        });
-      } else {
-        console.log('No tools found in response:', data);
-        setMcpToolsError('No tools found');
-      }
-    } catch (err) {
-      console.error('Error fetching MCP tools:', err);
-      setMcpToolsError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setIsFetchingMcpTools(false);
-    }
-  }, []);
 
   // Fetch MCP tools on mount when MCP tab is active
   useEffect(() => {
@@ -3762,10 +3127,13 @@ export default function CFOQueryResolutionEngine() {
   // MCP tools from HelloBooks
   const allMcpTools = helloBooksMcpTools;
 
+  // Loading state
+  const isLoading = modulesLoading || intentsLoading || businessContextLoading || llmConfigLoading;
+
   // Computed values
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
   
-  const filteredIntents = intents.filter(intent => {
+  const filteredIntents = useMemo(() => intents.filter(intent => {
     const matchesSearch = !searchTerm || 
       intent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       intent.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -3779,7 +3147,7 @@ export default function CFOQueryResolutionEngine() {
       (filterStatus === 'pending' && !isConfigured);
     
     return matchesSearch && matchesModule && matchesStatus;
-  });
+  }), [intents, searchTerm, filterModule, filterStatus]);
 
   // AI Generation Functions - Using Lovable AI Edge Function
   const generateIntentConfig = async (intent: Intent): Promise<Intent> => {
@@ -4196,21 +3564,33 @@ export default function CFOQueryResolutionEngine() {
   const sidebarTabs = [
     { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
     { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: allMcpTools.length },
-    { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={18} />, count: ENRICHMENT_TYPES.length },
+    { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={18} />, count: enrichmentTypes.length },
     { id: 'business', label: 'Business Context', icon: <Building2 size={18} /> },
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
   ];
 
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="flex items-center gap-3 text-gray-500">
+          <Loader2 size={24} className="animate-spin" />
+          <span>Loading CFO AI Engine...</span>
+        </div>
+      </div>
+    );
+  }
+
   // If an intent is selected, show the detail view
-  if (selectedIntentId && selectedIntent) {
+  if (selectedIntentId && selectedIntent && businessContext) {
     return (
       <IntentDetailScreen
         intent={selectedIntent}
-        modules={MODULES}
+        modules={modules}
         mcpTools={allMcpTools}
-        enrichmentTypes={ENRICHMENT_TYPES}
+        enrichmentTypes={enrichmentTypes}
         businessContext={businessContext}
         onBack={() => setSelectedIntentId(null)}
         onSave={handleSaveIntent}
@@ -4233,17 +3613,19 @@ export default function CFOQueryResolutionEngine() {
         </div>
 
         {/* Context Badge */}
-        <div className="p-3 mx-3 mt-3 bg-slate-900 rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-slate-400">Active Context</p>
-            <span className="text-xs">{COUNTRY_CONFIGS.find(c => c.code === businessContext.country)?.flag}</span>
+        {businessContext && (
+          <div className="p-3 mx-3 mt-3 bg-slate-900 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-slate-400">Active Context</p>
+              <span className="text-xs">{countryConfigs.find(c => c.code === businessContext.country)?.flag}</span>
+            </div>
+            <div className="text-sm font-medium">{businessContext.industry.replace('_', ' ')}</div>
+            <div className="flex gap-1 mt-2 flex-wrap">
+              <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.entitySize}</span>
+              <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.currency}</span>
+            </div>
           </div>
-          <div className="text-sm font-medium">{businessContext.industry.replace('_', ' ')}</div>
-          <div className="flex gap-1 mt-2 flex-wrap">
-            <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.entitySize}</span>
-            <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.currency}</span>
-          </div>
-        </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 py-3 overflow-y-auto">
@@ -4264,15 +3646,17 @@ export default function CFOQueryResolutionEngine() {
         </nav>
 
         {/* LLM Status */}
-        <div className="p-3 mx-3 mb-3 bg-slate-900 rounded-lg">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">{LLM_PROVIDERS.find(p => p.id === llmConfig.provider)?.icon}</span>
-            <div>
-              <p className="text-xs text-slate-400">LLM Provider</p>
-              <p className="text-sm font-medium">{llmConfig.model}</p>
+        {llmConfig && (
+          <div className="p-3 mx-3 mb-3 bg-slate-900 rounded-lg">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{llmProviders.find(p => p.id === llmConfig.provider)?.icon || '🤖'}</span>
+              <div>
+                <p className="text-xs text-slate-400">LLM Provider</p>
+                <p className="text-sm font-medium">{llmConfig.model}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Main Content */}
@@ -4280,7 +3664,7 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'intents' && (
           <IntentListView
             intents={filteredIntents}
-            modules={MODULES}
+            modules={modules}
             searchTerm={searchTerm}
             filterModule={filterModule}
             filterStatus={filterStatus}
@@ -4309,11 +3693,11 @@ export default function CFOQueryResolutionEngine() {
             onRefresh={fetchHelloBooksMcpTools}
           />
         )}
-        {activeTab === 'enrichments' && <EnrichmentsView enrichmentTypes={ENRICHMENT_TYPES} />}
-        {activeTab === 'business' && <BusinessContextView context={businessContext} countryConfigs={COUNTRY_CONFIGS} onChange={(updates) => setBusinessContext(prev => ({ ...prev, ...updates }))} />}
-        {activeTab === 'countries' && <CountryConfigView countryConfigs={COUNTRY_CONFIGS} />}
-        {activeTab === 'llm' && <LLMConfigView config={llmConfig} onChange={(updates) => setLlmConfig(prev => ({ ...prev, ...updates }))} />}
-        {activeTab === 'test' && <TestConsoleView intents={intents} businessContext={businessContext} />}
+        {activeTab === 'enrichments' && <EnrichmentsView enrichmentTypes={enrichmentTypes} />}
+        {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
+        {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
+        {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
+        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} />}
       </div>
 
       {/* Create Intent Modal */}
@@ -4321,7 +3705,7 @@ export default function CFOQueryResolutionEngine() {
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onCreate={handleCreateIntent}
-        modules={MODULES}
+        modules={modules}
       />
     </div>
   );
