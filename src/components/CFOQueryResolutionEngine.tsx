@@ -733,6 +733,29 @@ function IntentDetailsTab({
           )}
         </div>
       </div>
+
+      {/* API Usage for this Intent */}
+      {(intent.totalTokensUsed || intent.generationCount) && (
+        <div className="pt-4 border-t">
+          <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+            <Zap size={14} className="text-purple-500" /> API Usage
+          </h4>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="p-3 bg-purple-50 rounded-lg text-center">
+              <p className="text-lg font-bold text-purple-700">{(intent.totalTokensUsed || 0).toLocaleString()}</p>
+              <p className="text-xs text-purple-600">Total Tokens</p>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg text-center">
+              <p className="text-lg font-bold text-blue-700">{intent.generationCount || 0}</p>
+              <p className="text-xs text-blue-600">Generations</p>
+            </div>
+            <div className="p-3 bg-green-50 rounded-lg text-center">
+              <p className="text-lg font-bold text-green-700">{(intent.lastGenerationTokens || 0).toLocaleString()}</p>
+              <p className="text-xs text-green-600">Last Generation</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3044,6 +3067,34 @@ function LLMConfigView({
             <p>Max Tokens: {config.maxTokens}</p>
             <p>API Key: {config.apiKey ? '••••••••' + config.apiKey.slice(-8) : 'Not set'}</p>
           </div>
+        </div>
+
+        {/* Usage Statistics */}
+        <div className="bg-white p-6 rounded-xl border">
+          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+            <Zap size={18} className="text-purple-500" /> API Usage Statistics
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="p-4 bg-purple-50 rounded-lg text-center">
+              <p className="text-2xl font-bold text-purple-700">{(config.totalTokensUsed || 0).toLocaleString()}</p>
+              <p className="text-xs text-purple-600">Total Tokens</p>
+            </div>
+            <div className="p-4 bg-blue-50 rounded-lg text-center">
+              <p className="text-2xl font-bold text-blue-700">{(config.totalRequests || 0).toLocaleString()}</p>
+              <p className="text-xs text-blue-600">Total Requests</p>
+            </div>
+            <div className="p-4 bg-green-50 rounded-lg text-center">
+              <p className="text-2xl font-bold text-green-700">{(config.totalInputTokens || 0).toLocaleString()}</p>
+              <p className="text-xs text-green-600">Input Tokens</p>
+            </div>
+            <div className="p-4 bg-orange-50 rounded-lg text-center">
+              <p className="text-2xl font-bold text-orange-700">{(config.totalOutputTokens || 0).toLocaleString()}</p>
+              <p className="text-xs text-orange-600">Output Tokens</p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-4 text-center">
+            Usage statistics are tracked automatically when generating intent configurations
+          </p>
         </div>
       </div>
     </div>

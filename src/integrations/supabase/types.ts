@@ -174,13 +174,16 @@ export type Database = {
           description: string | null
           entities: Json
           generated_by: string
+          generation_count: number | null
           id: string
           is_active: boolean
           last_generated_at: string | null
+          last_generation_tokens: number | null
           module_id: string
           name: string
           resolution_flow: Json | null
           sub_module_id: string | null
+          total_tokens_used: number | null
           training_phrases: Json
           updated_at: string
         }
@@ -190,13 +193,16 @@ export type Database = {
           description?: string | null
           entities?: Json
           generated_by?: string
+          generation_count?: number | null
           id?: string
           is_active?: boolean
           last_generated_at?: string | null
+          last_generation_tokens?: number | null
           module_id: string
           name: string
           resolution_flow?: Json | null
           sub_module_id?: string | null
+          total_tokens_used?: number | null
           training_phrases?: Json
           updated_at?: string
         }
@@ -206,13 +212,16 @@ export type Database = {
           description?: string | null
           entities?: Json
           generated_by?: string
+          generation_count?: number | null
           id?: string
           is_active?: boolean
           last_generated_at?: string | null
+          last_generation_tokens?: number | null
           module_id?: string
           name?: string
           resolution_flow?: Json | null
           sub_module_id?: string | null
+          total_tokens_used?: number | null
           training_phrases?: Json
           updated_at?: string
         }
@@ -230,6 +239,10 @@ export type Database = {
           provider: string
           system_prompt_override: string | null
           temperature: number
+          total_input_tokens: number | null
+          total_output_tokens: number | null
+          total_requests: number | null
+          total_tokens_used: number | null
           updated_at: string
         }
         Insert: {
@@ -243,6 +256,10 @@ export type Database = {
           provider?: string
           system_prompt_override?: string | null
           temperature?: number
+          total_input_tokens?: number | null
+          total_output_tokens?: number | null
+          total_requests?: number | null
+          total_tokens_used?: number | null
           updated_at?: string
         }
         Update: {
@@ -256,6 +273,10 @@ export type Database = {
           provider?: string
           system_prompt_override?: string | null
           temperature?: number
+          total_input_tokens?: number | null
+          total_output_tokens?: number | null
+          total_requests?: number | null
+          total_tokens_used?: number | null
           updated_at?: string
         }
         Relationships: []
@@ -292,6 +313,69 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      llm_usage_logs: {
+        Row: {
+          created_at: string
+          error_message: string | null
+          id: string
+          input_tokens: number
+          intent_id: string | null
+          latency_ms: number | null
+          llm_config_id: string | null
+          model: string
+          output_tokens: number
+          provider: string
+          section: string
+          status: string
+          total_tokens: number
+        }
+        Insert: {
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_tokens?: number
+          intent_id?: string | null
+          latency_ms?: number | null
+          llm_config_id?: string | null
+          model: string
+          output_tokens?: number
+          provider: string
+          section: string
+          status?: string
+          total_tokens?: number
+        }
+        Update: {
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_tokens?: number
+          intent_id?: string | null
+          latency_ms?: number | null
+          llm_config_id?: string | null
+          model?: string
+          output_tokens?: number
+          provider?: string
+          section?: string
+          status?: string
+          total_tokens?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "llm_usage_logs_intent_id_fkey"
+            columns: ["intent_id"]
+            isOneToOne: false
+            referencedRelation: "intents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "llm_usage_logs_llm_config_id_fkey"
+            columns: ["llm_config_id"]
+            isOneToOne: false
+            referencedRelation: "llm_configs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       modules: {
         Row: {

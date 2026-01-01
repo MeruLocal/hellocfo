@@ -124,6 +124,9 @@ export interface Intent {
   createdAt: string;
   updatedAt: string;
   lastGeneratedAt?: string;
+  totalTokensUsed?: number;
+  generationCount?: number;
+  lastGenerationTokens?: number;
 }
 
 export interface BusinessContext {
@@ -148,6 +151,26 @@ export interface LLMConfig {
   temperature: number;
   maxTokens: number;
   systemPromptOverride: string;
+  totalTokensUsed?: number;
+  totalRequests?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+}
+
+export interface LLMUsageLog {
+  id: string;
+  llmConfigId?: string;
+  intentId?: string;
+  provider: string;
+  model: string;
+  section: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  latencyMs?: number;
+  status: string;
+  errorMessage?: string;
+  createdAt: string;
 }
 
 // Hook for fetching modules
@@ -367,7 +390,10 @@ export function useIntents() {
         aiConfidence: i.ai_confidence ? Number(i.ai_confidence) : undefined,
         createdAt: i.created_at,
         updatedAt: i.updated_at,
-        lastGeneratedAt: i.last_generated_at || undefined
+        lastGeneratedAt: i.last_generated_at || undefined,
+        totalTokensUsed: i.total_tokens_used || 0,
+        generationCount: i.generation_count || 0,
+        lastGenerationTokens: i.last_generation_tokens || 0
       }));
 
       setIntents(mapped);
@@ -546,7 +572,11 @@ export function useLLMConfig() {
         endpoint: data.endpoint || '',
         temperature: Number(data.temperature),
         maxTokens: data.max_tokens,
-        systemPromptOverride: data.system_prompt_override || ''
+        systemPromptOverride: data.system_prompt_override || '',
+        totalTokensUsed: data.total_tokens_used || 0,
+        totalRequests: data.total_requests || 0,
+        totalInputTokens: data.total_input_tokens || 0,
+        totalOutputTokens: data.total_output_tokens || 0
       });
     }
     setLoading(false);
@@ -579,4 +609,61 @@ export function useLLMConfig() {
   }, [fetchConfig]);
 
   return { llmConfig, loading, updateConfig, refetch: fetchConfig };
+}
+
+// Hook for LLM usage logs
+export function useLLMUsageLogs(intentId?: string, limit: number = 50) {
+  const [logs, setLogs] = useState<LLMUsageLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [totalUsage, setTotalUsage] = useState({ inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0 });
+
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    let query = supabase
+      .from('llm_usage_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    
+    if (intentId) {
+      query = query.eq('intent_id', intentId);
+    }
+
+    const { data, error } = await query;
+
+    if (!error && data) {
+      const mappedLogs: LLMUsageLog[] = data.map((log: any) => ({
+        id: log.id,
+        llmConfigId: log.llm_config_id,
+        intentId: log.intent_id,
+        provider: log.provider,
+        model: log.model,
+        section: log.section,
+        inputTokens: log.input_tokens,
+        outputTokens: log.output_tokens,
+        totalTokens: log.total_tokens,
+        latencyMs: log.latency_ms,
+        status: log.status,
+        errorMessage: log.error_message,
+        createdAt: log.created_at
+      }));
+      setLogs(mappedLogs);
+
+      // Calculate total usage
+      const totals = mappedLogs.reduce((acc, log) => ({
+        inputTokens: acc.inputTokens + log.inputTokens,
+        outputTokens: acc.outputTokens + log.outputTokens,
+        totalTokens: acc.totalTokens + log.totalTokens,
+        requestCount: acc.requestCount + 1
+      }), { inputTokens: 0, outputTokens: 0, totalTokens: 0, requestCount: 0 });
+      setTotalUsage(totals);
+    }
+    setLoading(false);
+  }, [intentId, limit]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  return { logs, loading, totalUsage, refetch: fetchLogs };
 }
