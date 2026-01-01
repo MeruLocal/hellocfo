@@ -5,6 +5,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface LLMConfig {
+  provider: string;
+  endpoint?: string;
+  model: string;
+  apiKey?: string;
+  temperature: number;
+  maxTokens: number;
+}
+
 interface GenerationRequest {
   intentName: string;
   moduleName: string;
@@ -16,6 +25,7 @@ interface GenerationRequest {
   existingEntities?: any[];
   existingPipeline?: any[];
   existingEnrichments?: any[];
+  llmConfig?: LLMConfig;
 }
 
 const getSystemPrompt = () => `You are an expert CFO AI assistant helping to configure a query resolution system for financial chatbots.
@@ -251,17 +261,117 @@ Respond with ONLY JSON:
 }`;
 };
 
+// Call AI based on provider config
+const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => {
+  const { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
+  
+  console.log(`Calling AI with provider: ${provider}, model: ${model}`);
+  
+  // Azure Anthropic
+  if (provider === 'azure-anthropic' && endpoint && apiKey) {
+    console.log('Using Azure Anthropic endpoint...');
+    const response = await fetch(`${endpoint}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: maxTokens,
+        temperature: temperature,
+        messages: [
+          { role: 'user', content: getSystemPrompt() + '\n\n' + prompt }
+        ]
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Azure Anthropic error:', response.status, errorText);
+      throw new Error(`Azure Anthropic error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.content?.[0]?.text || '';
+  }
+  
+  // OpenAI
+  if (provider === 'openai' && apiKey) {
+    console.log('Using OpenAI endpoint...');
+    const openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
+    const response = await fetch(openaiEndpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: maxTokens,
+        temperature: temperature,
+        messages: [
+          { role: 'system', content: getSystemPrompt() },
+          { role: 'user', content: prompt }
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI error:', response.status, errorText);
+      throw new Error(`OpenAI error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+  
+  // Fallback to Lovable AI Gateway
+  console.log('Using Lovable AI Gateway as fallback...');
+  const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+  if (!LOVABLE_API_KEY) {
+    throw new Error('No valid LLM configuration and LOVABLE_API_KEY is not available');
+  }
+
+  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [
+        { role: 'system', content: getSystemPrompt() },
+        { role: 'user', content: prompt }
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded. Please try again later.');
+    }
+    if (response.status === 402) {
+      throw new Error('AI credits exhausted. Please add more credits.');
+    }
+    const errorText = await response.text();
+    console.error('AI Gateway error:', response.status, errorText);
+    throw new Error(`AI Gateway error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
-    }
-
     const request: GenerationRequest = await req.json();
     const { 
       intentName, 
@@ -273,41 +383,19 @@ serve(async (req) => {
       phraseCount = 10,
       existingEntities = [],
       existingPipeline = [],
-      existingEnrichments = []
+      existingEnrichments = [],
+      llmConfig
     } = request;
 
     console.log(`Generating ${section} for intent: ${intentName}`);
+    console.log('LLM Config:', llmConfig ? `${llmConfig.provider}/${llmConfig.model}` : 'Using fallback');
 
-    const callAI = async (prompt: string): Promise<string> => {
-      const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'google/gemini-2.5-flash',
-          messages: [
-            { role: 'system', content: getSystemPrompt() },
-            { role: 'user', content: prompt }
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          throw new Error('Rate limit exceeded. Please try again later.');
-        }
-        if (response.status === 402) {
-          throw new Error('AI credits exhausted. Please add more credits.');
-        }
-        const errorText = await response.text();
-        console.error('AI Gateway error:', response.status, errorText);
-        throw new Error(`AI Gateway error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data.choices[0]?.message?.content || '';
+    // Default LLM config if not provided
+    const config: LLMConfig = llmConfig || {
+      provider: 'lovable',
+      model: 'google/gemini-2.5-flash',
+      temperature: 0.3,
+      maxTokens: 4096
     };
 
     const parseJSON = <T>(response: string): T => {
@@ -330,7 +418,7 @@ serve(async (req) => {
       const prompt = generateTrainingPhrasesPrompt(
         intentName, moduleName, subModuleName, description, phraseCount, existingPhrases
       );
-      const response = await callAI(prompt);
+      const response = await callAI(prompt, config);
       result.trainingPhrases = parseJSON<string[]>(response);
     }
 
@@ -338,7 +426,7 @@ serve(async (req) => {
       console.log('Generating entities...');
       const phrases = result.trainingPhrases || existingPhrases || [];
       const prompt = generateEntitiesPrompt(intentName, moduleName, phrases);
-      const response = await callAI(prompt);
+      const response = await callAI(prompt, config);
       result.entities = parseJSON<any[]>(response);
     }
 
@@ -346,7 +434,7 @@ serve(async (req) => {
       console.log('Generating data pipeline...');
       const entities = result.entities || existingEntities || [];
       const prompt = generatePipelinePrompt(intentName, moduleName, entities);
-      const response = await callAI(prompt);
+      const response = await callAI(prompt, config);
       result.dataPipeline = parseJSON<any[]>(response);
     }
 
@@ -354,7 +442,7 @@ serve(async (req) => {
       console.log('Generating enrichments...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline);
-      const response = await callAI(prompt);
+      const response = await callAI(prompt, config);
       result.enrichments = parseJSON<any[]>(response);
     }
 
@@ -363,12 +451,14 @@ serve(async (req) => {
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
       const prompt = generateResponsePrompt(intentName, moduleName, pipeline, enrichments);
-      const response = await callAI(prompt);
+      const response = await callAI(prompt, config);
       result.responseConfig = parseJSON<any>(response);
     }
 
     result.generatedAt = new Date().toISOString();
     result.aiConfidence = 0.90 + Math.random() * 0.08;
+    result.usedProvider = config.provider;
+    result.usedModel = config.model;
 
     console.log('Generation complete:', Object.keys(result));
 
