@@ -3225,13 +3225,14 @@ export default function CFOQueryResolutionEngine() {
     return matchesSearch && matchesModule && matchesStatus;
   }), [intents, searchTerm, filterModule, filterStatus]);
 
-  // AI Generation Functions - Using Lovable AI Edge Function
+  // AI Generation Functions - Using LLM Config from database
   const generateIntentConfig = async (intent: Intent): Promise<Intent> => {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
     try {
       console.log('🤖 Generating intent config via AI...');
+      console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
       
       const { data, error } = await supabase.functions.invoke('generate-intent', {
         body: {
@@ -3240,7 +3241,15 @@ export default function CFOQueryResolutionEngine() {
           subModuleName: subModuleInfo?.name || intent.subModuleId,
           description: intent.description,
           section: 'all',
-          phraseCount: 10
+          phraseCount: 10,
+          llmConfig: llmConfig ? {
+            provider: llmConfig.provider,
+            endpoint: llmConfig.endpoint,
+            model: llmConfig.model,
+            apiKey: llmConfig.apiKey,
+            temperature: llmConfig.temperature,
+            maxTokens: llmConfig.maxTokens
+          } : undefined
         }
       });
 
@@ -3383,7 +3392,15 @@ export default function CFOQueryResolutionEngine() {
           phraseCount,
           existingEntities: intent.entities,
           existingPipeline: intent.resolutionFlow?.dataPipeline || [],
-          existingEnrichments: intent.resolutionFlow?.enrichments || []
+          existingEnrichments: intent.resolutionFlow?.enrichments || [],
+          llmConfig: llmConfig ? {
+            provider: llmConfig.provider,
+            endpoint: llmConfig.endpoint,
+            model: llmConfig.model,
+            apiKey: llmConfig.apiKey,
+            temperature: llmConfig.temperature,
+            maxTokens: llmConfig.maxTokens
+          } : undefined
         }
       });
 
