@@ -14,7 +14,351 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      business_contexts: {
+        Row: {
+          annual_revenue: number | null
+          compliance_frameworks: Json
+          country: string
+          created_at: string
+          currency: string
+          employee_count: number | null
+          entity_size: string
+          fiscal_year_end: string
+          id: string
+          industry: string
+          is_default: boolean
+          sub_industry: string | null
+          updated_at: string
+        }
+        Insert: {
+          annual_revenue?: number | null
+          compliance_frameworks?: Json
+          country?: string
+          created_at?: string
+          currency?: string
+          employee_count?: number | null
+          entity_size?: string
+          fiscal_year_end?: string
+          id?: string
+          industry?: string
+          is_default?: boolean
+          sub_industry?: string | null
+          updated_at?: string
+        }
+        Update: {
+          annual_revenue?: number | null
+          compliance_frameworks?: Json
+          country?: string
+          created_at?: string
+          currency?: string
+          employee_count?: number | null
+          entity_size?: string
+          fiscal_year_end?: string
+          id?: string
+          industry?: string
+          is_default?: boolean
+          sub_industry?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      country_configs: {
+        Row: {
+          code: string
+          created_at: string
+          currency: string
+          currency_symbol: string
+          display_thresholds: Json
+          flag: string
+          is_active: boolean
+          name: string
+          size_thresholds: Json
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          currency: string
+          currency_symbol: string
+          display_thresholds: Json
+          flag: string
+          is_active?: boolean
+          name: string
+          size_thresholds: Json
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          currency?: string
+          currency_symbol?: string
+          display_thresholds?: Json
+          flag?: string
+          is_active?: boolean
+          name?: string
+          size_thresholds?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      enrichment_types: {
+        Row: {
+          config_fields: Json
+          created_at: string
+          description: string | null
+          icon: string
+          id: string
+          is_active: boolean
+          name: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          config_fields?: Json
+          created_at?: string
+          description?: string | null
+          icon?: string
+          id: string
+          is_active?: boolean
+          name: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          config_fields?: Json
+          created_at?: string
+          description?: string | null
+          icon?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      entity_types: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id: string
+          is_active?: boolean
+          name: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      intents: {
+        Row: {
+          ai_confidence: number | null
+          created_at: string
+          description: string | null
+          entities: Json
+          generated_by: string
+          id: string
+          is_active: boolean
+          last_generated_at: string | null
+          module_id: string
+          name: string
+          resolution_flow: Json | null
+          sub_module_id: string
+          training_phrases: Json
+          updated_at: string
+        }
+        Insert: {
+          ai_confidence?: number | null
+          created_at?: string
+          description?: string | null
+          entities?: Json
+          generated_by?: string
+          id?: string
+          is_active?: boolean
+          last_generated_at?: string | null
+          module_id: string
+          name: string
+          resolution_flow?: Json | null
+          sub_module_id: string
+          training_phrases?: Json
+          updated_at?: string
+        }
+        Update: {
+          ai_confidence?: number | null
+          created_at?: string
+          description?: string | null
+          entities?: Json
+          generated_by?: string
+          id?: string
+          is_active?: boolean
+          last_generated_at?: string | null
+          module_id?: string
+          name?: string
+          resolution_flow?: Json | null
+          sub_module_id?: string
+          training_phrases?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      llm_configs: {
+        Row: {
+          api_key: string | null
+          created_at: string
+          endpoint: string | null
+          id: string
+          is_default: boolean
+          max_tokens: number
+          model: string
+          provider: string
+          system_prompt_override: string | null
+          temperature: number
+          updated_at: string
+        }
+        Insert: {
+          api_key?: string | null
+          created_at?: string
+          endpoint?: string | null
+          id?: string
+          is_default?: boolean
+          max_tokens?: number
+          model?: string
+          provider?: string
+          system_prompt_override?: string | null
+          temperature?: number
+          updated_at?: string
+        }
+        Update: {
+          api_key?: string | null
+          created_at?: string
+          endpoint?: string | null
+          id?: string
+          is_default?: boolean
+          max_tokens?: number
+          model?: string
+          provider?: string
+          system_prompt_override?: string | null
+          temperature?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      llm_providers: {
+        Row: {
+          created_at: string
+          icon: string
+          id: string
+          is_active: boolean
+          models: Json
+          name: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          icon?: string
+          id: string
+          is_active?: boolean
+          models?: Json
+          name: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          icon?: string
+          id?: string
+          is_active?: boolean
+          models?: Json
+          name?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      modules: {
+        Row: {
+          color: string
+          created_at: string
+          icon: string
+          id: string
+          is_active: boolean
+          name: string
+          sort_order: number
+          sub_modules: Json
+          updated_at: string
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          icon?: string
+          id: string
+          is_active?: boolean
+          name: string
+          sort_order?: number
+          sub_modules?: Json
+          updated_at?: string
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          icon?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          sort_order?: number
+          sub_modules?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      response_types: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id: string
+          is_active?: boolean
+          name: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
