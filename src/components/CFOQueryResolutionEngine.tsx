@@ -17,6 +17,8 @@ import {
   useIntents,
   useBusinessContext,
   useLLMConfig,
+  useLLMUsageLogs,
+  calculateCost,
   type Module,
   type SubModule,
   type CountryConfig,
@@ -31,7 +33,8 @@ import {
   type ResolutionFlow,
   type PipelineNode,
   type Enrichment,
-  type ResponseConfig
+  type ResponseConfig,
+  type ModelUsage
 } from '@/hooks/useCFOData';
 import { useMCPTools, type MCPTool } from '@/hooks/useMCPTools';
 import {
@@ -738,9 +741,9 @@ function IntentDetailsTab({
       {(intent.totalTokensUsed || intent.generationCount) && (
         <div className="pt-4 border-t">
           <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-            <Zap size={14} className="text-purple-500" /> API Usage
+            <Zap size={14} className="text-purple-500" /> API Usage & Cost
           </h4>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <div className="p-3 bg-purple-50 rounded-lg text-center">
               <p className="text-lg font-bold text-purple-700">{(intent.totalTokensUsed || 0).toLocaleString()}</p>
               <p className="text-xs text-purple-600">Total Tokens</p>
@@ -749,9 +752,15 @@ function IntentDetailsTab({
               <p className="text-lg font-bold text-blue-700">{intent.generationCount || 0}</p>
               <p className="text-xs text-blue-600">Generations</p>
             </div>
-            <div className="p-3 bg-green-50 rounded-lg text-center">
-              <p className="text-lg font-bold text-green-700">{(intent.lastGenerationTokens || 0).toLocaleString()}</p>
-              <p className="text-xs text-green-600">Last Generation</p>
+            <div className="p-3 bg-cyan-50 rounded-lg text-center">
+              <p className="text-lg font-bold text-cyan-700">{(intent.lastGenerationTokens || 0).toLocaleString()}</p>
+              <p className="text-xs text-cyan-600">Last Generation</p>
+            </div>
+            <div className="p-3 bg-gradient-to-br from-green-50 to-green-100 rounded-lg text-center border border-green-200">
+              <p className="text-lg font-bold text-green-700">
+                ${((intent.totalTokensUsed || 0) * 0.00001).toFixed(4)}
+              </p>
+              <p className="text-xs text-green-600">Est. Cost (USD)</p>
             </div>
           </div>
         </div>
@@ -2825,6 +2834,9 @@ function LLMConfigView({
   const [testMessage, setTestMessage] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editedConfig, setEditedConfig] = useState<Partial<LLMConfig>>({});
+  
+  // Fetch usage logs with model breakdown
+  const { totalUsage, usageByModel, loading: usageLoading, refetch: refetchUsage } = useLLMUsageLogs();
 
   const providers = [
     { id: 'azure-anthropic', name: 'Azure Anthropic', icon: '🔷' },
@@ -2897,6 +2909,11 @@ function LLMConfigView({
     }
   };
 
+  // Format currency
+  const formatUsd = (amount: number) => {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(amount);
+  };
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-2">
@@ -2930,7 +2947,7 @@ function LLMConfigView({
       </div>
       <p className="text-gray-500 mb-6">Configure the AI model for intent generation</p>
 
-      <div className="max-w-2xl space-y-6">
+      <div className="max-w-4xl space-y-6">
         <div className="bg-white p-6 rounded-xl border">
           {/* Provider Selection */}
           <div className="mb-6">
@@ -3069,33 +3086,111 @@ function LLMConfigView({
           </div>
         </div>
 
-        {/* Usage Statistics */}
+        {/* Total Cost & Usage Overview */}
         <div className="bg-white p-6 rounded-xl border">
-          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-            <Zap size={18} className="text-purple-500" /> API Usage Statistics
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-medium text-gray-900 flex items-center gap-2">
+              <Zap size={18} className="text-purple-500" /> API Usage & Cost Overview
+            </h3>
+            <button
+              onClick={() => refetchUsage()}
+              disabled={usageLoading}
+              className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+            >
+              <RefreshCw size={14} className={usageLoading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-lg text-center border border-green-200">
+              <p className="text-2xl font-bold text-green-700">{formatUsd(totalUsage.totalCostUsd)}</p>
+              <p className="text-xs text-green-600 font-medium">Total Cost (USD)</p>
+            </div>
             <div className="p-4 bg-purple-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-purple-700">{(config.totalTokensUsed || 0).toLocaleString()}</p>
+              <p className="text-2xl font-bold text-purple-700">{totalUsage.totalTokens.toLocaleString()}</p>
               <p className="text-xs text-purple-600">Total Tokens</p>
             </div>
             <div className="p-4 bg-blue-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-blue-700">{(config.totalRequests || 0).toLocaleString()}</p>
+              <p className="text-2xl font-bold text-blue-700">{totalUsage.requestCount.toLocaleString()}</p>
               <p className="text-xs text-blue-600">Total Requests</p>
             </div>
-            <div className="p-4 bg-green-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-green-700">{(config.totalInputTokens || 0).toLocaleString()}</p>
-              <p className="text-xs text-green-600">Input Tokens</p>
+            <div className="p-4 bg-cyan-50 rounded-lg text-center">
+              <p className="text-2xl font-bold text-cyan-700">{totalUsage.inputTokens.toLocaleString()}</p>
+              <p className="text-xs text-cyan-600">Input Tokens</p>
             </div>
             <div className="p-4 bg-orange-50 rounded-lg text-center">
-              <p className="text-2xl font-bold text-orange-700">{(config.totalOutputTokens || 0).toLocaleString()}</p>
+              <p className="text-2xl font-bold text-orange-700">{totalUsage.outputTokens.toLocaleString()}</p>
               <p className="text-xs text-orange-600">Output Tokens</p>
             </div>
           </div>
-          <p className="text-xs text-gray-500 mt-4 text-center">
-            Usage statistics are tracked automatically when generating intent configurations
-          </p>
         </div>
+
+        {/* Usage By Model */}
+        {usageByModel.length > 0 && (
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <Database size={18} className="text-blue-500" /> Usage By Model
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 px-3 font-medium text-gray-700">Model</th>
+                    <th className="text-left py-2 px-3 font-medium text-gray-700">Provider</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-700">Requests</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-700">Input Tokens</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-700">Output Tokens</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-700">Total Tokens</th>
+                    <th className="text-right py-2 px-3 font-medium text-green-700">Cost (USD)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usageByModel.map((usage, index) => (
+                    <tr key={index} className="border-b hover:bg-gray-50">
+                      <td className="py-2 px-3 font-mono text-xs">{usage.model}</td>
+                      <td className="py-2 px-3">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          usage.provider === 'azure-anthropic' ? 'bg-blue-100 text-blue-700' :
+                          usage.provider === 'openai' ? 'bg-green-100 text-green-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {usage.provider}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-right">{usage.requestCount.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right">{usage.inputTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right">{usage.outputTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right font-medium">{usage.totalTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right font-medium text-green-700">{formatUsd(usage.estimatedCostUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 font-medium">
+                    <td className="py-2 px-3" colSpan={2}>Total</td>
+                    <td className="py-2 px-3 text-right">{totalUsage.requestCount.toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right">{totalUsage.inputTokens.toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right">{totalUsage.outputTokens.toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right">{totalUsage.totalTokens.toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right text-green-700">{formatUsd(totalUsage.totalCostUsd)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <p className="text-xs text-gray-500 mt-4">
+              💡 Cost estimates are based on standard API pricing. Actual costs may vary based on your provider agreement.
+            </p>
+          </div>
+        )}
+
+        {usageByModel.length === 0 && !usageLoading && (
+          <div className="bg-white p-6 rounded-xl border text-center">
+            <Database size={32} className="mx-auto mb-2 text-gray-300" />
+            <p className="text-gray-500">No usage data yet</p>
+            <p className="text-sm text-gray-400 mt-1">Usage will be tracked when you generate intent configurations</p>
+          </div>
+        )}
       </div>
     </div>
   );
