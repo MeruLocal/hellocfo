@@ -10,6 +10,17 @@ import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { UsersManagement } from '@/components/UsersManagement';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import {
   useModules,
   useCountryConfigs,
   useEntityTypes,
@@ -3829,13 +3840,35 @@ export default function CFOQueryResolutionEngine() {
               <p className="text-xs text-slate-400">Signed in as</p>
               <p className="text-xs font-medium truncate">{user?.email}</p>
             </div>
-            <button
-              onClick={() => signOut()}
-              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
-              title="Sign out"
-            >
-              <LogOut size={16} className="text-slate-400" />
-            </button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                  title="Sign out"
+                >
+                  <LogOut size={16} className="text-slate-400" />
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent className="bg-slate-800 border-slate-700">
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="text-white">Sign out</AlertDialogTitle>
+                  <AlertDialogDescription className="text-slate-400">
+                    Are you sure you want to sign out of your account?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600">
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => signOut()}
+                    className="bg-red-600 hover:bg-red-700 text-white"
+                  >
+                    Sign out
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       </div>
