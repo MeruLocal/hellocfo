@@ -113,7 +113,7 @@ export interface Intent {
   id: string;
   name: string;
   moduleId: string;
-  subModuleId?: string;
+  subModuleId: string;
   description?: string;
   isActive: boolean;
   trainingPhrases: string[];
@@ -386,7 +386,7 @@ export function useIntents() {
         .insert([{
           name: intent.name,
           module_id: intent.moduleId,
-          sub_module_id: intent.subModuleId || '',
+          sub_module_id: intent.subModuleId,
           description: intent.description,
           is_active: intent.isActive,
           training_phrases: intent.trainingPhrases as unknown as any,

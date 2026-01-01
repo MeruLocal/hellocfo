@@ -492,7 +492,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
   const subModules = selectedModule?.subModules || [];
 
   const handleSubmit = () => {
-    if (!name.trim() || !moduleId) {
+    if (!name.trim() || !moduleId || !subModuleId) {
       alert('Please fill in all required fields');
       return;
     }
@@ -500,7 +500,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
     onCreate({
       name: name.trim(),
       moduleId,
-      subModuleId: subModuleId || undefined,
+      subModuleId,
       description: description.trim() || undefined
     });
     
@@ -559,25 +559,23 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
             </select>
           </div>
           
-          {/* Sub-Module (optional) */}
-          {subModules.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Sub-Module <span className="text-gray-400">(optional)</span>
-              </label>
-              <select
-                value={subModuleId}
-                onChange={(e) => setSubModuleId(e.target.value)}
-                disabled={!moduleId}
-                className="w-full px-3 py-2 border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-              >
-                <option value="">None</option>
-                {subModules.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
+          {/* Sub-Module */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Sub-Module <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={subModuleId}
+              onChange={(e) => setSubModuleId(e.target.value)}
+              disabled={!moduleId}
+              className="w-full px-3 py-2 border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+            >
+              <option value="">Select sub-module...</option>
+              {subModules.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
           
           {/* Description */}
           <div>
