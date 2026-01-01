@@ -433,141 +433,8 @@ const ENTITY_TYPES = [
 ];
 
 // ============================================================================
-// MCP TOOLS
+// MCP TOOLS - Loaded dynamically from HelloBooks
 // ============================================================================
-
-const MCP_TOOLS: MCPTool[] = [
-  {
-    id: 'get_cash_balance',
-    name: 'Get Cash Balance',
-    description: 'Fetch current cash position across bank accounts',
-    endpoint: '/api/finance/cash-balance',
-    method: 'GET',
-    parameters: [
-      { name: 'accountType', type: 'enum', required: false, enumValues: ['current', 'savings', 'fd', 'all'] },
-      { name: 'asOfDate', type: 'date', required: false }
-    ],
-    responseFields: ['totalBalance', 'accountCount', 'accounts']
-  },
-  {
-    id: 'get_cash_flow',
-    name: 'Get Cash Flow',
-    description: 'Fetch cash inflow/outflow for a period',
-    endpoint: '/api/finance/cash-flow',
-    method: 'GET',
-    parameters: [
-      { name: 'period', type: 'enum', required: false, enumValues: ['7d', '30d', '90d', 'mtd', 'qtd', 'ytd'] },
-      { name: 'flowType', type: 'enum', required: false, enumValues: ['inflow', 'outflow', 'both'] },
-      { name: 'projectId', type: 'string', required: false }
-    ],
-    responseFields: ['totalInflow', 'totalOutflow', 'netFlow', 'transactions']
-  },
-  {
-    id: 'get_vendor_bills',
-    name: 'Get Vendor Bills',
-    description: 'Fetch vendor bills and payables',
-    endpoint: '/api/payables/bills',
-    method: 'GET',
-    parameters: [
-      { name: 'status', type: 'enum', required: false, enumValues: ['pending', 'paid', 'overdue', 'all'] },
-      { name: 'vendorId', type: 'string', required: false },
-      { name: 'limit', type: 'number', required: false },
-      { name: 'sortBy', type: 'enum', required: false, enumValues: ['amount', 'dueDate', 'vendorName'] },
-      { name: 'sortOrder', type: 'enum', required: false, enumValues: ['asc', 'desc'] }
-    ],
-    responseFields: ['bills', 'totalAmount', 'overdueAmount', 'count']
-  },
-  {
-    id: 'get_receivables',
-    name: 'Get Receivables',
-    description: 'Fetch accounts receivable',
-    endpoint: '/api/receivables',
-    method: 'GET',
-    parameters: [
-      { name: 'status', type: 'enum', required: false, enumValues: ['pending', 'overdue', 'all'] },
-      { name: 'agingBucket', type: 'enum', required: false, enumValues: ['0-30', '31-60', '61-90', '90+', 'all'] },
-      { name: 'customerId', type: 'string', required: false }
-    ],
-    responseFields: ['totalReceivables', 'overdueAmount', 'receivables', 'agingSummary']
-  },
-  {
-    id: 'get_project_costs',
-    name: 'Get Project Costs',
-    description: 'Fetch project cost information',
-    endpoint: '/api/projects/costs',
-    method: 'GET',
-    parameters: [
-      { name: 'projectId', type: 'string', required: false },
-      { name: 'projectName', type: 'string', required: false },
-      { name: 'costHead', type: 'enum', required: false, enumValues: ['materials', 'labour', 'contractors', 'all'] }
-    ],
-    responseFields: ['projectName', 'totalCost', 'budget', 'variance', 'costBreakdown']
-  },
-  {
-    id: 'get_inventory',
-    name: 'Get Inventory',
-    description: 'Fetch inventory/stock information',
-    endpoint: '/api/inventory',
-    method: 'GET',
-    parameters: [
-      { name: 'category', type: 'string', required: false },
-      { name: 'warehouse', type: 'string', required: false },
-      { name: 'belowReorder', type: 'boolean', required: false }
-    ],
-    responseFields: ['totalValue', 'itemCount', 'items', 'lowStockItems']
-  },
-  {
-    id: 'get_gst_summary',
-    name: 'Get GST Summary',
-    description: 'Fetch GST liability summary',
-    endpoint: '/api/compliance/gst',
-    method: 'GET',
-    parameters: [
-      { name: 'period', type: 'enum', required: false, enumValues: ['current_month', 'previous_month', 'current_quarter'] },
-      { name: 'month', type: 'number', required: false },
-      { name: 'year', type: 'number', required: false }
-    ],
-    responseFields: ['outputGst', 'inputGst', 'netPayable', 'filingStatus']
-  },
-  {
-    id: 'get_industry_benchmark',
-    name: 'Get Industry Benchmark',
-    description: 'Fetch industry benchmark data for comparison',
-    endpoint: '/api/benchmarks',
-    method: 'GET',
-    parameters: [
-      { name: 'industry', type: 'string', required: true },
-      { name: 'metric', type: 'string', required: true },
-      { name: 'entitySize', type: 'string', required: false },
-      { name: 'country', type: 'string', required: false }
-    ],
-    responseFields: ['benchmark', 'industryAvg', 'topQuartile', 'bottomQuartile']
-  },
-  {
-    id: 'get_trend_data',
-    name: 'Get Trend Data',
-    description: 'Fetch historical trend for metrics',
-    endpoint: '/api/analytics/trends',
-    method: 'GET',
-    parameters: [
-      { name: 'metric', type: 'string', required: true },
-      { name: 'periods', type: 'number', required: false },
-      { name: 'granularity', type: 'enum', required: false, enumValues: ['daily', 'weekly', 'monthly'] }
-    ],
-    responseFields: ['dataPoints', 'trend', 'changePercent', 'forecast']
-  },
-  {
-    id: 'get_working_capital',
-    name: 'Get Working Capital',
-    description: 'Calculate working capital metrics',
-    endpoint: '/api/finance/working-capital',
-    method: 'GET',
-    parameters: [
-      { name: 'asOfDate', type: 'date', required: false }
-    ],
-    responseFields: ['currentAssets', 'currentLiabilities', 'workingCapital', 'currentRatio', 'quickRatio']
-  }
-];
 
 // ============================================================================
 // ENRICHMENT TYPES
@@ -3048,21 +2915,16 @@ function IntentListView({
 // MCP Tools View
 function MCPToolsView({ 
   tools, 
-  helloBookTools,
   isLoading,
   error,
   onRefresh
 }: { 
   tools: MCPTool[];
-  helloBookTools: MCPTool[];
   isLoading: boolean;
   error: string | null;
   onRefresh: () => void;
 }) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
-  const [activeSource, setActiveSource] = useState<'static' | 'hellobooks'>('hellobooks');
-
-  const displayTools = activeSource === 'static' ? tools : helloBookTools;
 
   return (
     <div className="p-6">
@@ -3079,32 +2941,15 @@ function MCPToolsView({
       </div>
       <p className="text-gray-500 mb-4">Available data sources for resolution flows</p>
       
-      {/* Source Toggle */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setActiveSource('hellobooks')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeSource === 'hellobooks'
-              ? 'bg-purple-600 text-white'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          🔌 HelloBooks MCP ({helloBookTools.length})
-        </button>
-        <button
-          onClick={() => setActiveSource('static')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeSource === 'static'
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          📊 Built-in Tools ({tools.length})
-        </button>
+      {/* HelloBooks Badge */}
+      <div className="mb-4">
+        <span className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white">
+          🔌 HelloBooks MCP ({tools.length})
+        </span>
       </div>
 
       {/* Error State */}
-      {error && activeSource === 'hellobooks' && (
+      {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
           <div className="flex items-center gap-2 text-red-700">
             <AlertCircle size={16} />
@@ -3115,7 +2960,7 @@ function MCPToolsView({
       )}
 
       {/* Loading State */}
-      {isLoading && activeSource === 'hellobooks' && (
+      {isLoading && (
         <div className="flex items-center justify-center py-12">
           <div className="flex items-center gap-3 text-gray-500">
             <Loader2 size={24} className="animate-spin" />
@@ -3128,23 +2973,18 @@ function MCPToolsView({
       {!isLoading && (
         <div className="grid grid-cols-3 gap-4">
           <div className="col-span-1 space-y-2 max-h-[500px] overflow-y-auto">
-            {displayTools.length === 0 ? (
+            {tools.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                {activeSource === 'hellobooks' 
-                  ? 'No tools loaded. Click Refresh to fetch from HelloBooks.'
-                  : 'No built-in tools available.'
-                }
+                No tools loaded. Click Refresh to fetch from HelloBooks.
               </div>
             ) : (
-              displayTools.map(tool => (
+              tools.map(tool => (
                 <button
                   key={tool.id}
                   onClick={() => setSelectedTool(tool)}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                     selectedTool?.id === tool.id
-                      ? activeSource === 'hellobooks' 
-                        ? 'bg-purple-100 text-purple-700'
-                        : 'bg-blue-100 text-blue-700'
+                      ? 'bg-purple-100 text-purple-700'
                       : 'hover:bg-gray-100'
                   }`}
                 >
@@ -3158,12 +2998,8 @@ function MCPToolsView({
             {selectedTool ? (
               <div className="p-4 border rounded-lg bg-white">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                    activeSource === 'hellobooks' 
-                      ? 'bg-purple-100 text-purple-700' 
-                      : 'bg-blue-100 text-blue-700'
-                  }`}>
-                    {activeSource === 'hellobooks' ? 'HelloBooks' : 'Built-in'}
+                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                    HelloBooks
                   </span>
                   <h3 className="font-bold text-lg">@{selectedTool.id}</h3>
                 </div>
@@ -3923,8 +3759,8 @@ export default function CFOQueryResolutionEngine() {
     }
   }, [activeTab, helloBooksMcpTools.length, isFetchingMcpTools, fetchHelloBooksMcpTools]);
 
-  // Combined MCP tools (static + dynamic)
-  const allMcpTools = [...MCP_TOOLS, ...helloBooksMcpTools];
+  // MCP tools from HelloBooks
+  const allMcpTools = helloBooksMcpTools;
 
   // Computed values
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
@@ -4467,8 +4303,7 @@ export default function CFOQueryResolutionEngine() {
         
         {activeTab === 'mcp' && (
           <MCPToolsView 
-            tools={MCP_TOOLS} 
-            helloBookTools={helloBooksMcpTools}
+            tools={helloBooksMcpTools}
             isLoading={isFetchingMcpTools}
             error={mcpToolsError}
             onRefresh={fetchHelloBooksMcpTools}
