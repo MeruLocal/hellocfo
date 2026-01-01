@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -6,6 +7,7 @@ const corsHeaders = {
 };
 
 interface LLMConfig {
+  id?: string;
   provider: string;
   endpoint?: string;
   model: string;
@@ -15,6 +17,7 @@ interface LLMConfig {
 }
 
 interface GenerationRequest {
+  intentId?: string;
   intentName: string;
   moduleName: string;
   subModuleName: string;
@@ -26,6 +29,13 @@ interface GenerationRequest {
   existingPipeline?: any[];
   existingEnrichments?: any[];
   llmConfig?: LLMConfig;
+}
+
+interface UsageStats {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  latencyMs: number;
 }
 
 const getSystemPrompt = () => `You are an expert CFO AI assistant helping to configure a query resolution system for financial chatbots.
@@ -284,11 +294,20 @@ const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
   }
 };
 
-// Call AI based on provider config
-const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => {
+// Estimate tokens (rough approximation: ~4 chars per token)
+const estimateTokens = (text: string): number => {
+  return Math.ceil(text.length / 4);
+};
+
+// Call AI based on provider config and return usage stats
+const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<{ content: string; usage: UsageStats }> => {
   const { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
   
   console.log(`Calling AI with provider: ${provider}, model: ${model}`);
+  
+  const startTime = Date.now();
+  const systemPrompt = getSystemPrompt();
+  const inputTokensEstimate = estimateTokens(systemPrompt + prompt);
   
   // Azure Anthropic
   if (provider === 'azure-anthropic') {
@@ -301,7 +320,6 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Azure services vary in header name; send the common variants
         'x-api-key': apiKey!,
         'api-key': apiKey!,
         'Ocp-Apim-Subscription-Key': apiKey!,
@@ -311,10 +329,12 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
         model,
         max_tokens: maxTokens,
         temperature,
-        system: getSystemPrompt(),
+        system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
       }),
     });
+
+    const latencyMs = Date.now() - startTime;
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -330,7 +350,21 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
     }
 
     const data = await response.json();
-    return data.content?.[0]?.text || '';
+    const content = data.content?.[0]?.text || '';
+    
+    // Extract usage from response or estimate
+    const inputTokens = data.usage?.input_tokens || inputTokensEstimate;
+    const outputTokens = data.usage?.output_tokens || estimateTokens(content);
+    
+    return {
+      content,
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        latencyMs
+      }
+    };
   }
   
   // OpenAI
@@ -348,11 +382,13 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
         max_tokens: maxTokens,
         temperature: temperature,
         messages: [
-          { role: 'system', content: getSystemPrompt() },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt }
         ],
       }),
     });
+
+    const latencyMs = Date.now() - startTime;
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -361,10 +397,96 @@ const callAI = async (prompt: string, llmConfig: LLMConfig): Promise<string> => 
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    const content = data.choices?.[0]?.message?.content || '';
+    
+    // Extract usage from response
+    const inputTokens = data.usage?.prompt_tokens || inputTokensEstimate;
+    const outputTokens = data.usage?.completion_tokens || estimateTokens(content);
+    
+    return {
+      content,
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        latencyMs
+      }
+    };
   }
   
   throw new Error(`Unsupported LLM provider: ${provider}. Please configure Azure Anthropic or OpenAI in LLM Settings.`);
+};
+
+// Log usage to database
+const logUsage = async (
+  supabase: any,
+  llmConfigId: string | undefined,
+  intentId: string | undefined,
+  provider: string,
+  model: string,
+  section: string,
+  usage: UsageStats,
+  status: 'success' | 'error',
+  errorMessage?: string
+) => {
+  try {
+    await supabase.from('llm_usage_logs').insert({
+      llm_config_id: llmConfigId || null,
+      intent_id: intentId || null,
+      provider,
+      model,
+      section,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      total_tokens: usage.totalTokens,
+      latency_ms: usage.latencyMs,
+      status,
+      error_message: errorMessage || null
+    });
+    
+    // Update llm_configs total usage
+    if (llmConfigId) {
+      const { data: currentConfig } = await supabase
+        .from('llm_configs')
+        .select('total_tokens_used, total_requests, total_input_tokens, total_output_tokens')
+        .eq('id', llmConfigId)
+        .single();
+      
+      if (currentConfig) {
+        await supabase
+          .from('llm_configs')
+          .update({
+            total_tokens_used: (currentConfig.total_tokens_used || 0) + usage.totalTokens,
+            total_requests: (currentConfig.total_requests || 0) + 1,
+            total_input_tokens: (currentConfig.total_input_tokens || 0) + usage.inputTokens,
+            total_output_tokens: (currentConfig.total_output_tokens || 0) + usage.outputTokens
+          })
+          .eq('id', llmConfigId);
+      }
+    }
+    
+    // Update intent usage
+    if (intentId) {
+      const { data: currentIntent } = await supabase
+        .from('intents')
+        .select('total_tokens_used, generation_count')
+        .eq('id', intentId)
+        .single();
+      
+      if (currentIntent) {
+        await supabase
+          .from('intents')
+          .update({
+            total_tokens_used: (currentIntent.total_tokens_used || 0) + usage.totalTokens,
+            generation_count: (currentIntent.generation_count || 0) + 1,
+            last_generation_tokens: usage.totalTokens
+          })
+          .eq('id', intentId);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to log usage:', error);
+  }
 };
 
 serve(async (req) => {
@@ -372,9 +494,15 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Initialize Supabase client
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
   try {
     const request: GenerationRequest = await req.json();
     const { 
+      intentId,
       intentName, 
       moduleName, 
       subModuleName, 
@@ -409,38 +537,55 @@ serve(async (req) => {
     };
 
     const result: any = {};
+    let totalUsage: UsageStats = { inputTokens: 0, outputTokens: 0, totalTokens: 0, latencyMs: 0 };
 
     if (section === 'training' || section === 'all') {
       console.log('Generating training phrases...');
       const prompt = generateTrainingPhrasesPrompt(
         intentName, moduleName, subModuleName, description, phraseCount, existingPhrases
       );
-      const response = await callAI(prompt, config);
-      result.trainingPhrases = parseJSON<string[]>(response);
+      const { content, usage } = await callAI(prompt, config);
+      result.trainingPhrases = parseJSON<string[]>(content);
+      totalUsage.inputTokens += usage.inputTokens;
+      totalUsage.outputTokens += usage.outputTokens;
+      totalUsage.totalTokens += usage.totalTokens;
+      totalUsage.latencyMs += usage.latencyMs;
     }
 
     if (section === 'entities' || section === 'all') {
       console.log('Generating entities...');
       const phrases = result.trainingPhrases || existingPhrases || [];
       const prompt = generateEntitiesPrompt(intentName, moduleName, phrases);
-      const response = await callAI(prompt, config);
-      result.entities = parseJSON<any[]>(response);
+      const { content, usage } = await callAI(prompt, config);
+      result.entities = parseJSON<any[]>(content);
+      totalUsage.inputTokens += usage.inputTokens;
+      totalUsage.outputTokens += usage.outputTokens;
+      totalUsage.totalTokens += usage.totalTokens;
+      totalUsage.latencyMs += usage.latencyMs;
     }
 
     if (section === 'pipeline' || section === 'all') {
       console.log('Generating data pipeline...');
       const entities = result.entities || existingEntities || [];
       const prompt = generatePipelinePrompt(intentName, moduleName, entities);
-      const response = await callAI(prompt, config);
-      result.dataPipeline = parseJSON<any[]>(response);
+      const { content, usage } = await callAI(prompt, config);
+      result.dataPipeline = parseJSON<any[]>(content);
+      totalUsage.inputTokens += usage.inputTokens;
+      totalUsage.outputTokens += usage.outputTokens;
+      totalUsage.totalTokens += usage.totalTokens;
+      totalUsage.latencyMs += usage.latencyMs;
     }
 
     if (section === 'enrichments' || section === 'all') {
       console.log('Generating enrichments...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline);
-      const response = await callAI(prompt, config);
-      result.enrichments = parseJSON<any[]>(response);
+      const { content, usage } = await callAI(prompt, config);
+      result.enrichments = parseJSON<any[]>(content);
+      totalUsage.inputTokens += usage.inputTokens;
+      totalUsage.outputTokens += usage.outputTokens;
+      totalUsage.totalTokens += usage.totalTokens;
+      totalUsage.latencyMs += usage.latencyMs;
     }
 
     if (section === 'response' || section === 'all') {
@@ -448,16 +593,39 @@ serve(async (req) => {
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
       const prompt = generateResponsePrompt(intentName, moduleName, pipeline, enrichments);
-      const response = await callAI(prompt, config);
-      result.responseConfig = parseJSON<any>(response);
+      const { content, usage } = await callAI(prompt, config);
+      result.responseConfig = parseJSON<any>(content);
+      totalUsage.inputTokens += usage.inputTokens;
+      totalUsage.outputTokens += usage.outputTokens;
+      totalUsage.totalTokens += usage.totalTokens;
+      totalUsage.latencyMs += usage.latencyMs;
     }
+
+    // Log usage to database
+    await logUsage(
+      supabase,
+      config.id,
+      intentId,
+      config.provider,
+      config.model,
+      section,
+      totalUsage,
+      'success'
+    );
 
     result.generatedAt = new Date().toISOString();
     result.aiConfidence = 0.90 + Math.random() * 0.08;
     result.usedProvider = config.provider;
     result.usedModel = config.model;
+    result.usage = {
+      inputTokens: totalUsage.inputTokens,
+      outputTokens: totalUsage.outputTokens,
+      totalTokens: totalUsage.totalTokens,
+      latencyMs: totalUsage.latencyMs
+    };
 
     console.log('Generation complete:', Object.keys(result));
+    console.log('Usage stats:', result.usage);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
