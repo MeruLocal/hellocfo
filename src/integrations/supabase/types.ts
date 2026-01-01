@@ -180,7 +180,7 @@ export type Database = {
           module_id: string
           name: string
           resolution_flow: Json | null
-          sub_module_id: string
+          sub_module_id: string | null
           training_phrases: Json
           updated_at: string
         }
@@ -196,7 +196,7 @@ export type Database = {
           module_id: string
           name: string
           resolution_flow?: Json | null
-          sub_module_id: string
+          sub_module_id?: string | null
           training_phrases?: Json
           updated_at?: string
         }
@@ -212,7 +212,7 @@ export type Database = {
           module_id?: string
           name?: string
           resolution_flow?: Json | null
-          sub_module_id?: string
+          sub_module_id?: string | null
           training_phrases?: Json
           updated_at?: string
         }
