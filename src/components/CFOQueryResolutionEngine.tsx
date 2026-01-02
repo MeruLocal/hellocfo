@@ -5135,6 +5135,25 @@ export default function CFOQueryResolutionEngine() {
           description: intent.description,
           section: 'all',
           phraseCount: 10,
+          // Pass real MCP tools for intelligent pipeline generation
+          mcpTools: allMcpTools.map(tool => ({
+            name: tool.id,
+            description: tool.description,
+            inputSchema: {
+              properties: tool.parameters.reduce((acc, p) => {
+                acc[p.name] = { type: p.type };
+                return acc;
+              }, {} as Record<string, { type: string }>),
+              required: tool.parameters.filter(p => p.required).map(p => p.name)
+            }
+          })),
+          // Pass business context for smarter generation
+          businessContext: businessContext ? {
+            industry: businessContext.industry,
+            country: businessContext.country,
+            currency: businessContext.currency,
+            entitySize: businessContext.entitySize
+          } : undefined,
           llmConfig: {
             provider: llmConfig.provider,
             endpoint: llmConfig.endpoint,
@@ -5262,6 +5281,25 @@ export default function CFOQueryResolutionEngine() {
           existingEntities: intent.entities,
           existingPipeline: intent.resolutionFlow?.dataPipeline || [],
           existingEnrichments: intent.resolutionFlow?.enrichments || [],
+          // Pass real MCP tools for intelligent pipeline generation
+          mcpTools: allMcpTools.map(tool => ({
+            name: tool.id,
+            description: tool.description,
+            inputSchema: {
+              properties: tool.parameters.reduce((acc, p) => {
+                acc[p.name] = { type: p.type };
+                return acc;
+              }, {} as Record<string, { type: string }>),
+              required: tool.parameters.filter(p => p.required).map(p => p.name)
+            }
+          })),
+          // Pass business context for smarter generation
+          businessContext: businessContext ? {
+            industry: businessContext.industry,
+            country: businessContext.country,
+            currency: businessContext.currency,
+            entitySize: businessContext.entitySize
+          } : undefined,
           llmConfig: {
             provider: llmConfig.provider,
             endpoint: llmConfig.endpoint,
