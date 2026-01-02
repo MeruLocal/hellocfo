@@ -455,6 +455,111 @@ function parseClaudeJSON<T>(response: string): T {
 }
 
 // ============================================================================
+// MCP TOOL RESOLVER - Maps AI-generated tool names to actual tool IDs
+// ============================================================================
+
+// Common aliases for tools that AI frequently hallucinates
+const MCP_TOOL_ALIASES: Record<string, string[]> = {
+  'get_all_bills': ['get_vendor_bills', 'get_bills', 'list_bills', 'fetch_bills', 'vendor_bills'],
+  'get_all_vendors': ['get_vendors', 'list_vendors', 'fetch_vendors'],
+  'get_all_invoices': ['get_invoices', 'list_invoices', 'fetch_invoices', 'get_customer_invoices'],
+  'get_all_customers': ['get_customers', 'list_customers', 'fetch_customers'],
+  'get_all_payments': ['get_payments', 'list_payments', 'fetch_payments'],
+  'get_all_expenses': ['get_expenses', 'list_expenses', 'fetch_expenses'],
+  'get_cash_balance': ['get_balance', 'cash_balance', 'fetch_cash_balance'],
+};
+
+// Build reverse lookup for aliases
+const buildAliasLookup = (): Record<string, string> => {
+  const map: Record<string, string> = {};
+  Object.entries(MCP_TOOL_ALIASES).forEach(([toolId, aliases]) => {
+    aliases.forEach(alias => {
+      map[alias.toLowerCase()] = toolId;
+    });
+  });
+  return map;
+};
+
+const ALIAS_TO_TOOL = buildAliasLookup();
+
+// Resolve AI-generated tool name to actual MCP tool ID
+const resolveMcpToolIdWithTools = (generatedName: string | undefined, mcpTools: MCPTool[]): string => {
+  if (!generatedName) return '';
+  
+  // Normalize: remove @ prefix, trim, lowercase
+  const normalized = generatedName.toLowerCase().replace(/^@/, '').trim();
+  
+  if (!normalized) return '';
+  if (mcpTools.length === 0) {
+    // Tools not loaded yet - return normalized for later resolution
+    return normalized;
+  }
+
+  // 1. Exact match (case-insensitive)
+  const exactMatch = mcpTools.find(t => t.id.toLowerCase() === normalized);
+  if (exactMatch) {
+    console.log(`✅ MCP Tool exact match: ${generatedName} → ${exactMatch.id}`);
+    return exactMatch.id;
+  }
+
+  // 2. Check alias map
+  const aliasMatch = ALIAS_TO_TOOL[normalized];
+  if (aliasMatch) {
+    const tool = mcpTools.find(t => t.id.toLowerCase() === aliasMatch.toLowerCase());
+    if (tool) {
+      console.log(`✅ MCP Tool alias match: ${generatedName} → ${tool.id}`);
+      return tool.id;
+    }
+  }
+
+  // 3. Token-based similarity matching
+  const genTokens = normalized.split('_').filter(Boolean);
+  let bestMatch: { toolId: string; score: number } | null = null;
+  
+  for (const tool of mcpTools) {
+    const toolTokens = tool.id.toLowerCase().split('_').filter(Boolean);
+    
+    // Count matching tokens
+    let matchingTokens = 0;
+    for (const genToken of genTokens) {
+      const singularGen = genToken.replace(/s$/, '');
+      for (const toolToken of toolTokens) {
+        const singularTool = toolToken.replace(/s$/, '');
+        if (genToken === toolToken || singularGen === singularTool || genToken === singularTool || singularGen === toolToken) {
+          matchingTokens++;
+          break;
+        }
+      }
+    }
+    
+    // Calculate score
+    const score = matchingTokens / Math.max(genTokens.length, toolTokens.length);
+    
+    // Prefer tools starting with "get_all_" when looking for lists
+    let adjustedScore = score;
+    if (genTokens.includes('all') || genTokens.includes('list') || genTokens.includes('fetch')) {
+      if (tool.id.startsWith('get_all_')) {
+        adjustedScore += 0.1;
+      }
+    }
+    
+    if (!bestMatch || adjustedScore > bestMatch.score) {
+      bestMatch = { toolId: tool.id, score: adjustedScore };
+    }
+  }
+  
+  // Accept if score is above threshold
+  if (bestMatch && bestMatch.score >= 0.5) {
+    console.log(`✅ MCP Tool similarity match: ${generatedName} → ${bestMatch.toolId} (score: ${bestMatch.score.toFixed(2)})`);
+    return bestMatch.toolId;
+  }
+
+  // 4. No good match - return empty
+  console.warn(`⚠️ No MCP tool match for: ${generatedName}. Available: ${mcpTools.map(t => t.id).join(', ')}`);
+  return '';
+};
+
+// ============================================================================
 // AI BADGE COMPONENT
 // ============================================================================
 
@@ -1092,22 +1197,51 @@ function DataPipelineTab({
   const pipeline = intent.resolutionFlow?.dataPipeline || [];
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
 
-  // Helper to get the actual matching tool ID (case-insensitive)
-  const getMatchedToolId = (mcpToolName: string | undefined): string => {
-    if (!mcpToolName) return '';
-    const normalized = mcpToolName.toLowerCase().replace(/^@/, '').trim();
-    const match = mcpTools.find(t => t.id.toLowerCase() === normalized);
-    return match ? match.id : mcpToolName;
-  };
+  // Use the global MCP tool resolver
+  const resolveMcpToolId = useCallback((generatedName: string | undefined): string => {
+    return resolveMcpToolIdWithTools(generatedName, mcpTools);
+  }, [mcpTools]);
 
-  const updatePipeline = (newPipeline: PipelineNode[]) => {
+  // Define updatePipeline first so it can be used in useEffect
+  const updatePipeline = useCallback((newPipeline: PipelineNode[]) => {
     onChange({
       resolutionFlow: {
         ...intent.resolutionFlow!,
         dataPipeline: newPipeline
       }
     });
-  };
+  }, [onChange, intent.resolutionFlow]);
+
+  // Auto-fix pipeline nodes when mcpTools load or change
+  useEffect(() => {
+    if (mcpTools.length === 0) return;
+    if (pipeline.length === 0) return;
+    
+    let hasChanges = false;
+    const fixedPipeline = pipeline.map(node => {
+      if (node.nodeType !== 'api_call' || !node.mcpTool) return node;
+      
+      // Check if current mcpTool is valid
+      const isValidTool = mcpTools.some(t => t.id === node.mcpTool);
+      if (isValidTool) return node;
+      
+      // Try to resolve to a valid tool
+      const resolvedId = resolveMcpToolId(node.mcpTool);
+      const isResolvedValid = mcpTools.some(t => t.id === resolvedId);
+      
+      if (resolvedId && isResolvedValid && resolvedId !== node.mcpTool) {
+        console.log(`🔄 Auto-fixing pipeline node: ${node.mcpTool} → ${resolvedId}`);
+        hasChanges = true;
+        return { ...node, mcpTool: resolvedId };
+      }
+      
+      return node;
+    });
+    
+    if (hasChanges) {
+      updatePipeline(fixedPipeline);
+    }
+  }, [mcpTools, pipeline, resolveMcpToolId, updatePipeline]);
 
   const addNode = (type: 'api_call' | 'computation' | 'conditional') => {
     const newNode: PipelineNode = {
@@ -1295,7 +1429,7 @@ function DataPipelineTab({
                             <div>
                               <label className="block text-xs font-medium text-gray-600 mb-1">MCP Tool</label>
                               <select
-                                value={getMatchedToolId(node.mcpTool)}
+                                value={resolveMcpToolId(node.mcpTool)}
                                 onChange={(e) => updateNode(index, { mcpTool: e.target.value })}
                                 className="w-full px-3 py-2 border rounded-lg text-sm bg-white"
                               >
@@ -5048,45 +5182,10 @@ export default function CFOQueryResolutionEngine() {
 
       console.log('✅ AI generation complete!', data);
 
-      // Helper to match generated tool name to actual MCP tool ID
-      // If no match found, returns the normalized name (without @) so it can be matched when tools load
-      const matchMcpTool = (generatedToolName: string): string | undefined => {
-        if (!generatedToolName) return undefined;
-        // Remove @ prefix and trim whitespace
-        const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
-        console.log('🔧 matchMcpTool:', { generatedToolName, normalized, toolCount: allMcpTools.length, availableTools: allMcpTools.map(t => t.id) });
-        
-        // If no tools loaded yet, return the normalized name to be matched later
-        if (allMcpTools.length === 0) {
-          console.log('⚠️ No MCP tools loaded yet, storing raw name:', normalized);
-          return normalized;
-        }
-        
-        // Exact match first (case-insensitive)
-        const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
-        if (exactMatch) {
-          console.log('✅ Exact match found:', exactMatch.id);
-          return exactMatch.id;
-        }
-        
-        // Partial match (tool name contains or is contained by generated name)
-        const partialMatch = allMcpTools.find(t => 
-          t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
-        );
-        if (partialMatch) {
-          console.log('✅ Partial match found:', partialMatch.id);
-          return partialMatch.id;
-        }
-        
-        // Return the normalized name so it can potentially be matched later
-        console.log('⚠️ No match found, returning normalized name:', normalized);
-        return normalized;
-      };
-
-      // Ensure pipeline nodes have required parameters field and match MCP tools
+      // Ensure pipeline nodes have required parameters field and match MCP tools using the global resolver
       const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
         ...node,
-        mcpTool: node.nodeType === 'api_call' ? matchMcpTool(node.mcpTool) : node.mcpTool,
+        mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
         parameters: node.parameters || []
       }));
 
@@ -5216,23 +5315,9 @@ export default function CFOQueryResolutionEngine() {
       }
       
       if (section === 'pipeline' && data.dataPipeline) {
-        // Helper to match generated tool name to actual MCP tool ID
-        const matchMcpTool = (generatedToolName: string): string | undefined => {
-          if (!generatedToolName) return undefined;
-          const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
-          if (allMcpTools.length === 0) return normalized;
-          const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
-          if (exactMatch) return exactMatch.id;
-          const partialMatch = allMcpTools.find(t => 
-            t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
-          );
-          if (partialMatch) return partialMatch.id;
-          return normalized;
-        };
-
         const dataPipeline = data.dataPipeline.map((node: any) => ({
           ...node,
-          mcpTool: node.nodeType === 'api_call' ? matchMcpTool(node.mcpTool) : node.mcpTool,
+          mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
           parameters: node.parameters || []
         }));
         result.resolutionFlow = {
@@ -5256,23 +5341,9 @@ export default function CFOQueryResolutionEngine() {
       }
       
       if (section === 'all') {
-        // Helper to match generated tool name to actual MCP tool ID
-        const matchMcpToolAll = (generatedToolName: string): string | undefined => {
-          if (!generatedToolName) return undefined;
-          const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
-          if (allMcpTools.length === 0) return normalized;
-          const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
-          if (exactMatch) return exactMatch.id;
-          const partialMatch = allMcpTools.find(t => 
-            t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
-          );
-          if (partialMatch) return partialMatch.id;
-          return normalized;
-        };
-
         const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
           ...node,
-          mcpTool: node.nodeType === 'api_call' ? matchMcpToolAll(node.mcpTool) : node.mcpTool,
+          mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
           parameters: node.parameters || []
         }));
         result.trainingPhrases = data.trainingPhrases || [];
