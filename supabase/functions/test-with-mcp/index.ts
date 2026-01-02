@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -50,6 +51,32 @@ interface MCPConnection {
   mcpHeaders: Record<string, string>;
 }
 
+interface LLMConfig {
+  id: string;
+  provider: string;
+  model: string;
+  api_key: string | null;
+  endpoint: string | null;
+  max_tokens: number;
+  temperature: number;
+  system_prompt_override: string | null;
+}
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: {
+    type: string;
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: string | Array<{ type: string; [key: string]: unknown }>;
+}
+
 // Establish MCP connection and get endpoint
 async function establishMCPConnection(reqId: string): Promise<MCPConnection | null> {
   const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
@@ -67,6 +94,8 @@ async function establishMCPConnection(reqId: string): Promise<MCPConnection | nu
     "X-Org-Id": orgId,
   };
 
+  console.log(`[${reqId}] Establishing MCP connection...`);
+
   const sseResponse = await fetch("https://mcp.hellobooks.ai/sse", {
     method: "GET",
     headers: {
@@ -77,7 +106,7 @@ async function establishMCPConnection(reqId: string): Promise<MCPConnection | nu
   });
 
   if (!sseResponse.ok) {
-    console.error(`[${reqId}] SSE connection failed`);
+    console.error(`[${reqId}] SSE connection failed: ${sseResponse.status}`);
     return null;
   }
 
@@ -105,6 +134,8 @@ async function establishMCPConnection(reqId: string): Promise<MCPConnection | nu
         if (!messageEndpoint.startsWith("http")) {
           messageEndpoint = `https://mcp.hellobooks.ai${messageEndpoint}`;
         }
+
+        console.log(`[${reqId}] Got MCP endpoint: ${messageEndpoint}`);
 
         // Initialize MCP connection
         const initResponse = await fetch(messageEndpoint, {
@@ -135,6 +166,7 @@ async function establishMCPConnection(reqId: string): Promise<MCPConnection | nu
           });
 
           reader.cancel();
+          console.log(`[${reqId}] MCP connection established successfully`);
           return { messageEndpoint, mcpHeaders };
         }
       }
@@ -145,21 +177,24 @@ async function establishMCPConnection(reqId: string): Promise<MCPConnection | nu
   return null;
 }
 
-// Call MCP tool
+// Call MCP tool and wait for result via SSE
 async function callMCPTool(
   connection: MCPConnection,
   toolName: string,
   toolArgs: Record<string, unknown>,
   reqId: string
 ): Promise<unknown> {
-  console.log(`[${reqId}] Calling MCP tool: ${toolName}`, toolArgs);
+  console.log(`[${reqId}] Calling MCP tool: ${toolName}`, JSON.stringify(toolArgs));
 
+  const callId = Date.now();
+  
+  // Send the tool call request
   const response = await fetch(connection.messageEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...connection.mcpHeaders },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: Date.now(),
+      id: callId,
       method: "tools/call",
       params: {
         name: toolName,
@@ -174,33 +209,92 @@ async function callMCPTool(
     throw new Error(`MCP tool call failed: ${errorText}`);
   }
 
-  // We need to wait for the SSE response
-  // For now, return the HTTP response
   const result = await response.json();
-  console.log(`[${reqId}] MCP tool response:`, JSON.stringify(result).substring(0, 500));
-  return result;
+  console.log(`[${reqId}] MCP tool response:`, JSON.stringify(result).substring(0, 1000));
+  
+  // Extract the actual content from the MCP response
+  if (result.result?.content) {
+    // MCP returns content as an array of content blocks
+    const textContent = result.result.content
+      .filter((c: any) => c.type === 'text')
+      .map((c: any) => c.text)
+      .join('\n');
+    
+    // Try to parse as JSON if it looks like JSON
+    try {
+      return JSON.parse(textContent);
+    } catch {
+      return textContent;
+    }
+  }
+  
+  return result.result || result;
 }
 
-// Fetch available MCP tools
-async function fetchMCPTools(connection: MCPConnection, reqId: string): Promise<unknown[]> {
-  const response = await fetch(connection.messageEndpoint, {
+// Call Anthropic API (Azure or Direct)
+async function callAnthropicAPI(
+  config: LLMConfig,
+  messages: AnthropicMessage[],
+  tools: AnthropicTool[],
+  systemPrompt: string,
+  reqId: string
+): Promise<any> {
+  let endpoint: string;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (config.provider === "azure-anthropic") {
+    // Azure Anthropic endpoint
+    endpoint = config.endpoint 
+      ? `${config.endpoint}/v1/messages` 
+      : "https://cursor-api-west-us-resource.openai.azure.com/anthropic/v1/messages";
+    headers["x-api-key"] = config.api_key || "";
+    headers["anthropic-version"] = "2023-06-01";
+  } else if (config.provider === "anthropic") {
+    // Direct Anthropic API
+    endpoint = "https://api.anthropic.com/v1/messages";
+    headers["x-api-key"] = config.api_key || "";
+    headers["anthropic-version"] = "2023-06-01";
+  } else {
+    throw new Error(`Unsupported provider: ${config.provider}`);
+  }
+
+  const body: any = {
+    model: config.model,
+    max_tokens: config.max_tokens,
+    system: systemPrompt,
+    messages: messages,
+  };
+
+  // Only add temperature if not using a model that doesn't support it
+  const noTempModels = ["claude-opus-4", "claude-sonnet-4", "claude-3-7", "o3", "o4"];
+  const shouldSkipTemp = noTempModels.some(m => config.model.includes(m));
+  if (!shouldSkipTemp) {
+    body.temperature = config.temperature;
+  }
+
+  // Add tools if available
+  if (tools.length > 0) {
+    body.tools = tools;
+  }
+
+  console.log(`[${reqId}] Calling ${config.provider} API at ${endpoint}`);
+  console.log(`[${reqId}] Model: ${config.model}, Tools: ${tools.length}`);
+
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...connection.mcpHeaders },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 99,
-      method: "tools/list",
-      params: {}
-    }),
+    headers,
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    console.error(`[${reqId}] Failed to fetch MCP tools`);
-    return [];
+    const errorText = await response.text();
+    console.error(`[${reqId}] LLM API error ${response.status}:`, errorText);
+    throw new Error(`LLM API error: ${response.status} - ${errorText}`);
   }
 
-  // SSE will return the tools - for now we'll list them from cached data
-  return [];
+  return response.json();
 }
 
 serve(async (req) => {
@@ -212,7 +306,7 @@ serve(async (req) => {
   }
 
   try {
-    const { query, intents, businessContext, mcpTools } = await req.json();
+    const { query, intents, businessContext, mcpTools, llmConfig: providedConfig } = await req.json();
 
     if (!query) {
       return new Response(
@@ -225,7 +319,34 @@ serve(async (req) => {
     console.log(`[${reqId}] Available intents: ${intents?.length || 0}`);
     console.log(`[${reqId}] MCP tools provided: ${mcpTools?.length || 0}`);
 
-    // Build the system prompt with intent context
+    // Get LLM config from database if not provided
+    let llmConfig: LLMConfig | null = providedConfig;
+    
+    if (!llmConfig?.api_key) {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      
+      const { data: configData, error: configError } = await supabase
+        .from("llm_configs")
+        .select("*")
+        .eq("is_default", true)
+        .single();
+      
+      if (configError) {
+        console.error(`[${reqId}] Failed to fetch LLM config:`, configError);
+        throw new Error("Failed to fetch LLM configuration");
+      }
+      
+      llmConfig = configData as LLMConfig;
+      console.log(`[${reqId}] Using LLM config: ${llmConfig.provider}/${llmConfig.model}`);
+    }
+
+    if (!llmConfig?.api_key) {
+      throw new Error("LLM API key not configured");
+    }
+
+    // Build intent descriptions for the prompt
     const intentDescriptions = (intents || [])
       .filter((i: any) => i.isActive)
       .map((i: any) => ({
@@ -233,90 +354,30 @@ serve(async (req) => {
         description: i.description || '',
         trainingPhrases: i.trainingPhrases?.slice(0, 5) || [],
         entities: i.entities?.map((e: any) => ({ name: e.name, type: e.type })) || [],
-        moduleId: i.moduleId
+        moduleId: i.moduleId,
+        resolutionFlow: i.resolutionFlow
       }));
 
-    // Build MCP tools for function calling
-    const mcpToolDefinitions = (mcpTools || []).map((tool: any) => ({
-      type: "function",
-      function: {
-        name: tool.name || tool.id,
-        description: tool.description || `MCP tool: ${tool.name || tool.id}`,
-        parameters: tool.inputSchema || {
-          type: "object",
-          properties: {},
-          required: []
-        }
+    // Convert MCP tools to Anthropic tool format
+    const anthropicTools: AnthropicTool[] = (mcpTools || []).map((tool: any) => ({
+      name: tool.name || tool.id,
+      description: tool.description || `MCP tool: ${tool.name || tool.id}`,
+      input_schema: tool.inputSchema || {
+        type: "object",
+        properties: {},
+        required: []
       }
     }));
 
-    // Add intent matching tool
-    const tools = [
-      {
-        type: "function",
-        function: {
-          name: "match_intent",
-          description: "Match user query to the most appropriate intent based on training phrases and context",
-          parameters: {
-            type: "object",
-            properties: {
-              matched_intent_name: {
-                type: "string",
-                description: "Name of the matched intent"
-              },
-              confidence: {
-                type: "number",
-                description: "Confidence score between 0 and 1"
-              },
-              extracted_entities: {
-                type: "object",
-                description: "Extracted entity values from the query"
-              },
-              reasoning: {
-                type: "string",
-                description: "Brief explanation of why this intent was matched"
-              }
-            },
-            required: ["matched_intent_name", "confidence", "reasoning"]
-          }
-        }
-      },
-      {
-        type: "function",
-        function: {
-          name: "generate_response",
-          description: "Generate a helpful response for the CFO query",
-          parameters: {
-            type: "object",
-            properties: {
-              response: {
-                type: "string",
-                description: "The generated response text"
-              },
-              data_sources: {
-                type: "array",
-                items: { type: "string" },
-                description: "List of data sources that would be queried"
-              },
-              follow_up_questions: {
-                type: "array",
-                items: { type: "string" },
-                description: "Suggested follow-up questions"
-              }
-            },
-            required: ["response"]
-          }
-        }
-      },
-      ...mcpToolDefinitions
-    ];
+    console.log(`[${reqId}] Converted ${anthropicTools.length} MCP tools to Anthropic format`);
 
-    const systemPrompt = `You are an intelligent CFO Query Resolution Engine. Your job is to:
+    // Build system prompt
+    const systemPrompt = `You are an intelligent CFO Query Resolution Engine for a financial assistant. Your job is to:
 1. Analyze user queries related to finance, accounting, and business metrics
 2. Match queries to the most appropriate intent from the available intents
-3. Extract relevant entities (amounts, periods, dates, etc.)
-4. When MCP tools are available, use them to fetch real data
-5. Generate accurate, helpful responses
+3. Extract relevant entities (amounts, periods, dates, vendor names, account numbers, etc.)
+4. Use MCP tools to fetch REAL data from the connected accounting/ERP system
+5. Format and present the data in a clear, actionable way for CFO/finance users
 
 Available Intents:
 ${JSON.stringify(intentDescriptions, null, 2)}
@@ -328,163 +389,216 @@ Business Context:
 - Currency: ${businessContext?.currency || 'INR'}
 - Fiscal Year End: ${businessContext?.fiscalYearEnd || 'March'}
 
-Instructions:
-1. First, use the match_intent tool to identify which intent best matches the query
-2. If MCP tools are available and relevant, use them to fetch real data
-3. Finally, use generate_response to provide a helpful answer
+Available MCP Tools:
+${anthropicTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
-Always think step by step and provide accurate financial insights.`;
+IMPORTANT INSTRUCTIONS:
+1. When the user asks for data (vendors, invoices, payments, etc.), you MUST use the appropriate MCP tool to fetch real data
+2. Identify which MCP tool is most appropriate for the query:
+   - For vendor-related queries, look for vendor/supplier related tools
+   - For payment queries, look for payment/transaction tools
+   - For invoice queries, look for invoice/bill tools
+   - For account balance queries, look for balance/account tools
+3. Pass appropriate filters based on the user's query (e.g., limit, date range, status)
+4. Present the real data returned from the MCP tools in a clear, formatted way
+5. If no relevant MCP tool is available, explain what data sources would be needed
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+Always provide accurate, real data from the MCP tools - never make up fake data.`;
+
+    // Establish MCP connection for tool calls
+    let mcpConnection: MCPConnection | null = null;
+    if (anthropicTools.length > 0) {
+      mcpConnection = await establishMCPConnection(reqId);
+      if (!mcpConnection) {
+        console.warn(`[${reqId}] Failed to establish MCP connection, will proceed without tool execution`);
+      }
     }
 
-    // First LLM call - Intent matching
-    console.log(`[${reqId}] Calling Lovable AI for intent matching...`);
-    
-    const llmResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query }
-        ],
-        tools: tools,
-        tool_choice: "auto"
-      }),
-    });
+    // Initial messages
+    const messages: AnthropicMessage[] = [
+      { role: "user", content: query }
+    ];
 
-    if (!llmResponse.ok) {
-      const errorText = await llmResponse.text();
-      console.error(`[${reqId}] Lovable AI error:`, errorText);
-      
-      if (llmResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (llmResponse.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "Payment required. Please add credits to your workspace." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      throw new Error(`LLM request failed: ${errorText}`);
-    }
+    // Call LLM
+    console.log(`[${reqId}] Making initial LLM call...`);
+    let llmResponse = await callAnthropicAPI(
+      llmConfig,
+      messages,
+      anthropicTools,
+      systemPrompt,
+      reqId
+    );
 
-    const llmResult = await llmResponse.json();
-    console.log(`[${reqId}] LLM response received`);
+    console.log(`[${reqId}] LLM response stop_reason: ${llmResponse.stop_reason}`);
 
-    const message = llmResult.choices?.[0]?.message;
-    const toolCalls = message?.tool_calls || [];
-    
-    let matchedIntent = null;
-    let extractedEntities = {};
+    // Track all results
+    let matchedIntent: any = null;
+    let extractedEntities: Record<string, unknown> = {};
     let reasoning = "";
-    let generatedResponse = "";
-    let dataSources: string[] = [];
-    let followUpQuestions: string[] = [];
     let mcpToolResults: any[] = [];
+    let finalResponse = "";
+    let totalInputTokens = llmResponse.usage?.input_tokens || 0;
+    let totalOutputTokens = llmResponse.usage?.output_tokens || 0;
+    let iterationCount = 0;
+    const maxIterations = 5;
 
-    // Process tool calls
-    for (const toolCall of toolCalls) {
-      const functionName = toolCall.function?.name;
-      let args: any = {};
+    // Process tool calls iteratively
+    while (llmResponse.stop_reason === "tool_use" && iterationCount < maxIterations) {
+      iterationCount++;
+      console.log(`[${reqId}] Processing tool use response (iteration ${iterationCount})`);
+
+      const assistantContent = llmResponse.content;
+      const toolUseBlocks = assistantContent.filter((block: any) => block.type === "tool_use");
       
-      try {
-        args = JSON.parse(toolCall.function?.arguments || "{}");
-      } catch (e) {
-        console.error(`[${reqId}] Failed to parse tool arguments:`, e);
-      }
+      if (toolUseBlocks.length === 0) break;
 
-      console.log(`[${reqId}] Tool call: ${functionName}`, args);
+      // Add assistant message to conversation
+      messages.push({
+        role: "assistant",
+        content: assistantContent
+      });
 
-      if (functionName === "match_intent") {
-        matchedIntent = {
-          name: args.matched_intent_name,
-          confidence: args.confidence || 0.85
-        };
-        extractedEntities = args.extracted_entities || {};
-        reasoning = args.reasoning || "";
+      // Process each tool call
+      const toolResults: any[] = [];
+      
+      for (const toolBlock of toolUseBlocks) {
+        const { id: toolUseId, name: toolName, input: toolInput } = toolBlock;
         
-        // Find full intent data
-        const fullIntent = (intents || []).find((i: any) => 
-          i.name.toLowerCase() === matchedIntent!.name.toLowerCase()
-        );
-        if (fullIntent) {
-          matchedIntent = {
-            ...matchedIntent,
-            id: fullIntent.id,
-            moduleId: fullIntent.moduleId,
-            entities: fullIntent.entities,
-            resolutionFlow: fullIntent.resolutionFlow
-          };
-        }
-      } else if (functionName === "generate_response") {
-        generatedResponse = args.response || "";
-        dataSources = args.data_sources || [];
-        followUpQuestions = args.follow_up_questions || [];
-      } else if (mcpTools?.some((t: any) => (t.name || t.id) === functionName)) {
-        // This is an MCP tool call - try to execute it
-        console.log(`[${reqId}] Attempting to execute MCP tool: ${functionName}`);
-        
-        try {
-          const mcpConnection = await establishMCPConnection(reqId);
-          if (mcpConnection) {
-            const mcpResult = await callMCPTool(mcpConnection, functionName, args, reqId);
+        console.log(`[${reqId}] Tool call: ${toolName}`, JSON.stringify(toolInput).substring(0, 500));
+
+        let toolResult: any;
+        let isError = false;
+
+        if (mcpConnection) {
+          try {
+            toolResult = await callMCPTool(mcpConnection, toolName, toolInput, reqId);
+            
             mcpToolResults.push({
-              tool: functionName,
-              args,
-              result: mcpResult
+              tool: toolName,
+              input: toolInput,
+              result: toolResult,
+              success: true
             });
-          } else {
+          } catch (error) {
+            console.error(`[${reqId}] MCP tool error:`, error);
+            toolResult = { error: error instanceof Error ? error.message : "Unknown error" };
+            isError = true;
+            
             mcpToolResults.push({
-              tool: functionName,
-              args,
-              error: "Failed to establish MCP connection"
+              tool: toolName,
+              input: toolInput,
+              error: toolResult.error,
+              success: false
             });
           }
-        } catch (mcpError) {
-          console.error(`[${reqId}] MCP tool error:`, mcpError);
+        } else {
+          toolResult = { error: "MCP connection not available" };
+          isError = true;
+          
           mcpToolResults.push({
-            tool: functionName,
-            args,
-            error: mcpError instanceof Error ? mcpError.message : "Unknown error"
+            tool: toolName,
+            input: toolInput,
+            error: "MCP connection not available",
+            success: false
           });
         }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content: JSON.stringify(toolResult),
+          is_error: isError
+        });
+      }
+
+      // Add tool results to conversation
+      messages.push({
+        role: "user",
+        content: toolResults
+      });
+
+      // Make another LLM call
+      console.log(`[${reqId}] Making follow-up LLM call with tool results...`);
+      llmResponse = await callAnthropicAPI(
+        llmConfig,
+        messages,
+        anthropicTools,
+        systemPrompt,
+        reqId
+      );
+
+      totalInputTokens += llmResponse.usage?.input_tokens || 0;
+      totalOutputTokens += llmResponse.usage?.output_tokens || 0;
+      
+      console.log(`[${reqId}] Follow-up response stop_reason: ${llmResponse.stop_reason}`);
+    }
+
+    // Extract final text response
+    const textBlocks = llmResponse.content?.filter((block: any) => block.type === "text") || [];
+    finalResponse = textBlocks.map((block: any) => block.text).join("\n");
+
+    // Try to extract intent matching info from the response
+    const intentMatch = finalResponse.match(/intent[:\s]*["']?([^"'\n,]+)["']?/i);
+    if (intentMatch) {
+      const matchedIntentName = intentMatch[1].trim();
+      const fullIntent = (intents || []).find((i: any) => 
+        i.name.toLowerCase().includes(matchedIntentName.toLowerCase()) ||
+        matchedIntentName.toLowerCase().includes(i.name.toLowerCase())
+      );
+      
+      if (fullIntent) {
+        matchedIntent = {
+          id: fullIntent.id,
+          name: fullIntent.name,
+          moduleId: fullIntent.moduleId,
+          confidence: 0.9
+        };
       }
     }
 
-    // If no response was generated, create a default one
-    if (!generatedResponse && matchedIntent) {
-      generatedResponse = `Based on your query about "${matchedIntent.name}", I've identified the relevant intent and extracted the following information. The system would normally fetch real data from connected sources to provide a complete answer.`;
+    // If we got MCP results, try to match intent based on the tool used
+    if (!matchedIntent && mcpToolResults.length > 0) {
+      const toolName = mcpToolResults[0].tool.toLowerCase();
+      const matchingIntent = (intents || []).find((i: any) => {
+        const intentName = i.name.toLowerCase();
+        return intentName.includes(toolName) || 
+               toolName.includes(intentName.split(' ')[0]) ||
+               (i.resolutionFlow?.pipeline?.some((p: any) => 
+                 p.toolId?.toLowerCase().includes(toolName)
+               ));
+      });
+      
+      if (matchingIntent) {
+        matchedIntent = {
+          id: matchingIntent.id,
+          name: matchingIntent.name,
+          moduleId: matchingIntent.moduleId,
+          confidence: 0.85
+        };
+      }
     }
 
-    // Build final result
+    // Build the result
     const result = {
       query,
       timestamp: new Date().toISOString(),
       matchedIntent,
       extractedEntities,
-      reasoning,
-      response: generatedResponse,
-      dataSources,
-      followUpQuestions,
+      reasoning: reasoning || "Processed query using LLM and MCP tools",
+      response: finalResponse,
       mcpToolResults: mcpToolResults.length > 0 ? mcpToolResults : undefined,
-      llmModel: "google/gemini-2.5-flash",
-      toolCallsCount: toolCalls.length,
-      usage: llmResult.usage
+      dataSources: mcpToolResults.map(r => r.tool),
+      llmModel: `${llmConfig.provider}/${llmConfig.model}`,
+      iterationCount,
+      usage: {
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        total_tokens: totalInputTokens + totalOutputTokens
+      }
     };
 
     console.log(`[${reqId}] Test completed successfully`);
+    console.log(`[${reqId}] Total tokens used: ${result.usage.total_tokens}`);
 
     return new Response(
       JSON.stringify(result),

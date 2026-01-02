@@ -3351,12 +3351,14 @@ function TestConsoleView({
   intents, 
   businessContext,
   countryConfigs,
-  mcpTools
+  mcpTools,
+  llmConfig
 }: { 
   intents: Intent[]; 
   businessContext: BusinessContext;
   countryConfigs: CountryConfig[];
   mcpTools?: MCPTool[];
+  llmConfig?: LLMConfig;
 }) {
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -3393,7 +3395,16 @@ function TestConsoleView({
               currency: businessContext.currency,
               fiscalYearEnd: businessContext.fiscalYearEnd
             },
-            mcpTools: mcpTools || []
+            mcpTools: mcpTools || [],
+            llmConfig: llmConfig ? {
+              id: llmConfig.id,
+              provider: llmConfig.provider,
+              model: llmConfig.model,
+              api_key: llmConfig.apiKey,
+              endpoint: llmConfig.endpoint,
+              max_tokens: llmConfig.maxTokens,
+              temperature: llmConfig.temperature
+            } : undefined
           }
         });
 
@@ -3736,8 +3747,11 @@ function TestConsoleView({
                       <div className="pt-2 border-t">
                         <div className="text-xs text-gray-500 flex items-center gap-4">
                           <span>Tokens: {result.usage.total_tokens || 0}</span>
-                          <span>Input: {result.usage.prompt_tokens || 0}</span>
-                          <span>Output: {result.usage.completion_tokens || 0}</span>
+                          <span>Input: {result.usage.input_tokens || result.usage.prompt_tokens || 0}</span>
+                          <span>Output: {result.usage.output_tokens || result.usage.completion_tokens || 0}</span>
+                          {result.iterationCount && result.iterationCount > 1 && (
+                            <span>Iterations: {result.iterationCount}</span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -4502,7 +4516,7 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
         {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
-        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} />}
+        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
             <UsersManagement />
