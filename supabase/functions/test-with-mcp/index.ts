@@ -22,326 +22,154 @@ interface LLMConfig {
   temperature: number;
 }
 
-interface MCPTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface MCPConnection {
-  sseUrl: string;
-  messageEndpoint: string;
-  headers: Record<string, string>;
-  tools: MCPTool[];
-}
-
 interface AnthropicTool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
 }
 
-// Parse SSE buffer into events
-function parseSSEBuffer(buffer: string): { events: Array<{type: string, data: string}>, remaining: string } {
-  const events: Array<{type: string, data: string}> = [];
-  const parts = buffer.replace(/\r\n/g, '\n').split('\n\n');
-  const remaining = parts.pop() || '';
-  
-  for (const part of parts) {
-    if (!part.trim()) continue;
-    let eventType = 'message';
-    const dataLines: string[] = [];
+// Simple MCP Client (based on reference code)
+class MCPClient {
+  private baseUrl: string;
+  private headers: Record<string, string>;
+  private sessionUrl: string | null = null;
+
+  constructor(baseUrl: string, headers: Record<string, string>) {
+    this.baseUrl = baseUrl;
+    this.headers = headers;
+  }
+
+  async connect(reqId: string): Promise<void> {
+    console.log(`[${reqId}] MCP: Connecting to ${this.baseUrl}/sse`);
     
-    for (const line of part.split('\n')) {
-      if (line.startsWith('event:')) eventType = line.substring(6).trim();
-      else if (line.startsWith('data:')) dataLines.push(line.substring(5).trim());
-    }
-    
-    if (dataLines.length > 0) {
-      events.push({ type: eventType, data: dataLines.join('\n') });
-    }
-  }
-  
-  return { events, remaining };
-}
-
-// Wait for JSON-RPC response via SSE
-async function waitForResponse(
-  sseUrl: string, 
-  headers: Record<string, string>, 
-  expectedId: number, 
-  reqId: string,
-  timeoutMs = 30000
-): Promise<any> {
-  const sse = await fetch(sseUrl, { 
-    headers: { ...headers, "Accept": "text/event-stream" } 
-  });
-  
-  if (!sse.ok) throw new Error(`SSE failed: ${sse.status}`);
-  
-  const reader = sse.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const start = Date.now();
-
-  try {
-    while (Date.now() - start < timeoutMs) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      buffer += decoder.decode(value, { stream: true });
-      const { events, remaining } = parseSSEBuffer(buffer);
-      buffer = remaining;
-      
-      for (const event of events) {
-        if (event.type === "message") {
-          try {
-            const parsed = JSON.parse(event.data);
-            if (parsed.id === expectedId) {
-              console.log(`[${reqId}] Got response for id ${expectedId}`);
-              return parsed;
-            }
-          } catch {}
-        }
-      }
-    }
-    throw new Error(`Timeout waiting for response id ${expectedId}`);
-  } finally {
-    reader.cancel();
-  }
-}
-
-// Send MCP request and wait for response
-async function mcpRequest(
-  messageEndpoint: string,
-  sseUrl: string,
-  headers: Record<string, string>,
-  method: string,
-  params: Record<string, unknown>,
-  reqId: string,
-  debugLogs: DebugLog[]
-): Promise<any> {
-  const requestId = Date.now();
-  
-  // Start listening for response BEFORE sending request
-  const responsePromise = waitForResponse(sseUrl, headers, requestId, reqId);
-  
-  // Small delay to ensure SSE is connected
-  await new Promise(r => setTimeout(r, 100));
-  
-  // Send the request
-  const res = await fetch(messageEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ 
-      jsonrpc: "2.0", 
-      id: requestId, 
-      method, 
-      params 
-    }),
-  });
-  
-  const responseText = await res.text();
-  console.log(`[${reqId}] MCP ${method} -> ${res.status}: ${responseText.substring(0, 100)}`);
-  
-  // If we get a direct JSON response (not 202), use it
-  if (res.ok && responseText && responseText !== "Accepted" && responseText.startsWith("{")) {
-    try {
-      const direct = JSON.parse(responseText);
-      if (direct.result !== undefined || direct.error !== undefined) {
-        return direct;
-      }
-    } catch {}
-  }
-  
-  // Otherwise wait for SSE response
-  return await responsePromise;
-}
-
-// Connect to MCP server
-async function connectMCP(reqId: string, debugLogs: DebugLog[]): Promise<MCPConnection | null> {
-  const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-  const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
-  const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
-
-  if (!authToken || !entityId || !orgId) {
-    console.log(`[${reqId}] MCP credentials missing`);
-    return null;
-  }
-
-  const headers = {
-    "Authorization": `Bearer ${authToken}`,
-    "X-Entity-Id": entityId,
-    "X-Org-Id": orgId,
-    "Content-Type": "application/json",
-  };
-
-  const sseUrl = "https://mcp.hellobooks.ai/sse";
-  debugLogs.push({ timestamp: new Date().toISOString(), type: 'mcp_connection', data: { status: 'connecting' } });
-
-  try {
-    // Step 1: Get message endpoint from SSE
-    console.log(`[${reqId}] Connecting to MCP SSE...`);
-    const sseResponse = await fetch(sseUrl, {
-      headers: { ...headers, "Accept": "text/event-stream" },
+    const response = await fetch(`${this.baseUrl}/sse`, {
+      headers: this.headers,
     });
 
-    if (!sseResponse.ok) throw new Error(`SSE failed: ${sseResponse.status}`);
+    if (!response.ok) {
+      throw new Error(`SSE connection failed: ${response.status}`);
+    }
 
-    const reader = sseResponse.body?.getReader();
-    if (!reader) throw new Error("No SSE body");
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Failed to get SSE reader");
 
     const decoder = new TextDecoder();
-    let buffer = "";
-    let messageEndpoint = "";
-    const start = Date.now();
+    const startTime = Date.now();
+    const timeout = 10000;
 
-    while (Date.now() - start < 10000 && !messageEndpoint) {
-      const { done, value } = await reader.read();
+    while (Date.now() - startTime < timeout) {
+      const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const { events, remaining } = parseSSEBuffer(buffer);
-      buffer = remaining;
-      
-      for (const event of events) {
-        if (event.type === "endpoint") {
-          messageEndpoint = event.data.startsWith("http") 
-            ? event.data 
-            : `https://mcp.hellobooks.ai${event.data}`;
-          break;
+
+      const text = decoder.decode(value);
+      const lines = text.split("\n");
+
+      for (const line of lines) {
+        if (line.startsWith("data:")) {
+          const data = line.slice(5).trim();
+          if (data.startsWith("/")) {
+            this.sessionUrl = `${this.baseUrl}${data}`;
+            console.log(`[${reqId}] MCP: Got session URL: ${this.sessionUrl}`);
+            reader.cancel();
+            return;
+          }
         }
       }
     }
+
     reader.cancel();
+    throw new Error("Timeout waiting for session URL");
+  }
 
-    if (!messageEndpoint) throw new Error("No endpoint received from SSE");
-    console.log(`[${reqId}] MCP endpoint: ${messageEndpoint}`);
+  private async sendRequest(method: string, params?: unknown, reqId?: string): Promise<unknown> {
+    if (!this.sessionUrl) throw new Error("Not connected");
 
-    // Step 2: Initialize - fire and forget (notification-like)
-    console.log(`[${reqId}] Sending initialize...`);
-    await fetch(messageEndpoint, {
+    const requestId = Date.now();
+    console.log(`[${reqId}] MCP: Sending ${method}`);
+
+    const response = await fetch(this.sessionUrl, {
       method: "POST",
-      headers,
-      body: JSON.stringify({ 
-        jsonrpc: "2.0", 
-        id: 1, 
-        method: "initialize", 
-        params: { 
-          protocolVersion: "2024-11-05", 
-          capabilities: { tools: {} }, 
-          clientInfo: { name: "lovable-cfo", version: "1.0.0" } 
-        } 
+      headers: {
+        ...this.headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: requestId,
+        method,
+        params,
       }),
     });
 
-    // Small delay for server to process
-    await new Promise(r => setTimeout(r, 200));
-
-    // Step 3: Send initialized notification
-    console.log(`[${reqId}] Sending initialized notification...`);
-    await fetch(messageEndpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ 
-        jsonrpc: "2.0", 
-        method: "notifications/initialized", 
-        params: {} 
-      }),
-    });
-
-    await new Promise(r => setTimeout(r, 200));
-
-    // Step 4: List tools using proper SSE response handling
-    console.log(`[${reqId}] Requesting tools list...`);
-    const toolsResponse = await mcpRequest(
-      messageEndpoint, 
-      sseUrl, 
-      headers, 
-      "tools/list", 
-      {}, 
-      reqId, 
-      debugLogs
-    );
-
-    const tools: MCPTool[] = toolsResponse.result?.tools || [];
-    console.log(`[${reqId}] MCP connected with ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`);
+    const result = await response.json();
     
-    debugLogs.push({ 
-      timestamp: new Date().toISOString(), 
-      type: 'mcp_tools', 
-      data: { count: tools.length, tools: tools.map(t => t.name) } 
-    });
-
-    return { sseUrl, messageEndpoint, headers, tools };
-  } catch (error) {
-    console.error(`[${reqId}] MCP connection error:`, error);
-    debugLogs.push({ 
-      timestamp: new Date().toISOString(), 
-      type: 'error', 
-      data: { phase: 'connection', error: String(error) } 
-    });
-    return null;
-  }
-}
-
-// Call MCP tool
-async function callMCPTool(
-  conn: MCPConnection, 
-  toolName: string, 
-  args: Record<string, unknown>, 
-  reqId: string, 
-  debugLogs: DebugLog[]
-): Promise<unknown> {
-  console.log(`[${reqId}] Calling MCP tool: ${toolName}`);
-  debugLogs.push({ 
-    timestamp: new Date().toISOString(), 
-    type: 'mcp_request', 
-    data: { tool: toolName, args } 
-  });
-
-  const response = await mcpRequest(
-    conn.messageEndpoint,
-    conn.sseUrl,
-    conn.headers,
-    "tools/call",
-    { name: toolName, arguments: args },
-    reqId,
-    debugLogs
-  );
-
-  if (response.error) {
-    throw new Error(response.error.message || JSON.stringify(response.error));
+    if (result.error) {
+      throw new Error(result.error.message || JSON.stringify(result.error));
+    }
+    
+    return result.result;
   }
 
-  // Extract text content from result
-  const content = (response.result?.content || [])
-    .filter((c: any) => c.type === 'text')
-    .map((c: any) => c.text)
-    .join('\n');
+  async initialize(reqId: string): Promise<void> {
+    console.log(`[${reqId}] MCP: Initializing...`);
+    
+    await this.sendRequest("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      clientInfo: { name: "lovable-cfo", version: "1.0.0" }
+    }, reqId);
 
-  debugLogs.push({ 
-    timestamp: new Date().toISOString(), 
-    type: 'mcp_response', 
-    data: { tool: toolName, contentLength: content.length } 
-  });
+    if (this.sessionUrl) {
+      await fetch(this.sessionUrl, {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+          params: {},
+        }),
+      });
+    }
+    
+    console.log(`[${reqId}] MCP: Initialized`);
+  }
 
-  // Try to parse as JSON
-  try {
-    return JSON.parse(content);
-  } catch {
-    return content;
+  async listTools(reqId: string): Promise<Array<{ name: string; description: string; inputSchema: unknown }>> {
+    const result = await this.sendRequest("tools/list", {}, reqId) as { tools: Array<{ name: string; description: string; inputSchema: unknown }> };
+    const tools = result.tools || [];
+    console.log(`[${reqId}] MCP: Got ${tools.length} tools`);
+    return tools;
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, reqId: string): Promise<string> {
+    console.log(`[${reqId}] MCP: Calling tool ${name}`);
+    
+    const result = await this.sendRequest("tools/call", { name, arguments: args }, reqId) as { 
+      content: Array<{ type: string; text?: string }> 
+    };
+    
+    const textContent = result.content
+      ?.filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("\n") || JSON.stringify(result);
+    
+    console.log(`[${reqId}] MCP: Tool ${name} returned ${textContent.length} chars`);
+    return textContent;
   }
 }
 
 // Call Anthropic API
 async function callAnthropic(
-  config: LLMConfig, 
-  system: string, 
-  messages: any[], 
-  tools: AnthropicTool[], 
+  config: LLMConfig,
+  system: string,
+  messages: any[],
+  tools: AnthropicTool[],
   reqId: string
 ): Promise<any> {
-  const endpoint = config.provider === "azure-anthropic" 
+  const endpoint = config.provider === "azure-anthropic"
     ? `${config.endpoint || "https://cursor-api-west-us-resource.openai.azure.com/anthropic"}/v1/messages`
     : "https://api.anthropic.com/v1/messages";
 
@@ -356,7 +184,7 @@ async function callAnthropic(
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: config.max_tokens,
+      max_tokens: config.max_tokens || 4096,
       system,
       messages,
       tools: tools.length > 0 ? tools : undefined,
@@ -365,8 +193,8 @@ async function callAnthropic(
 
   if (!res.ok) {
     const err = await res.text();
-    console.error(`[${reqId}] Anthropic error:`, err);
-    throw new Error(`Anthropic API error: ${res.status} - ${err}`);
+    console.error(`[${reqId}] Anthropic error: ${res.status} - ${err}`);
+    throw new Error(`Anthropic API error: ${res.status}`);
   }
 
   return res.json();
@@ -374,6 +202,7 @@ async function callAnthropic(
 
 serve(async (req) => {
   const reqId = crypto.randomUUID().slice(0, 8);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -405,94 +234,105 @@ serve(async (req) => {
       .single();
     
     if (llmError || !llmConfig?.api_key) {
-      throw new Error("LLM not configured - please set up an LLM provider with API key");
+      throw new Error("LLM not configured");
     }
 
-    // Connect to MCP
-    const mcp = await connectMCP(reqId, debugLogs);
-    
-    if (!mcp) {
-      console.log(`[${reqId}] MCP not available, proceeding without tools`);
+    // Get MCP credentials
+    const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
+    const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
+    const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+
+    let mcpClient: MCPClient | null = null;
+    let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
+
+    if (authToken && entityId && orgId) {
+      try {
+        mcpClient = new MCPClient("https://mcp.hellobooks.ai", {
+          "Authorization": `Bearer ${authToken}`,
+          "X-Entity-Id": entityId,
+          "X-Org-Id": orgId,
+        });
+
+        await mcpClient.connect(reqId);
+        await mcpClient.initialize(reqId);
+        mcpTools = await mcpClient.listTools(reqId);
+
+        debugLogs.push({ 
+          timestamp: new Date().toISOString(), 
+          type: 'mcp_tools', 
+          data: { count: mcpTools.length, tools: mcpTools.map(t => t.name) } 
+        });
+      } catch (error) {
+        console.error(`[${reqId}] MCP connection failed:`, error);
+        debugLogs.push({ 
+          timestamp: new Date().toISOString(), 
+          type: 'error', 
+          data: { phase: 'mcp_connection', error: String(error) } 
+        });
+        mcpClient = null;
+      }
+    } else {
+      console.log(`[${reqId}] MCP credentials not configured`);
     }
 
-    // Build tools list
+    // Build tools
     const activeIntents = (intents || []).filter((i: any) => i.isActive);
     
     const matchIntentTool: AnthropicTool = {
       name: "match_intent",
-      description: "Match the user's query to the most appropriate intent. Call this FIRST before any other tools.",
+      description: "Match the user's query to the most appropriate intent. Call this FIRST.",
       input_schema: {
         type: "object",
         properties: {
-          intent_name: { 
-            type: "string", 
-            description: "The exact name of the matched intent from the available list" 
-          },
-          confidence: { 
-            type: "number", 
-            description: "Confidence score from 0.0 to 1.0" 
-          },
-          reasoning: { 
-            type: "string",
-            description: "Brief explanation of why this intent was matched"
-          },
-          extracted_entities: { 
-            type: "object",
-            description: "Any entities extracted from the query (dates, amounts, names, etc.)"
-          }
+          intent_name: { type: "string", description: "Exact intent name from available list" },
+          confidence: { type: "number", description: "0.0 to 1.0" },
+          reasoning: { type: "string", description: "Why this intent was matched" },
+          extracted_entities: { type: "object", description: "Extracted entities" }
         },
         required: ["intent_name", "confidence", "reasoning"]
       }
     };
 
-    const mcpTools: AnthropicTool[] = (mcp?.tools || []).map(t => ({
+    const anthropicMcpTools: AnthropicTool[] = mcpTools.map(t => ({
       name: t.name,
       description: t.description || "",
-      input_schema: t.inputSchema,
+      input_schema: t.inputSchema as Record<string, unknown>,
     }));
 
-    const allTools = [matchIntentTool, ...mcpTools];
+    const allTools = [matchIntentTool, ...anthropicMcpTools];
 
-    // Build system prompt
+    // System prompt
     const intentList = activeIntents.map((i: any, idx: number) => {
       const phrases = (i.trainingPhrases || []).slice(0, 5).join('; ');
-      return `${idx + 1}. "${i.name}"\n   Description: ${i.description || 'N/A'}\n   Examples: ${phrases}`;
+      return `${idx + 1}. "${i.name}" - ${i.description || ''}\n   Examples: ${phrases}`;
     }).join('\n');
 
     const mcpToolList = mcpTools.map(t => `- ${t.name}: ${t.description}`).join('\n');
 
-    const system = `You are a CFO Query Resolution Engine. Your job is to understand financial queries and retrieve data.
+    const systemPrompt = `You are a CFO Query Resolution Engine.
 
 WORKFLOW:
-1. FIRST: Call match_intent to identify which intent matches the user's query
-2. THEN: Use MCP tools to retrieve the actual data needed to answer the query
-3. FINALLY: Present the results clearly to the user
+1. Call match_intent FIRST to identify the intent
+2. Use MCP tools to retrieve actual data
+3. Present results clearly
 
 AVAILABLE INTENTS:
-${intentList || 'No intents configured'}
+${intentList || 'None configured'}
 
-INTENT MATCHING RULES:
-- Match based on SEMANTIC meaning, not just keywords
-- "give me top 10 vendors" should match vendor-related intents, NOT invoice intents
-- "what is my cash balance" should match cash/balance intents
-- Use the training phrase examples as guidance
-- If no intent matches well (confidence < 0.5), still try to help using available MCP tools
+INTENT MATCHING:
+- Match by SEMANTIC meaning
+- "give me top 10 vendors" matches vendor intents, not invoice intents
 
-AVAILABLE MCP TOOLS:
-${mcpToolList || 'No MCP tools available'}
+AVAILABLE MCP TOOLS (${mcpTools.length} tools):
+${mcpToolList || 'None available'}
 
-IMPORTANT:
-- You MUST call MCP tools to get real data - do not make up or hallucinate data
-- If MCP tools are not available, explain that you cannot retrieve the data
-- Present results in a clear, formatted way
+IMPORTANT: Use MCP tools to get REAL data. Do not make up data.
 
-Business Context:
-- Country: ${businessContext?.country || 'IN'}
-- Currency: ${businessContext?.currency || 'INR'}`;
+Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'INR'}`;
 
-    // Run the conversation loop
+    // Chat
     const messages: any[] = [{ role: "user", content: query }];
-    let response = await callAnthropic(llmConfig, system, messages, allTools, reqId);
+    let response = await callAnthropic(llmConfig, systemPrompt, messages, allTools, reqId);
 
     let matchedIntent: any = null;
     let extractedEntities: Record<string, unknown> = {};
@@ -502,117 +342,85 @@ Business Context:
     let outputTokens = response.usage?.output_tokens || 0;
     let iterations = 0;
 
-    // Process tool calls
+    // Handle tool calls
     while (response.stop_reason === "tool_use" && iterations < 10) {
       iterations++;
-      const toolUseBlocks = response.content.filter((b: any) => b.type === "tool_use");
       
-      if (toolUseBlocks.length === 0) break;
+      const toolUse = response.content.find((b: any) => b.type === "tool_use");
+      if (!toolUse) break;
 
-      const toolResults: any[] = [];
+      console.log(`[${reqId}] Tool: ${toolUse.name}`);
+      let result: string;
+      let isError = false;
 
-      for (const toolUse of toolUseBlocks) {
-        console.log(`[${reqId}] Tool call: ${toolUse.name}`);
+      if (toolUse.name === "match_intent") {
+        const input = toolUse.input as any;
+        reasoning = input.reasoning || "";
+        extractedEntities = input.extracted_entities || {};
         
-        let result: string;
-        let isError = false;
+        const found = activeIntents.find((i: any) => {
+          const intentLower = i.name.toLowerCase();
+          const inputLower = (input.intent_name || "").toLowerCase();
+          return intentLower === inputLower ||
+                 intentLower.includes(inputLower) ||
+                 inputLower.includes(intentLower);
+        });
 
-        if (toolUse.name === "match_intent") {
-          const input = toolUse.input as any;
-          reasoning = input.reasoning || "";
-          extractedEntities = input.extracted_entities || {};
-          
-          // Find matching intent (flexible matching)
-          const found = activeIntents.find((i: any) => {
-            const intentLower = i.name.toLowerCase();
-            const inputLower = (input.intent_name || "").toLowerCase();
-            return intentLower === inputLower ||
-                   intentLower.includes(inputLower) ||
-                   inputLower.includes(intentLower);
+        if (found) {
+          matchedIntent = { 
+            id: found.id, 
+            name: found.name, 
+            moduleId: found.moduleId, 
+            confidence: input.confidence 
+          };
+          result = JSON.stringify({ success: true, matched: found.name });
+          debugLogs.push({ 
+            timestamp: new Date().toISOString(), 
+            type: 'intent_match', 
+            data: { matched: found.name, confidence: input.confidence } 
           });
-
-          if (found) {
-            matchedIntent = { 
-              id: found.id, 
-              name: found.name, 
-              moduleId: found.moduleId, 
-              confidence: input.confidence 
-            };
-            result = JSON.stringify({ 
-              success: true, 
-              matched_intent: found.name,
-              message: "Intent matched successfully. Now use MCP tools to get the data."
-            });
-            debugLogs.push({ 
-              timestamp: new Date().toISOString(), 
-              type: 'intent_match', 
-              data: { 
-                matched: found.name, 
-                confidence: input.confidence,
-                reasoning: input.reasoning 
-              } 
-            });
-          } else {
-            result = JSON.stringify({ 
-              error: `Intent not found: "${input.intent_name}"`, 
-              available_intents: activeIntents.map((i: any) => i.name),
-              suggestion: "Try matching to one of the available intents listed above"
-            });
-            isError = true;
-          }
-        } else if (mcp) {
-          // Call MCP tool
-          try {
-            const mcpResult = await callMCPTool(mcp, toolUse.name, toolUse.input || {}, reqId, debugLogs);
-            mcpResults.push({ 
-              tool: toolUse.name, 
-              input: toolUse.input, 
-              result: mcpResult, 
-              success: true 
-            });
-            result = typeof mcpResult === 'string' ? mcpResult : JSON.stringify(mcpResult);
-          } catch (error) {
-            console.error(`[${reqId}] MCP tool error:`, error);
-            mcpResults.push({ 
-              tool: toolUse.name, 
-              input: toolUse.input,
-              error: String(error), 
-              success: false 
-            });
-            result = JSON.stringify({ error: String(error) });
-            isError = true;
-          }
         } else {
           result = JSON.stringify({ 
-            error: "MCP tools are not available. Cannot retrieve data.",
-            suggestion: "Please check MCP connection settings"
+            error: `Not found: ${input.intent_name}`, 
+            available: activeIntents.map((i: any) => i.name) 
           });
           isError = true;
         }
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: result,
-          is_error: isError
-        });
+      } else if (mcpClient) {
+        try {
+          const mcpResult = await mcpClient.callTool(toolUse.name, toolUse.input || {}, reqId);
+          mcpResults.push({ tool: toolUse.name, input: toolUse.input, result: mcpResult, success: true });
+          result = mcpResult;
+          
+          debugLogs.push({ 
+            timestamp: new Date().toISOString(), 
+            type: 'mcp_response', 
+            data: { tool: toolUse.name, length: mcpResult.length } 
+          });
+        } catch (error) {
+          console.error(`[${reqId}] MCP tool error:`, error);
+          mcpResults.push({ tool: toolUse.name, error: String(error), success: false });
+          result = JSON.stringify({ error: String(error) });
+          isError = true;
+        }
+      } else {
+        result = JSON.stringify({ error: "MCP not connected" });
+        isError = true;
       }
 
-      // Add assistant response and tool results to messages
+      // Continue conversation
       messages.push({ role: "assistant", content: response.content });
-      messages.push({ role: "user", content: toolResults });
+      messages.push({
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: toolUse.id, content: result, is_error: isError }],
+      });
 
-      // Get next response
-      response = await callAnthropic(llmConfig, system, messages, allTools, reqId);
+      response = await callAnthropic(llmConfig, systemPrompt, messages, allTools, reqId);
       inputTokens += response.usage?.input_tokens || 0;
       outputTokens += response.usage?.output_tokens || 0;
     }
 
-    // Extract final text response
-    const finalText = response.content
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("\n");
+    const textBlock = response.content.find((b: any) => b.type === "text");
 
     const output: any = {
       query,
@@ -620,36 +428,24 @@ Business Context:
       matchedIntent,
       extractedEntities,
       reasoning,
-      response: finalText,
+      response: textBlock?.text || "",
       mcpToolResults: mcpResults.length > 0 ? mcpResults : undefined,
       dataSources: mcpResults.filter(r => r.success).map(r => r.tool),
       llmModel: `${llmConfig.provider}/${llmConfig.model}`,
       iterationCount: iterations,
-      usage: { 
-        input_tokens: inputTokens, 
-        output_tokens: outputTokens, 
-        total_tokens: inputTokens + outputTokens 
-      }
+      usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens }
     };
 
-    if (debug) {
-      output.debugLogs = debugLogs;
-    }
+    if (debug) output.debugLogs = debugLogs;
 
-    console.log(`[${reqId}] Done. Intent: ${matchedIntent?.name || 'None'}, Iterations: ${iterations}`);
+    console.log(`[${reqId}] Done. Intent: ${matchedIntent?.name || 'None'}, Iterations: ${iterations}, MCP: ${mcpTools.length} tools`);
     
-    return new Response(
-      JSON.stringify(output), 
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify(output), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error) {
     console.error(`[${reqId}] Error:`, error);
     return new Response(
-      JSON.stringify({ 
-        error: String(error), 
-        debugLogs: debugLogs.length > 0 ? debugLogs : undefined 
-      }), 
+      JSON.stringify({ error: String(error), debugLogs }), 
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
