@@ -1713,24 +1713,185 @@ function TestTab({
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const sampleQueries = intent.trainingPhrases.slice(0, 3);
+
+  // Extract entities from query based on intent entity definitions
+  const extractEntities = (testQuery: string, entities: Entity[]): Record<string, any> => {
+    const extracted: Record<string, any> = {};
+    
+    entities.forEach(entity => {
+      // Try to extract entity values from query
+      const entityPlaceholder = `{{${entity.name}}}`;
+      
+      // Find if any training phrase contains this entity and try to match pattern
+      for (const phrase of intent.trainingPhrases) {
+        if (phrase.includes(entityPlaceholder)) {
+          // Simple extraction: look for numbers, dates, or known patterns
+          if (entity.type === 'number' || entity.type === 'amount') {
+            const numberMatch = testQuery.match(/\b(\d+(?:\.\d+)?)\b/);
+            if (numberMatch) {
+              extracted[entity.name] = parseFloat(numberMatch[1]);
+            }
+          } else if (entity.type === 'period') {
+            const periodPatterns = ['MTD', 'QTD', 'YTD', '7d', '30d', '90d', 'week', 'month', 'quarter', 'year'];
+            for (const period of periodPatterns) {
+              if (testQuery.toLowerCase().includes(period.toLowerCase())) {
+                extracted[entity.name] = period;
+                break;
+              }
+            }
+          } else if (entity.type === 'date_range') {
+            const dateMatch = testQuery.match(/(\w+\s+\d{4})\s*(?:to|-)\s*(\w+\s+\d{4})/i);
+            if (dateMatch) {
+              extracted[entity.name] = { start: dateMatch[1], end: dateMatch[2] };
+            }
+          }
+          break;
+        }
+      }
+      
+      // Apply default value if not extracted and has default
+      if (extracted[entity.name] === undefined && entity.defaultValue) {
+        extracted[entity.name] = entity.defaultValue;
+      }
+    });
+    
+    return extracted;
+  };
+
+  // Calculate match confidence based on training phrases similarity
+  const calculateConfidence = (testQuery: string): number => {
+    const queryWords = testQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    let bestMatch = 0;
+    
+    for (const phrase of intent.trainingPhrases) {
+      // Remove entity placeholders for comparison
+      const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
+      const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
+      
+      // Count matching words
+      const matchingWords = queryWords.filter(qw => 
+        phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
+      );
+      
+      const similarity = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
+      bestMatch = Math.max(bestMatch, similarity);
+    }
+    
+    return Math.min(0.98, Math.max(0.5, bestMatch * 0.9 + 0.1));
+  };
+
+  // Process pipeline nodes
+  const processPipeline = (pipeline: PipelineNode[], entities: Record<string, any>): Record<string, any> => {
+    const pipelineResults: Record<string, any> = {};
+    
+    pipeline.forEach(node => {
+      if (node.nodeType === 'api_call') {
+        // Simulate API call result
+        pipelineResults[node.outputVariable] = {
+          status: 'success',
+          tool: node.mcpTool,
+          params: node.parameters,
+          data: `[Simulated data from ${node.mcpTool}]`
+        };
+      } else if (node.nodeType === 'computation') {
+        pipelineResults[node.outputVariable] = {
+          formula: node.formula,
+          result: '[Computed value]'
+        };
+      } else if (node.nodeType === 'conditional') {
+        pipelineResults[node.outputVariable] = {
+          condition: node.condition,
+          result: true
+        };
+      }
+    });
+    
+    return pipelineResults;
+  };
+
+  // Process enrichments
+  const processEnrichments = (enrichments: Enrichment[]): Record<string, any> => {
+    const enrichmentResults: Record<string, any> = {};
+    
+    enrichments.forEach(enrichment => {
+      enrichmentResults[enrichment.type] = {
+        applied: true,
+        config: enrichment.config,
+        result: `[${enrichment.type} analysis applied]`
+      };
+    });
+    
+    return enrichmentResults;
+  };
+
+  // Generate response from template
+  const generateResponse = (template: string, data: Record<string, any>): string => {
+    if (!template) return 'No response template configured';
+    
+    let response = template;
+    
+    // Replace simple variables {variableName}
+    response = response.replace(/\{(\w+)(?:\s*\|\s*\w+(?::\d+)?)?\}/g, (match, varName) => {
+      return data[varName] !== undefined ? String(data[varName]) : `[${varName}]`;
+    });
+    
+    // Handle conditionals {#if condition}...{/if}
+    response = response.replace(/\{#if\s+[^}]+\}[\s\S]*?\{\/if\}/g, '[Conditional content]');
+    
+    // Handle loops {#each items}...{/each}
+    response = response.replace(/\{#each\s+[^}]+\}[\s\S]*?\{\/each\}/g, '[Loop content]');
+    
+    return response;
+  };
 
   const runTest = async (testQuery: string) => {
     setIsRunning(true);
     setQuery(testQuery);
+    setError(null);
     
-    // Simulate test execution
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const startTime = Date.now();
     
-    setResult({
-      matchedIntent: { name: intent.name, confidence: 0.94 },
-      entities: { limit: 3 },
-      executionTime: '1.24s',
-      response: intent.resolutionFlow?.responseConfig?.template || 'No response template configured'
-    });
-    
-    setIsRunning(false);
+    try {
+      // Step 1: Extract entities
+      const extractedEntities = extractEntities(testQuery, intent.entities);
+      
+      // Step 2: Calculate match confidence
+      const confidence = calculateConfidence(testQuery);
+      
+      // Step 3: Process pipeline
+      const pipeline = intent.resolutionFlow?.dataPipeline || [];
+      const pipelineResults = processPipeline(pipeline, extractedEntities);
+      
+      // Step 4: Process enrichments
+      const enrichments = intent.resolutionFlow?.enrichments || [];
+      const enrichmentResults = processEnrichments(enrichments);
+      
+      // Step 5: Generate response
+      const responseTemplate = intent.resolutionFlow?.responseConfig?.template || '';
+      const allData = { ...extractedEntities, ...pipelineResults, ...enrichmentResults };
+      const responsePreview = generateResponse(responseTemplate, allData);
+      
+      const executionTime = Date.now() - startTime;
+      
+      setResult({
+        matchedIntent: { name: intent.name, confidence },
+        entities: extractedEntities,
+        pipelineSteps: pipeline.length,
+        pipelineResults,
+        enrichmentsApplied: enrichments.length,
+        enrichmentResults,
+        executionTime: `${(executionTime / 1000).toFixed(2)}s`,
+        response: responsePreview,
+        followUpQuestions: intent.resolutionFlow?.responseConfig?.followUpQuestions || []
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Test execution failed');
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   return (
@@ -1793,6 +1954,19 @@ function TestTab({
         </div>
       </div>
 
+      {/* Error Display */}
+      {error && (
+        <div className="border border-red-200 rounded-lg overflow-hidden bg-red-50">
+          <div className="px-4 py-3 flex items-center gap-2">
+            <AlertCircle size={16} className="text-red-600" />
+            <span className="font-medium text-red-700">Test Failed</span>
+          </div>
+          <div className="px-4 pb-4">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        </div>
+      )}
+
       {/* Results */}
       {result && (
         <div className="border rounded-lg overflow-hidden">
@@ -1802,20 +1976,92 @@ function TestTab({
             <span className="text-sm text-green-600 ml-auto">⏱️ {result.executionTime}</span>
           </div>
           <div className="p-4 space-y-4">
+            {/* Matched Intent */}
             <div>
               <div className="text-xs text-gray-500 mb-1">Matched Intent</div>
-              <div className="font-medium">{result.matchedIntent.name} ({Math.round(result.matchedIntent.confidence * 100)}%)</div>
+              <div className="font-medium">
+                {result.matchedIntent.name}
+                <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                  result.matchedIntent.confidence >= 0.8 ? 'bg-green-100 text-green-700' :
+                  result.matchedIntent.confidence >= 0.6 ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {Math.round(result.matchedIntent.confidence * 100)}% confidence
+                </span>
+              </div>
             </div>
+            
+            {/* Extracted Entities */}
             {Object.keys(result.entities).length > 0 && (
               <div>
                 <div className="text-xs text-gray-500 mb-1">Extracted Entities</div>
-                <code className="text-sm bg-gray-100 px-2 py-1 rounded">{JSON.stringify(result.entities)}</code>
+                <div className="bg-gray-50 p-3 rounded-lg">
+                  {Object.entries(result.entities).map(([key, value]) => (
+                    <div key={key} className="flex items-center gap-2 text-sm">
+                      <span className="font-mono text-purple-600">{key}:</span>
+                      <span className="font-mono text-gray-700">{JSON.stringify(value)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+            
+            {/* Pipeline Execution */}
+            {result.pipelineSteps > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Pipeline Execution ({result.pipelineSteps} steps)</div>
+                <div className="bg-blue-50 p-3 rounded-lg space-y-2">
+                  {Object.entries(result.pipelineResults).map(([key, value]: [string, any]) => (
+                    <div key={key} className="text-sm">
+                      <span className="font-mono text-blue-600">{key}:</span>
+                      <span className="ml-2 text-gray-600">
+                        {value.tool ? `Called @${value.tool}` : value.formula ? `Computed: ${value.formula}` : 'Evaluated'}
+                      </span>
+                      <Check size={12} className="inline ml-2 text-green-500" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* Enrichments */}
+            {result.enrichmentsApplied > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Enrichments Applied ({result.enrichmentsApplied})</div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.keys(result.enrichmentResults).map(type => (
+                    <span key={type} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs flex items-center gap-1">
+                      <Sparkles size={10} />
+                      {type}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* Response Preview */}
             <div>
               <div className="text-xs text-gray-500 mb-1">Response Preview</div>
-              <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap">{result.response}</pre>
+              <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap border">{result.response}</pre>
             </div>
+            
+            {/* Follow-up Questions */}
+            {result.followUpQuestions && result.followUpQuestions.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Follow-up Questions</div>
+                <div className="space-y-1">
+                  {result.followUpQuestions.map((q: string, i: number) => (
+                    <button
+                      key={i}
+                      onClick={() => runTest(q)}
+                      className="block w-full text-left px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 rounded border transition-colors"
+                    >
+                      💬 {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3113,109 +3359,350 @@ function TestConsoleView({
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [testHistory, setTestHistory] = useState<any[]>([]);
+
+  // Find best matching intent using word similarity
+  const findMatchingIntent = (testQuery: string): { intent: Intent | null; confidence: number } => {
+    const queryWords = testQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    let bestMatch: Intent | null = null;
+    let bestScore = 0;
+
+    for (const intent of intents) {
+      if (!intent.isActive) continue;
+      
+      for (const phrase of intent.trainingPhrases) {
+        // Remove entity placeholders for comparison
+        const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
+        const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
+        
+        // Calculate word overlap score
+        const matchingWords = queryWords.filter(qw => 
+          phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
+        );
+        
+        const score = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = intent;
+        }
+      }
+      
+      // Also check intent name and description
+      const intentNameWords = intent.name.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const nameMatches = queryWords.filter(qw => 
+        intentNameWords.some(iw => iw.includes(qw) || qw.includes(iw))
+      );
+      const nameScore = nameMatches.length / Math.max(queryWords.length, intentNameWords.length, 1) * 0.7;
+      
+      if (nameScore > bestScore) {
+        bestScore = nameScore;
+        bestMatch = intent;
+      }
+    }
+
+    return {
+      intent: bestScore > 0.2 ? bestMatch : null,
+      confidence: Math.min(0.98, bestScore * 0.9 + 0.1)
+    };
+  };
+
+  // Extract entities from query
+  const extractEntities = (testQuery: string, entities: Entity[]): Record<string, any> => {
+    const extracted: Record<string, any> = {};
+    
+    entities.forEach(entity => {
+      if (entity.type === 'number' || entity.type === 'amount') {
+        const numberMatch = testQuery.match(/\b(\d+(?:\.\d+)?)\b/);
+        if (numberMatch) {
+          extracted[entity.name] = parseFloat(numberMatch[1]);
+        }
+      } else if (entity.type === 'period') {
+        const periodPatterns = ['MTD', 'QTD', 'YTD', '7d', '30d', '90d', 'week', 'month', 'quarter', 'year'];
+        for (const period of periodPatterns) {
+          if (testQuery.toLowerCase().includes(period.toLowerCase())) {
+            extracted[entity.name] = period;
+            break;
+          }
+        }
+      } else if (entity.type === 'date_range') {
+        const dateMatch = testQuery.match(/(\w+\s+\d{4})\s*(?:to|-)\s*(\w+\s+\d{4})/i);
+        if (dateMatch) {
+          extracted[entity.name] = { start: dateMatch[1], end: dateMatch[2] };
+        }
+      }
+      
+      // Apply default value if not extracted
+      if (extracted[entity.name] === undefined && entity.defaultValue) {
+        extracted[entity.name] = entity.defaultValue;
+      }
+    });
+    
+    return extracted;
+  };
 
   const runTest = async () => {
     if (!query.trim()) return;
     
     setIsRunning(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const startTime = Date.now();
     
-    // Find matching intent (simple simulation)
-    const matchedIntent = intents.find(i => 
-      i.trainingPhrases.some(p => 
-        p.toLowerCase().includes(query.toLowerCase().split(' ')[0])
-      )
-    );
+    // Find matching intent
+    const { intent: matchedIntent, confidence } = findMatchingIntent(query);
     
-    setResult({
+    let testResult: any = {
       query,
-      matchedIntent: matchedIntent ? {
-        name: matchedIntent.name,
-        confidence: 0.85 + Math.random() * 0.1
-      } : null,
-      executionTime: `${(Math.random() * 1.5 + 0.5).toFixed(2)}s`
-    });
+      timestamp: new Date().toISOString(),
+      executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`
+    };
+
+    if (matchedIntent) {
+      const extractedEntities = extractEntities(query, matchedIntent.entities);
+      const pipeline = matchedIntent.resolutionFlow?.dataPipeline || [];
+      const enrichments = matchedIntent.resolutionFlow?.enrichments || [];
+      const responseTemplate = matchedIntent.resolutionFlow?.responseConfig?.template || 'No response template configured';
+      
+      testResult = {
+        ...testResult,
+        matchedIntent: {
+          id: matchedIntent.id,
+          name: matchedIntent.name,
+          module: matchedIntent.moduleId,
+          confidence
+        },
+        entities: extractedEntities,
+        pipelineSteps: pipeline.length,
+        enrichmentsCount: enrichments.length,
+        response: responseTemplate,
+        followUpQuestions: matchedIntent.resolutionFlow?.responseConfig?.followUpQuestions || []
+      };
+    } else {
+      testResult.matchedIntent = null;
+    }
     
+    testResult.executionTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
+    
+    setResult(testResult);
+    setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
     setIsRunning(false);
   };
 
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold text-gray-900 mb-2">Test Console</h1>
-      <p className="text-gray-500 mb-6">Test queries and view AI decisions</p>
+      <p className="text-gray-500 mb-6">Test queries against all active intents and view AI matching decisions</p>
 
-      <div className="max-w-3xl space-y-6">
-        {/* Query Input */}
-        <div className="bg-white p-6 rounded-xl border">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Query</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runTest()}
-              placeholder="Enter a test query..."
-              className="flex-1 px-3 py-2 border rounded-lg"
-            />
-            <button
-              onClick={runTest}
-              disabled={isRunning || !query.trim()}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-              Run Test
-            </button>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Main Test Area */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Query Input */}
+          <div className="bg-white p-6 rounded-xl border">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Query</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runTest()}
+                placeholder="Enter a test query..."
+                className="flex-1 px-3 py-2 border rounded-lg"
+              />
+              <button
+                onClick={runTest}
+                disabled={isRunning || !query.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                Run Test
+              </button>
+            </div>
+
+            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+              <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
+              <div className="flex gap-4 text-sm text-gray-600">
+                <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
+                <span>📊 {businessContext.entitySize}</span>
+                <span>🏭 {businessContext.industry}</span>
+                <span>💰 {businessContext.currency}</span>
+              </div>
+            </div>
+            
+            {/* Quick Sample Queries */}
+            <div className="mt-4">
+              <div className="text-xs text-gray-500 mb-2">Sample Queries from Active Intents</div>
+              <div className="flex flex-wrap gap-2">
+                {intents.filter(i => i.isActive).slice(0, 3).flatMap(i => 
+                  i.trainingPhrases.slice(0, 1).map((phrase, idx) => (
+                    <button
+                      key={`${i.id}-${idx}`}
+                      onClick={() => { setQuery(phrase); }}
+                      className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors truncate max-w-[200px]"
+                      title={phrase}
+                    >
+                      {phrase}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
 
-          <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-            <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
-            <div className="flex gap-4 text-sm text-gray-600">
-              <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
-              <span>📊 {businessContext.entitySize}</span>
-              <span>🏭 {businessContext.industry}</span>
-              <span>💰 {businessContext.currency}</span>
+          {/* Results */}
+          {result && (
+            <div className="bg-white rounded-xl border overflow-hidden">
+              <div className={`px-4 py-3 border-b flex items-center gap-2 ${
+                result.matchedIntent ? 'bg-green-50' : 'bg-amber-50'
+              }`}>
+                {result.matchedIntent ? (
+                  <>
+                    <Check size={16} className="text-green-600" />
+                    <span className="font-medium text-green-700">Intent Matched</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle size={16} className="text-amber-600" />
+                    <span className="font-medium text-amber-700">No Intent Match</span>
+                  </>
+                )}
+                <span className="text-sm ml-auto">⏱️ {result.executionTime}</span>
+              </div>
+              <div className="p-4 space-y-4">
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Query</div>
+                  <div className="font-medium">{result.query}</div>
+                </div>
+                
+                {result.matchedIntent && (
+                  <>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Matched Intent</div>
+                      <div className="font-medium">
+                        {result.matchedIntent.name}
+                        <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                          result.matchedIntent.confidence >= 0.7 ? 'bg-green-100 text-green-700' :
+                          result.matchedIntent.confidence >= 0.5 ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-red-100 text-red-700'
+                        }`}>
+                          {Math.round(result.matchedIntent.confidence * 100)}% confidence
+                        </span>
+                        <span className="ml-2 text-xs text-gray-500">({result.matchedIntent.module})</span>
+                      </div>
+                    </div>
+                    
+                    {Object.keys(result.entities || {}).length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Extracted Entities</div>
+                        <div className="bg-gray-50 p-2 rounded">
+                          {Object.entries(result.entities).map(([key, value]) => (
+                            <div key={key} className="flex items-center gap-2 text-sm">
+                              <span className="font-mono text-purple-600">{key}:</span>
+                              <span className="font-mono text-gray-700">{JSON.stringify(value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="flex gap-4 text-sm">
+                      <div className="flex items-center gap-1">
+                        <GitBranch size={14} className="text-blue-500" />
+                        <span>{result.pipelineSteps || 0} pipeline steps</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Sparkles size={14} className="text-purple-500" />
+                        <span>{result.enrichmentsCount || 0} enrichments</span>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Response Preview</div>
+                      <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap border max-h-48">{result.response}</pre>
+                    </div>
+                    
+                    {result.followUpQuestions && result.followUpQuestions.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Follow-up Questions</div>
+                        <div className="space-y-1">
+                          {result.followUpQuestions.map((q: string, i: number) => (
+                            <button
+                              key={i}
+                              onClick={() => setQuery(q)}
+                              className="block w-full text-left px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 rounded border transition-colors"
+                            >
+                              💬 {q}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                
+                {!result.matchedIntent && (
+                  <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
+                    <p className="font-medium mb-1">💡 Suggestions:</p>
+                    <ul className="list-disc list-inside space-y-1 text-amber-700">
+                      <li>Check if an intent exists for this type of query</li>
+                      <li>Add more training phrases to existing intents</li>
+                      <li>Create a new intent to handle this query type</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {/* Test History Sidebar */}
+        <div className="lg:col-span-1">
+          <div className="bg-white rounded-xl border p-4">
+            <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <FlaskConical size={16} />
+              Test History
+            </h3>
+            {testHistory.length === 0 ? (
+              <p className="text-sm text-gray-500">No tests run yet</p>
+            ) : (
+              <div className="space-y-2">
+                {testHistory.map((test, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setQuery(test.query)}
+                    className="w-full text-left p-2 rounded-lg hover:bg-gray-50 transition-colors border"
+                  >
+                    <div className="flex items-center gap-2">
+                      {test.matchedIntent ? (
+                        <Check size={12} className="text-green-500" />
+                      ) : (
+                        <AlertCircle size={12} className="text-amber-500" />
+                      )}
+                      <span className="text-sm truncate flex-1">{test.query}</span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {test.matchedIntent ? test.matchedIntent.name : 'No match'} • {test.executionTime}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          {/* Active Intents Summary */}
+          <div className="bg-white rounded-xl border p-4 mt-4">
+            <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <Database size={16} />
+              Active Intents ({intents.filter(i => i.isActive).length})
+            </h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {intents.filter(i => i.isActive).map(intent => (
+                <div key={intent.id} className="text-sm p-2 bg-gray-50 rounded">
+                  <div className="font-medium truncate">{intent.name}</div>
+                  <div className="text-xs text-gray-500">{intent.trainingPhrases.length} phrases</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
-
-        {/* Results */}
-        {result && (
-          <div className="bg-white rounded-xl border overflow-hidden">
-            <div className={`px-4 py-3 border-b flex items-center gap-2 ${
-              result.matchedIntent ? 'bg-green-50' : 'bg-amber-50'
-            }`}>
-              {result.matchedIntent ? (
-                <>
-                  <Check size={16} className="text-green-600" />
-                  <span className="font-medium text-green-700">Intent Matched</span>
-                </>
-              ) : (
-                <>
-                  <AlertCircle size={16} className="text-amber-600" />
-                  <span className="font-medium text-amber-700">No Intent Match</span>
-                </>
-              )}
-              <span className="text-sm ml-auto">⏱️ {result.executionTime}</span>
-            </div>
-            <div className="p-4">
-              <div className="mb-4">
-                <div className="text-xs text-gray-500 mb-1">Query</div>
-                <div className="font-medium">{result.query}</div>
-              </div>
-              {result.matchedIntent && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-1">Matched Intent</div>
-                  <div className="font-medium">
-                    {result.matchedIntent.name}
-                    <span className="ml-2 text-sm text-gray-500">
-                      ({Math.round(result.matchedIntent.confidence * 100)}% confidence)
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -3601,7 +4088,7 @@ export default function CFOQueryResolutionEngine() {
         };
         const generated = await generateIntentConfig(tempIntent);
         await updateIntent(created.id, generated);
-        setSelectedIntentId(created.id);
+        // Don't auto-open intent after generation - stay on the list view
       } finally {
         setIsGenerating(null);
       }
