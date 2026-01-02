@@ -1732,7 +1732,7 @@ function ResponseConfigTab({
   const addFollowUp = () => {
     if (newQuestion.trim() && responseConfig) {
       updateResponseConfig({
-        followUpQuestions: [...responseConfig.followUpQuestions, newQuestion.trim()]
+        followUpQuestions: [...(responseConfig.followUpQuestions || []), newQuestion.trim()]
       });
       setNewQuestion('');
     }
@@ -1741,7 +1741,7 @@ function ResponseConfigTab({
   const removeFollowUp = (index: number) => {
     if (responseConfig) {
       updateResponseConfig({
-        followUpQuestions: responseConfig.followUpQuestions.filter((_, i) => i !== index)
+        followUpQuestions: (responseConfig.followUpQuestions || []).filter((_, i) => i !== index)
       });
     }
   };
@@ -1775,7 +1775,7 @@ function ResponseConfigTab({
               onChange={(e) => updateResponseConfig({ type: e.target.value })}
               className="w-full px-3 py-2 border rounded-lg bg-white"
             >
-              {responseTypes.map(t => (
+              {(responseTypes || []).map(t => (
                 <option key={t.id} value={t.id}>{t.name} - {t.description}</option>
               ))}
             </select>
@@ -1798,7 +1798,7 @@ function ResponseConfigTab({
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Follow-up Questions</label>
             <div className="space-y-2 mb-3">
-              {responseConfig.followUpQuestions.map((q, i) => (
+              {(responseConfig.followUpQuestions || []).map((q, i) => (
                 <div key={i} className="flex gap-2">
                   <input
                     type="text"
