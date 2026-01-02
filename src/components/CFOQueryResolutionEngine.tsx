@@ -5040,9 +5040,26 @@ export default function CFOQueryResolutionEngine() {
 
       console.log('✅ AI generation complete!', data);
 
-      // Ensure pipeline nodes have required parameters field
+      // Helper to match generated tool name to actual MCP tool ID
+      const matchMcpTool = (generatedToolName: string): string | undefined => {
+        if (!generatedToolName) return undefined;
+        const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
+        // Exact match first
+        const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
+        if (exactMatch) return exactMatch.id;
+        // Partial match (tool name contains or is contained by generated name)
+        const partialMatch = allMcpTools.find(t => 
+          t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
+        );
+        if (partialMatch) return partialMatch.id;
+        // Return original if no match (user can fix manually)
+        return generatedToolName;
+      };
+
+      // Ensure pipeline nodes have required parameters field and match MCP tools
       const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
         ...node,
+        mcpTool: node.nodeType === 'api_call' ? matchMcpTool(node.mcpTool) : node.mcpTool,
         parameters: node.parameters || []
       }));
 
@@ -5172,8 +5189,22 @@ export default function CFOQueryResolutionEngine() {
       }
       
       if (section === 'pipeline' && data.dataPipeline) {
+        // Helper to match generated tool name to actual MCP tool ID
+        const matchMcpTool = (generatedToolName: string): string | undefined => {
+          if (!generatedToolName) return undefined;
+          const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
+          const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
+          if (exactMatch) return exactMatch.id;
+          const partialMatch = allMcpTools.find(t => 
+            t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
+          );
+          if (partialMatch) return partialMatch.id;
+          return generatedToolName;
+        };
+
         const dataPipeline = data.dataPipeline.map((node: any) => ({
           ...node,
+          mcpTool: node.nodeType === 'api_call' ? matchMcpTool(node.mcpTool) : node.mcpTool,
           parameters: node.parameters || []
         }));
         result.resolutionFlow = {
@@ -5197,8 +5228,22 @@ export default function CFOQueryResolutionEngine() {
       }
       
       if (section === 'all') {
+        // Helper to match generated tool name to actual MCP tool ID
+        const matchMcpToolAll = (generatedToolName: string): string | undefined => {
+          if (!generatedToolName) return undefined;
+          const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
+          const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
+          if (exactMatch) return exactMatch.id;
+          const partialMatch = allMcpTools.find(t => 
+            t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
+          );
+          if (partialMatch) return partialMatch.id;
+          return generatedToolName;
+        };
+
         const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
           ...node,
+          mcpTool: node.nodeType === 'api_call' ? matchMcpToolAll(node.mcpTool) : node.mcpTool,
           parameters: node.parameters || []
         }));
         result.trainingPhrases = data.trainingPhrases || [];
