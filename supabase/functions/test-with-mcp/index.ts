@@ -416,96 +416,108 @@ Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'IN
     let outputTokens = response.usage?.output_tokens || 0;
     let iterations = 0;
 
-    // Handle tool calls - process ONE at a time like working code
+    // Handle tool calls - process ALL tool_use blocks in each response
     while (response.stop_reason === "tool_use" && iterations < 10) {
       iterations++;
       
-      // Find first tool_use block
-      const toolUse = response.content.find((b: any) => b.type === "tool_use");
-      if (!toolUse) break;
+      // Find ALL tool_use blocks - Anthropic requires a tool_result for EACH one
+      const toolUses = response.content.filter((b: any) => b.type === "tool_use");
+      if (toolUses.length === 0) break;
 
-      console.log(`[${reqId}] Tool: ${toolUse.name}`);
-      let result: string;
-      let isError = false;
+      console.log(`[${reqId}] Processing ${toolUses.length} tool call(s)`);
+      
+      // Build tool_result for EACH tool_use
+      const toolResults: any[] = [];
+      
+      for (const toolUse of toolUses) {
+        console.log(`[${reqId}] Tool: ${toolUse.name}`);
+        let result: string;
+        let isError = false;
 
-      if (toolUse.name === "match_intent") {
-        const input = toolUse.input as any;
-        reasoning = input.reasoning || "";
-        extractedEntities = input.extracted_entities || {};
-        
-        const found = activeIntents.find((i: any) => {
-          const intentLower = i.name.toLowerCase();
-          const inputLower = (input.intent_name || "").toLowerCase();
-          return intentLower === inputLower ||
-                 intentLower.includes(inputLower) ||
-                 inputLower.includes(intentLower);
-        });
-
-        if (found) {
-          matchedIntent = { 
-            id: found.id, 
-            name: found.name, 
-            moduleId: found.moduleId, 
-            confidence: input.confidence 
-          };
-          result = JSON.stringify({ success: true, matched: found.name });
-          debugLogs.push({ 
-            timestamp: new Date().toISOString(), 
-            type: 'intent_match', 
-            data: { matched: found.name, confidence: input.confidence } 
+        if (toolUse.name === "match_intent") {
+          const input = toolUse.input as any;
+          reasoning = input.reasoning || "";
+          extractedEntities = input.extracted_entities || {};
+          
+          const found = activeIntents.find((i: any) => {
+            const intentLower = i.name.toLowerCase();
+            const inputLower = (input.intent_name || "").toLowerCase();
+            return intentLower === inputLower ||
+                   intentLower.includes(inputLower) ||
+                   inputLower.includes(intentLower);
           });
+
+          if (found) {
+            matchedIntent = { 
+              id: found.id, 
+              name: found.name, 
+              moduleId: found.moduleId, 
+              confidence: input.confidence 
+            };
+            result = JSON.stringify({ success: true, matched: found.name });
+            debugLogs.push({ 
+              timestamp: new Date().toISOString(), 
+              type: 'intent_match', 
+              data: { matched: found.name, confidence: input.confidence } 
+            });
+          } else {
+            result = JSON.stringify({ 
+              error: `Not found: ${input.intent_name}`, 
+              available: activeIntents.map((i: any) => i.name) 
+            });
+            isError = true;
+          }
+        } else if (mcpClient) {
+          try {
+            debugLogs.push({ 
+              timestamp: new Date().toISOString(), 
+              type: 'mcp_request', 
+              data: { tool: toolUse.name, input: toolUse.input } 
+            });
+
+            const mcpResult = await mcpClient.callTool(toolUse.name, toolUse.input || {});
+            
+            // Truncate large results to prevent token overflow
+            const truncatedResult = truncateResult(mcpResult);
+            console.log(`[${reqId}] MCP result: ${mcpResult.length} chars -> ${truncatedResult.length} chars`);
+            
+            mcpResults.push({ tool: toolUse.name, input: toolUse.input, result: truncatedResult, success: true });
+            result = truncatedResult;
+            
+            debugLogs.push({ 
+              timestamp: new Date().toISOString(), 
+              type: 'mcp_response', 
+              data: { tool: toolUse.name, originalLength: mcpResult.length, truncatedLength: truncatedResult.length } 
+            });
+          } catch (error) {
+            console.error(`[${reqId}] MCP tool error:`, error);
+            mcpResults.push({ tool: toolUse.name, error: String(error), success: false });
+            result = JSON.stringify({ error: String(error) });
+            isError = true;
+            
+            debugLogs.push({ 
+              timestamp: new Date().toISOString(), 
+              type: 'error', 
+              data: { phase: 'mcp_tool_call', tool: toolUse.name, error: String(error) } 
+            });
+          }
         } else {
-          result = JSON.stringify({ 
-            error: `Not found: ${input.intent_name}`, 
-            available: activeIntents.map((i: any) => i.name) 
-          });
+          result = JSON.stringify({ error: "MCP not connected" });
           isError = true;
         }
-      } else if (mcpClient) {
-        try {
-          debugLogs.push({ 
-            timestamp: new Date().toISOString(), 
-            type: 'mcp_request', 
-            data: { tool: toolUse.name, input: toolUse.input } 
-          });
 
-          const mcpResult = await mcpClient.callTool(toolUse.name, toolUse.input || {});
-          
-          // Truncate large results to prevent token overflow
-          const truncatedResult = truncateResult(mcpResult);
-          console.log(`[${reqId}] MCP result: ${mcpResult.length} chars -> ${truncatedResult.length} chars`);
-          
-          mcpResults.push({ tool: toolUse.name, input: toolUse.input, result: truncatedResult, success: true });
-          result = truncatedResult;
-          
-          debugLogs.push({ 
-            timestamp: new Date().toISOString(), 
-            type: 'mcp_response', 
-            data: { tool: toolUse.name, originalLength: mcpResult.length, truncatedLength: truncatedResult.length } 
-          });
-        } catch (error) {
-          console.error(`[${reqId}] MCP tool error:`, error);
-          mcpResults.push({ tool: toolUse.name, error: String(error), success: false });
-          result = JSON.stringify({ error: String(error) });
-          isError = true;
-          
-          debugLogs.push({ 
-            timestamp: new Date().toISOString(), 
-            type: 'error', 
-            data: { phase: 'mcp_tool_call', tool: toolUse.name, error: String(error) } 
-          });
-        }
-      } else {
-        result = JSON.stringify({ error: "MCP not connected" });
-        isError = true;
+        // Add tool_result for this tool_use
+        toolResults.push({ 
+          type: "tool_result", 
+          tool_use_id: toolUse.id, 
+          content: result,
+          is_error: isError 
+        });
       }
 
-      // Continue conversation with tool result
+      // Continue conversation with ALL tool results in a single user message
       messages.push({ role: "assistant", content: response.content });
-      messages.push({ 
-        role: "user", 
-        content: [{ type: "tool_result", tool_use_id: toolUse.id, content: result }] 
-      });
+      messages.push({ role: "user", content: toolResults });
 
       response = await callAnthropic(llmConfig, systemPrompt, messages, allTools, reqId);
       inputTokens += response.usage?.input_tokens || 0;
