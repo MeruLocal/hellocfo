@@ -1092,6 +1092,14 @@ function DataPipelineTab({
   const pipeline = intent.resolutionFlow?.dataPipeline || [];
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
 
+  // Helper to get the actual matching tool ID (case-insensitive)
+  const getMatchedToolId = (mcpToolName: string | undefined): string => {
+    if (!mcpToolName) return '';
+    const normalized = mcpToolName.toLowerCase().replace(/^@/, '').trim();
+    const match = mcpTools.find(t => t.id.toLowerCase() === normalized);
+    return match ? match.id : mcpToolName;
+  };
+
   const updatePipeline = (newPipeline: PipelineNode[]) => {
     onChange({
       resolutionFlow: {
@@ -1287,7 +1295,7 @@ function DataPipelineTab({
                             <div>
                               <label className="block text-xs font-medium text-gray-600 mb-1">MCP Tool</label>
                               <select
-                                value={node.mcpTool || ''}
+                                value={getMatchedToolId(node.mcpTool)}
                                 onChange={(e) => updateNode(index, { mcpTool: e.target.value })}
                                 className="w-full px-3 py-2 border rounded-lg text-sm bg-white"
                               >
@@ -5041,19 +5049,38 @@ export default function CFOQueryResolutionEngine() {
       console.log('✅ AI generation complete!', data);
 
       // Helper to match generated tool name to actual MCP tool ID
+      // If no match found, returns the normalized name (without @) so it can be matched when tools load
       const matchMcpTool = (generatedToolName: string): string | undefined => {
         if (!generatedToolName) return undefined;
-        const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
-        // Exact match first
+        // Remove @ prefix and trim whitespace
+        const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
+        console.log('🔧 matchMcpTool:', { generatedToolName, normalized, toolCount: allMcpTools.length, availableTools: allMcpTools.map(t => t.id) });
+        
+        // If no tools loaded yet, return the normalized name to be matched later
+        if (allMcpTools.length === 0) {
+          console.log('⚠️ No MCP tools loaded yet, storing raw name:', normalized);
+          return normalized;
+        }
+        
+        // Exact match first (case-insensitive)
         const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
-        if (exactMatch) return exactMatch.id;
+        if (exactMatch) {
+          console.log('✅ Exact match found:', exactMatch.id);
+          return exactMatch.id;
+        }
+        
         // Partial match (tool name contains or is contained by generated name)
         const partialMatch = allMcpTools.find(t => 
           t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
         );
-        if (partialMatch) return partialMatch.id;
-        // Return original if no match (user can fix manually)
-        return generatedToolName;
+        if (partialMatch) {
+          console.log('✅ Partial match found:', partialMatch.id);
+          return partialMatch.id;
+        }
+        
+        // Return the normalized name so it can potentially be matched later
+        console.log('⚠️ No match found, returning normalized name:', normalized);
+        return normalized;
       };
 
       // Ensure pipeline nodes have required parameters field and match MCP tools
@@ -5192,14 +5219,15 @@ export default function CFOQueryResolutionEngine() {
         // Helper to match generated tool name to actual MCP tool ID
         const matchMcpTool = (generatedToolName: string): string | undefined => {
           if (!generatedToolName) return undefined;
-          const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
+          const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
+          if (allMcpTools.length === 0) return normalized;
           const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
           if (exactMatch) return exactMatch.id;
           const partialMatch = allMcpTools.find(t => 
             t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
           );
           if (partialMatch) return partialMatch.id;
-          return generatedToolName;
+          return normalized;
         };
 
         const dataPipeline = data.dataPipeline.map((node: any) => ({
@@ -5231,14 +5259,15 @@ export default function CFOQueryResolutionEngine() {
         // Helper to match generated tool name to actual MCP tool ID
         const matchMcpToolAll = (generatedToolName: string): string | undefined => {
           if (!generatedToolName) return undefined;
-          const normalized = generatedToolName.toLowerCase().replace(/^@/, '');
+          const normalized = generatedToolName.toLowerCase().replace(/^@/, '').trim();
+          if (allMcpTools.length === 0) return normalized;
           const exactMatch = allMcpTools.find(t => t.id.toLowerCase() === normalized);
           if (exactMatch) return exactMatch.id;
           const partialMatch = allMcpTools.find(t => 
             t.id.toLowerCase().includes(normalized) || normalized.includes(t.id.toLowerCase())
           );
           if (partialMatch) return partialMatch.id;
-          return generatedToolName;
+          return normalized;
         };
 
         const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
