@@ -257,6 +257,7 @@ CRITICAL RULES:
 - Use EXACT tool names from the list above (e.g., "get_all_bills" not "get_vendor_bills")
 - Design 2-4 nodes maximum for efficiency
 - Fetch raw data first, then compute aggregations
+- Keep ALL string fields single-line JSON strings (NO literal newlines). If you need line breaks, use "\\n".
 - Use meaningful outputVariable names
 
 OUTPUT: JSON array of pipeline nodes.`;
@@ -635,39 +636,144 @@ serve(async (req) => {
     validateLLMConfig(llmConfig);
     const config = llmConfig!;
 
+    const sanitizeJsonNewlinesInStrings = (input: string) => {
+      let out = '';
+      let inString = false;
+      let escaping = false;
+
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+
+        if (inString) {
+          if (escaping) {
+            out += ch;
+            escaping = false;
+            continue;
+          }
+
+          if (ch === '\\') {
+            out += ch;
+            escaping = true;
+            continue;
+          }
+
+          if (ch === '"') {
+            out += ch;
+            inString = false;
+            continue;
+          }
+
+          // JSON strings cannot contain literal newlines; convert them.
+          if (ch === '\n') {
+            out += '\\n';
+            continue;
+          }
+          if (ch === '\r') {
+            // drop CR; LF handler above will insert \n
+            continue;
+          }
+
+          out += ch;
+          continue;
+        }
+
+        if (ch === '"') {
+          inString = true;
+          out += ch;
+          continue;
+        }
+
+        out += ch;
+      }
+
+      return out;
+    };
+
+    const extractJsonCandidate = (input: string) => {
+      // Prefer arrays first (pipeline / entities / etc.)
+      const firstArray = input.indexOf('[');
+      const firstObject = input.indexOf('{');
+
+      const start = firstArray !== -1 && (firstObject === -1 || firstArray < firstObject)
+        ? firstArray
+        : firstObject;
+
+      if (start === -1) return input;
+
+      const open = input[start];
+      const close = open === '[' ? ']' : '}';
+      let depth = 0;
+      let inString = false;
+      let escaping = false;
+
+      for (let i = start; i < input.length; i++) {
+        const ch = input[i];
+
+        if (inString) {
+          if (escaping) {
+            escaping = false;
+            continue;
+          }
+          if (ch === '\\') {
+            escaping = true;
+            continue;
+          }
+          if (ch === '"') {
+            inString = false;
+          }
+          continue;
+        }
+
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+
+        if (ch === open) depth++;
+        if (ch === close) depth--;
+
+        if (depth === 0) {
+          return input.slice(start, i + 1);
+        }
+      }
+
+      // If we couldn't find a balanced end, return the rest and let repair handle it.
+      return input.slice(start);
+    };
+
     const parseJSON = <T>(response: string, sectionName: string): T => {
       let cleaned = response.trim();
+
       // Remove markdown code blocks
       if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
       else if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
       if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
       cleaned = cleaned.trim();
-      
-      // Try to find JSON array or object
-      const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-      const objectMatch = cleaned.match(/\{[\s\S]*\}/);
-      
+
+      // Extract the most likely JSON payload (balanced array/object)
+      let candidate = extractJsonCandidate(cleaned).trim();
+
+      // Repair common model mistakes:
+      // 1) literal newlines inside "..." strings
+      // 2) trailing commas before ] or }
+      candidate = sanitizeJsonNewlinesInStrings(candidate)
+        .replace(/,\s*([}\]])/g, '$1')
+        .trim();
+
       try {
-        let parsed: any;
-        if (arrayMatch) {
-          parsed = JSON.parse(arrayMatch[0]);
-        } else if (objectMatch) {
-          parsed = JSON.parse(objectMatch[0]);
-        } else {
-          parsed = JSON.parse(cleaned);
-        }
-        
+        let parsed: any = JSON.parse(candidate);
+
         // Handle wrapped responses - AI sometimes returns { "pipeline": [...] } or { "intent": { "pipeline": [...] } }
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          // Check for common wrapper keys
           const wrapperKeys = ['pipeline', 'entities', 'trainingPhrases', 'training_phrases', 'enrichments', 'response', 'data', 'result', 'nodes'];
+
           for (const key of wrapperKeys) {
             if (Array.isArray(parsed[key])) {
               console.log(`[PARSE] Found ${sectionName} data in wrapper key: ${key}`);
               return parsed[key] as T;
             }
           }
-          // Check for nested intent wrapper
+
           if (parsed.intent && typeof parsed.intent === 'object') {
             for (const key of wrapperKeys) {
               if (Array.isArray(parsed.intent[key])) {
@@ -677,10 +783,10 @@ serve(async (req) => {
             }
           }
         }
-        
+
         return parsed as T;
       } catch (parseError) {
-        console.error(`[PARSE ERROR] Failed to parse ${sectionName} response:`, cleaned.substring(0, 300));
+        console.error(`[PARSE ERROR] Failed to parse ${sectionName} response (first 300 chars):`, candidate.substring(0, 300));
         throw new Error(`Failed to parse AI response for ${sectionName}. The AI returned invalid JSON.`);
       }
     };
@@ -726,11 +832,42 @@ serve(async (req) => {
       const entities = result.entities || existingEntities || [];
       const prompt = generatePipelinePrompt(intentName, moduleName, entities, mcpTools);
       const { content, usage } = await callAI(prompt, config, businessContext, 'pipeline');
-      result.dataPipeline = parseJSON<any[]>(content, 'pipeline');
+
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+
+      try {
+        result.dataPipeline = parseJSON<any[]>(content, 'pipeline');
+      } catch (err) {
+        console.warn('[PIPELINE REPAIR] Pipeline JSON was invalid; attempting one repair pass...');
+
+        const repairPrompt = `Your previous output for the PIPELINE section was invalid JSON.
+Return ONLY a valid JSON ARRAY of pipeline nodes (no wrapper object, no markdown).
+
+Rules:
+- Output MUST start with [ and end with ]
+- Keep ALL string fields single-line (no literal newlines). Use \\n if needed.
+- Use nodeType: "api_call" or "computation".
+
+Invalid output to fix:\n${content}`;
+
+        const { content: repaired, usage: repairUsage } = await callAI(
+          repairPrompt,
+          config,
+          businessContext,
+          'pipeline repair'
+        );
+
+        totalUsage.inputTokens += repairUsage.inputTokens;
+        totalUsage.outputTokens += repairUsage.outputTokens;
+        totalUsage.totalTokens += repairUsage.totalTokens;
+        totalUsage.latencyMs += repairUsage.latencyMs;
+
+        result.dataPipeline = parseJSON<any[]>(repaired, 'pipeline');
+      }
+
       completedSections.push('pipeline');
       console.log(`[SECTION 3/5] Pipeline complete: ${result.dataPipeline.length} nodes`);
     }
