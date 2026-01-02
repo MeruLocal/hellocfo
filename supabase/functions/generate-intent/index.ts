@@ -262,15 +262,32 @@ CRITICAL: If NO MCP TOOLS are available, OR if the intent is unclear/vague and y
 OUTPUT: JSON array of pipeline nodes. Return [] if no suitable tools available or intent is unclear.`;
 };
 
-// Enhanced enrichments prompt
+// Enhanced enrichments prompt with out-of-the-box enrichment types
 const generateEnrichmentsPrompt = (
   intentName: string,
   module: string,
-  pipeline: any[]
+  pipeline: any[],
+  availableEnrichmentTypes?: Array<{ id: string; name: string; description: string; config_fields: string[]; icon: string }>
 ): string => {
   const pipelineOutputs = pipeline.length > 0 
     ? pipeline.map(p => `- ${p.outputVariable}: ${p.description}`).join('\n')
     : 'NO PIPELINE DATA AVAILABLE';
+
+  // Build enrichment types table from database or use defaults
+  const enrichmentTypesTable = availableEnrichmentTypes && availableEnrichmentTypes.length > 0
+    ? availableEnrichmentTypes.map(et => 
+        `| ${et.id} | ${et.icon} ${et.name} | ${et.description} | ${et.config_fields.join(', ')} |`
+      ).join('\n')
+    : `| trend_analysis | 📈 Trend Analysis | Compare to previous periods | compareWith, metric, showPercentage |
+| benchmark_comparison | 🎯 Benchmark Comparison | Compare to industry standards | metric, benchmarkSource, showPercentile |
+| days_calculation | ⏱️ Days Calculation | Calculate days overdue/remaining | dateField, calculation, outputField |
+| percentage_of_total | 📊 Percentage of Total | Show as percentage of total | valueField, totalField, outputField, decimals |
+| ranking | 🏆 Ranking | Add numbered ranking | outputField, startFrom |
+| alert_evaluation | 🚨 Alert Evaluation | Evaluate thresholds | metric, criticalThreshold, warningThreshold, direction, useContextThresholds |
+| recommendation | 💡 Recommendation | Generate actionable insights | triggerCondition |
+| projection | 🔮 Projection | Forecast future values | metric, periods, method |
+| anomaly_detection | ⚠️ Anomaly Detection | Flag unusual values | metric, sensitivity |
+| currency_format | 💵 Currency Format | Format with currency symbol | fields, useContextCurrency |`;
 
   return `Select intelligent enrichment functions for this CFO query response:
 
@@ -280,44 +297,55 @@ MODULE: ${module}
 PIPELINE DATA AVAILABLE:
 ${pipelineOutputs}
 
-AVAILABLE ENRICHMENTS:
-| Type | Purpose | Config Fields |
-|------|---------|---------------|
-| trend_analysis | Compare to previous periods | compareWith, metric, periods |
-| benchmark_comparison | Compare to industry standards | industryType, metric |
-| days_calculation | Calculate days overdue/remaining | dateField, referenceDate |
-| percentage_of_total | Show as percentage | numerator, denominator |
-| ranking | Add numbered ranking | sortField, order, limit |
-| alert_evaluation | Evaluate thresholds | metric, criticalThreshold, warningThreshold |
-| recommendation | Generate actionable insights | basedOn, context |
-| projection | Forecast future values | metric, periods, method |
+OUT-OF-THE-BOX ENRICHMENT TYPES (use these EXACT type IDs):
+| Type ID | Name | Purpose | Config Fields |
+|---------|------|---------|---------------|
+${enrichmentTypesTable}
 
-SELECT 2-4 enrichments that add real value. Consider:
-- What insights would a CFO want?
-- What comparisons are meaningful?
-- What alerts are actionable?
+YOUR TASK:
+1. Analyze the intent and pipeline data
+2. Select 2-4 enrichments that would add REAL VALUE for a CFO
+3. Use ONLY the enrichment type IDs listed above (e.g., "trend_analysis", "ranking", etc.)
+4. Configure each enrichment with appropriate config fields
 
-CRITICAL: If NO PIPELINE DATA is available, OR if the intent is unclear and you cannot determine what enrichments would be meaningful, return an EMPTY array []. Do NOT make assumptions about what data exists or invent enrichments. Only add enrichments if there is actual pipeline data to enrich.
+SELECTION CRITERIA:
+- What insights would a CFO want from this data?
+- What comparisons are meaningful for this query?
+- What alerts would be actionable?
+- What formatting would improve readability?
+
+CRITICAL RULES:
+- Use EXACT type IDs from the table above (e.g., "trend_analysis" not "trendAnalysis")
+- Only include enrichments if there is actual pipeline data to enrich
+- If NO PIPELINE DATA is available, return an EMPTY array []
+- If the intent is unclear or vague, return an EMPTY array []
+- Do NOT make assumptions or invent enrichment types
 
 OUTPUT FORMAT:
 [
   {
     "id": "e1",
-    "type": "enrichment_type",
-    "config": { relevant_config_fields },
-    "description": "Business value this adds"
+    "type": "exact_type_id_from_table",
+    "config": { 
+      "configField1": "value1",
+      "configField2": "value2"
+    },
+    "description": "Business value this enrichment adds"
   }
 ]
 
 Return [] if no pipeline data or insufficient context.`;
 };
 
-// Enhanced response template prompt
+// Enhanced response template prompt - generates response based on intent context
 const generateResponsePrompt = (
   intentName: string,
   module: string,
+  subModule: string,
+  description: string | undefined,
   pipeline: any[],
-  enrichments: any[]
+  enrichments: any[],
+  businessContext?: GenerationRequest['businessContext']
 ): string => {
   const pipelineVars = pipeline.length > 0 
     ? pipeline.map(p => `{${p.outputVariable}} - ${p.description}`).join('\n')
@@ -326,10 +354,22 @@ const generateResponsePrompt = (
     ? enrichments.map(e => `{${e.type}Result} - ${e.description}`).join('\n')
     : 'NO ENRICHMENT VARIABLES AVAILABLE';
 
-  return `Create a professional, executive-ready response template:
+  const contextInfo = businessContext 
+    ? `\nBusiness Context:
+- Industry: ${businessContext.industry || 'General'}
+- Country: ${businessContext.country || 'Global'}
+- Currency: ${businessContext.currency || 'USD'}
+- Entity Size: ${businessContext.entitySize || 'Mid-sized'}`
+    : '';
 
-INTENT: ${intentName}
-MODULE: ${module}
+  return `Create a professional, executive-ready response template for this CFO chatbot intent:
+
+INTENT DETAILS:
+- Name: ${intentName}
+- Module: ${module}
+- Sub-Module: ${subModule}
+- Description: ${description || 'Financial query assistance'}
+${contextInfo}
 
 AVAILABLE DATA VARIABLES:
 From Pipeline:
@@ -340,42 +380,43 @@ ${enrichmentVars}
 
 TEMPLATE SYNTAX:
 - {variable} - Insert value
-- {variable | currency} - Format as currency
+- {variable | currency} - Format as currency (use ${businessContext?.currency || 'USD'})
 - {variable | number:2} - Format with 2 decimals
 - {variable | percent} - Format as percentage
 - {#if condition}...{#else}...{/if} - Conditionals
 - {#each items}...{/each} - Loops
 
-RESPONSE TYPES:
-- metric: Single KPI display
-- metric_with_trend: KPI with period comparison
-- ranked_list: Top/bottom items
-- table: Tabular data
-- comparison: Side-by-side analysis
-- diagnostic: Issue analysis with recommendations
+RESPONSE TYPES (choose the most appropriate):
+- metric: Single KPI display - use for simple value queries
+- metric_with_trend: KPI with period comparison - use when trend data is available
+- ranked_list: Top/bottom items - use for "top 10", "worst performers" queries
+- table: Tabular data - use for detailed breakdowns
+- comparison: Side-by-side analysis - use for comparing periods/entities
+- diagnostic: Issue analysis with recommendations - use for problem investigation
 
 REQUIREMENTS:
-1. Use appropriate emojis for visual hierarchy (💰📈📉⚠️✅❌📊💡)
-2. Lead with the key metric/insight
-3. Include trend/context information
-4. Add conditional alerts for thresholds
-5. End with actionable recommendation
-6. Generate 3 contextual follow-up questions
+1. ANALYZE THE INTENT: Understand what the user is asking for based on intent name and description
+2. MATCH RESPONSE TYPE: Choose the response type that best fits the query
+3. USE VISUAL HIERARCHY: Use appropriate emojis (💰📈📉⚠️✅❌📊💡🔍💵📋)
+4. LEAD WITH KEY INSIGHT: Start with the most important metric/finding
+5. ADD CONTEXT: Include trend/comparison information when available
+6. CONDITIONAL ALERTS: Add {#if} conditions for threshold-based alerts
+7. ACTIONABLE RECOMMENDATIONS: End with specific next steps
+8. FOLLOW-UP QUESTIONS: Generate 3 contextual questions that a CFO might ask next
 
-CRITICAL: If NO PIPELINE VARIABLES and NO ENRICHMENT VARIABLES are available, OR if the intent is unclear, return a minimal default response:
+CRITICAL RULES:
+- Generate a response that is SPECIFIC to the intent (${intentName})
+- If pipeline variables exist, USE them in the template
+- If enrichment results exist, INCORPORATE them for insights
+- If NO DATA VARIABLES are available, create a meaningful response structure that explains what data would be needed
+- Do NOT just return a generic "No data available" message unless absolutely necessary
+- The response should feel tailored to "${intentName}" intent
+
+OUTPUT FORMAT:
 {
-  "type": "metric",
-  "template": "No data available for this query.",
-  "followUpQuestions": []
-}
-
-Do NOT make assumptions about what variables exist. Only reference variables that are explicitly listed above.
-
-OUTPUT:
-{
-  "type": "appropriate_type",
-  "template": "Formatted response with {variables}",
-  "followUpQuestions": ["Relevant Q1?", "Relevant Q2?", "Relevant Q3?"]
+  "type": "appropriate_type_for_this_intent",
+  "template": "Formatted response specific to ${intentName} using {available_variables}",
+  "followUpQuestions": ["Question 1 relevant to ${intentName}?", "Question 2?", "Question 3?"]
 }`;
 };
 
@@ -895,11 +936,29 @@ Invalid output to fix:\n${content}`;
       console.log(`[SECTION 3/5] Pipeline complete: ${result.dataPipeline.length} nodes`);
     }
 
-    // Generate enrichments
+    // Generate enrichments with out-of-the-box enrichment types from database
     if (section === 'enrichments' || section === 'all') {
       console.log('[SECTION 4/5] Generating enrichments...');
       const pipeline = result.dataPipeline || existingPipeline || [];
-      const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline);
+      
+      // Fetch available enrichment types from database
+      let availableEnrichmentTypes: any[] = [];
+      try {
+        const { data: enrichmentTypesData, error: enrichmentTypesError } = await supabase
+          .from('enrichment_types')
+          .select('id, name, description, config_fields, icon')
+          .eq('is_active', true)
+          .order('sort_order');
+        
+        if (!enrichmentTypesError && enrichmentTypesData) {
+          availableEnrichmentTypes = enrichmentTypesData;
+          console.log(`[SECTION 4/5] Loaded ${availableEnrichmentTypes.length} out-of-the-box enrichment types`);
+        }
+      } catch (err) {
+        console.warn('[SECTION 4/5] Could not fetch enrichment types, using defaults');
+      }
+      
+      const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline, availableEnrichmentTypes);
       const { content, usage } = await callAI(prompt, config, businessContext, 'enrichments');
       result.enrichments = parseJSON<any[]>(content, 'enrichments');
       totalUsage.inputTokens += usage.inputTokens;
@@ -915,7 +974,7 @@ Invalid output to fix:\n${content}`;
       console.log('[SECTION 5/5] Generating response template...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
-      const prompt = generateResponsePrompt(intentName, moduleName, pipeline, enrichments);
+      const prompt = generateResponsePrompt(intentName, moduleName, subModuleName, description, pipeline, enrichments, businessContext);
       const { content, usage } = await callAI(prompt, config, businessContext, 'response');
       result.responseConfig = parseJSON<any>(content, 'response');
       totalUsage.inputTokens += usage.inputTokens;
