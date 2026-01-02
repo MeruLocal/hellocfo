@@ -3365,6 +3365,8 @@ function TestConsoleView({
   const [result, setResult] = useState<any>(null);
   const [testHistory, setTestHistory] = useState<any[]>([]);
   const [useLLM, setUseLLM] = useState(true);
+  const [debugMode, setDebugMode] = useState(false);
+  const [showDebugLogs, setShowDebugLogs] = useState(false);
 
   const runTest = async () => {
     if (!query.trim()) return;
@@ -3404,7 +3406,8 @@ function TestConsoleView({
               endpoint: llmConfig.endpoint,
               max_tokens: llmConfig.maxTokens,
               temperature: llmConfig.temperature
-            } : undefined
+            } : undefined,
+            debug: debugMode
           }
         });
 
@@ -3508,6 +3511,18 @@ function TestConsoleView({
             <span className="flex items-center gap-1">
               <Brain size={14} className="text-purple-500" />
               Use AI (LLM + MCP)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={debugMode}
+              onChange={(e) => setDebugMode(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            <span className="flex items-center gap-1">
+              <Code size={14} className="text-orange-500" />
+              Debug Mode
             </span>
           </label>
           {mcpTools && mcpTools.length > 0 && (
@@ -3753,6 +3768,56 @@ function TestConsoleView({
                             <span>Iterations: {result.iterationCount}</span>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {/* Debug Logs */}
+                    {debugMode && result.debugLogs && result.debugLogs.length > 0 && (
+                      <div className="pt-3 border-t">
+                        <button
+                          onClick={() => setShowDebugLogs(!showDebugLogs)}
+                          className="flex items-center gap-2 text-sm font-medium text-orange-600 hover:text-orange-700"
+                        >
+                          <Code size={14} />
+                          Debug Logs ({result.debugLogs.length})
+                          {showDebugLogs ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                        {showDebugLogs && (
+                          <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
+                            {result.debugLogs.map((log: any, idx: number) => (
+                              <div 
+                                key={idx} 
+                                className={`p-2 rounded text-xs font-mono ${
+                                  log.type === 'error' ? 'bg-red-50 border border-red-200' :
+                                  log.type === 'mcp_request' ? 'bg-blue-50 border border-blue-200' :
+                                  log.type === 'mcp_response' ? 'bg-green-50 border border-green-200' :
+                                  log.type === 'llm_request' ? 'bg-purple-50 border border-purple-200' :
+                                  log.type === 'llm_response' ? 'bg-indigo-50 border border-indigo-200' :
+                                  log.type === 'intent_match' ? 'bg-yellow-50 border border-yellow-200' :
+                                  'bg-gray-50 border border-gray-200'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                    log.type === 'error' ? 'bg-red-200 text-red-800' :
+                                    log.type === 'mcp_request' ? 'bg-blue-200 text-blue-800' :
+                                    log.type === 'mcp_response' ? 'bg-green-200 text-green-800' :
+                                    log.type === 'llm_request' ? 'bg-purple-200 text-purple-800' :
+                                    log.type === 'llm_response' ? 'bg-indigo-200 text-indigo-800' :
+                                    log.type === 'intent_match' ? 'bg-yellow-200 text-yellow-800' :
+                                    'bg-gray-200 text-gray-800'
+                                  }`}>
+                                    {log.type.replace(/_/g, ' ')}
+                                  </span>
+                                  <span className="text-gray-400">{log.timestamp}</span>
+                                </div>
+                                <pre className="whitespace-pre-wrap overflow-auto text-[11px]">
+                                  {JSON.stringify(log.data, null, 2)}
+                                </pre>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
