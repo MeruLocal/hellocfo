@@ -6,8 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Timeout for each AI call (30 seconds per call)
-const AI_CALL_TIMEOUT_MS = 30000;
+// Timeout for each AI call (60 seconds per call for complex prompts)
+const AI_CALL_TIMEOUT_MS = 60000;
 
 interface LLMConfig {
   id?: string;
