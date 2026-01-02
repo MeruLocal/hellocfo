@@ -3114,12 +3114,126 @@ function EnrichmentsView({
   );
 }
 
-// Country Config View
-function CountryConfigView({ countryConfigs }: { countryConfigs: CountryConfig[] }) {
+// Country Config View with CRUD
+function CountryConfigView({ 
+  countryConfigs,
+  onAdd,
+  onUpdate,
+  onDelete
+}: { 
+  countryConfigs: CountryConfig[];
+  onAdd: (config: CountryConfig) => Promise<boolean>;
+  onUpdate: (code: string, updates: Partial<CountryConfig>) => Promise<boolean>;
+  onDelete: (code: string) => Promise<boolean>;
+}) {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [formData, setFormData] = useState<CountryConfig>({
+    code: '',
+    name: '',
+    flag: '🏳️',
+    currency: '',
+    currencySymbol: '',
+    sizeThresholds: {
+      micro: { max: 1000000 },
+      small: { min: 1000000, max: 10000000 },
+      medium: { min: 10000000, max: 100000000 },
+      large: { min: 100000000 }
+    },
+    displayThresholds: {
+      micro: '< 1M',
+      small: '1M - 10M',
+      medium: '10M - 100M',
+      large: '> 100M'
+    },
+    isActive: true
+  });
+
+  const flagOptions = ['🇮🇳', '🇺🇸', '🇬🇧', '🇸🇬', '🇦🇪', '🇿🇦', '🇨🇦', '🇦🇺', '🇩🇪', '🇫🇷', '🇯🇵', '🇨🇳', '🇧🇷', '🇲🇽', '🇳🇱', '🏳️'];
+
+  const resetForm = () => {
+    setFormData({
+      code: '',
+      name: '',
+      flag: '🏳️',
+      currency: '',
+      currencySymbol: '',
+      sizeThresholds: {
+        micro: { max: 1000000 },
+        small: { min: 1000000, max: 10000000 },
+        medium: { min: 10000000, max: 100000000 },
+        large: { min: 100000000 }
+      },
+      displayThresholds: {
+        micro: '< 1M',
+        small: '1M - 10M',
+        medium: '10M - 100M',
+        large: '> 100M'
+      },
+      isActive: true
+    });
+  };
+
+  const openAddModal = () => {
+    resetForm();
+    setEditingCode(null);
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (config: CountryConfig) => {
+    setFormData({ ...config });
+    setEditingCode(config.code);
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingCode(null);
+    resetForm();
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.code.trim() || !formData.name.trim()) {
+      toast({ title: 'Code and Name are required', variant: 'destructive' });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      if (editingCode) {
+        await onUpdate(editingCode, formData);
+      } else {
+        await onAdd(formData);
+      }
+      closeModal();
+    } catch (err) {
+      console.error('Failed to save country config:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (code: string) => {
+    if (confirm('Are you sure you want to delete this country configuration?')) {
+      await onDelete(code);
+    }
+  };
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Country Configuration</h1>
-      <p className="text-gray-500 mb-6">Entity size classifications by country</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Country Configuration</h1>
+          <p className="text-gray-500">Entity size classifications by country</p>
+        </div>
+        <button
+          onClick={openAddModal}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
+        >
+          <Plus size={18} /> Add Country
+        </button>
+      </div>
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <table className="w-full">
@@ -3131,42 +3245,265 @@ function CountryConfigView({ countryConfigs }: { countryConfigs: CountryConfig[]
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Small</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Medium</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Large</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Status</th>
+              <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {countryConfigs.map(config => (
-              <tr key={config.code} className="hover:bg-gray-50">
+              <tr key={config.code} className={`hover:bg-gray-50 ${!config.isActive ? 'opacity-60' : ''}`}>
                 <td className="px-4 py-3">
                   <span className="flex items-center gap-2">
                     <span className="text-xl">{config.flag}</span>
-                    <span>{config.name}</span>
+                    <div>
+                      <span className="font-medium">{config.name}</span>
+                      <span className="text-xs text-gray-500 ml-2">({config.code})</span>
+                    </div>
                   </span>
                 </td>
-                <td className="px-4 py-3 font-mono text-sm">{config.currency}</td>
+                <td className="px-4 py-3 font-mono text-sm">{config.currencySymbol} {config.currency}</td>
                 <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.micro}</td>
                 <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.small}</td>
                 <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.medium}</td>
                 <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.large}</td>
+                <td className="px-4 py-3">
+                  {config.isActive ? (
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Active</span>
+                  ) : (
+                    <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">Inactive</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex justify-end gap-1">
+                    <button
+                      onClick={() => openEditModal(config)}
+                      className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                      title="Edit"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(config.code)}
+                      className="p-2 text-red-500 hover:bg-red-50 rounded"
+                      title="Delete"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {/* Add/Edit Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h2 className="text-xl font-bold">{editingCode ? 'Edit Country' : 'Add Country'}</h2>
+              <button onClick={closeModal} className="text-gray-500 hover:text-gray-700">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                {/* Code */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Country Code *</label>
+                  <input
+                    type="text"
+                    value={formData.code}
+                    onChange={(e) => setFormData(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                    placeholder="e.g., US, IN, GB"
+                    maxLength={2}
+                    disabled={!!editingCode}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  />
+                </div>
+
+                {/* Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Country Name *</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g., United States"
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Flag */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Flag</label>
+                <div className="flex flex-wrap gap-2">
+                  {flagOptions.map(flag => (
+                    <button
+                      key={flag}
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, flag }))}
+                      className={`text-2xl p-2 rounded-lg border transition-colors ${
+                        formData.flag === flag 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      {flag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* Currency */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency Code</label>
+                  <input
+                    type="text"
+                    value={formData.currency}
+                    onChange={(e) => setFormData(prev => ({ ...prev, currency: e.target.value.toUpperCase() }))}
+                    placeholder="e.g., USD, INR"
+                    maxLength={3}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                {/* Currency Symbol */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency Symbol</label>
+                  <input
+                    type="text"
+                    value={formData.currencySymbol}
+                    onChange={(e) => setFormData(prev => ({ ...prev, currencySymbol: e.target.value }))}
+                    placeholder="e.g., $, ₹, £"
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Size Thresholds Display Labels */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Size Classification Labels</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-gray-500">Micro</label>
+                    <input
+                      type="text"
+                      value={formData.displayThresholds.micro}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        displayThresholds: { ...prev.displayThresholds, micro: e.target.value } 
+                      }))}
+                      placeholder="e.g., < 1M"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Small</label>
+                    <input
+                      type="text"
+                      value={formData.displayThresholds.small}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        displayThresholds: { ...prev.displayThresholds, small: e.target.value } 
+                      }))}
+                      placeholder="e.g., 1M - 10M"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Medium</label>
+                    <input
+                      type="text"
+                      value={formData.displayThresholds.medium}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        displayThresholds: { ...prev.displayThresholds, medium: e.target.value } 
+                      }))}
+                      placeholder="e.g., 10M - 100M"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Large</label>
+                    <input
+                      type="text"
+                      value={formData.displayThresholds.large}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        displayThresholds: { ...prev.displayThresholds, large: e.target.value } 
+                      }))}
+                      placeholder="e.g., > 100M"
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Toggle */}
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-gray-700">Active</label>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.isActive}
+                    onChange={(e) => setFormData(prev => ({ ...prev, isActive: e.target.checked }))}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+            </div>
+
+            <div className="p-6 border-t flex justify-end gap-3">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={isSaving}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isSaving && <Loader2 size={16} className="animate-spin" />}
+                {editingCode ? 'Update' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Business Context Settings View
+// Business Context Settings View with CRUD
 function BusinessContextView({ 
   context, 
+  allContexts,
   countryConfigs,
-  onChange 
+  onChange,
+  onCreate,
+  onDelete,
+  onSetDefault
 }: { 
   context: BusinessContext;
+  allContexts: BusinessContext[];
   countryConfigs: CountryConfig[];
-  onChange: (updates: Partial<BusinessContext>) => void;
+  onChange: (updates: Partial<BusinessContext>, id?: string) => void;
+  onCreate: (context: Omit<BusinessContext, 'id'>) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
+  onSetDefault: (id: string) => Promise<boolean>;
 }) {
-  const selectedCountry = countryConfigs.find(c => c.code === context.country);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingContext, setEditingContext] = useState<BusinessContext | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [activeView, setActiveView] = useState<'edit' | 'list'>('edit');
 
   const industries = [
     { id: 'real_estate', name: 'Real Estate', subIndustries: ['residential_construction', 'commercial_construction', 'property_management'] },
@@ -3176,8 +3513,6 @@ function BusinessContextView({
     { id: 'technology', name: 'Technology', subIndustries: ['software', 'hardware', 'saas', 'fintech'] },
     { id: 'financial_services', name: 'Financial Services', subIndustries: ['banking', 'insurance', 'investment'] }
   ];
-
-  const selectedIndustry = industries.find(i => i.id === context.industry);
 
   const complianceOptions: Record<string, string[]> = {
     IN: ['GST', 'TDS', 'RERA', 'Companies Act', 'SEBI'],
@@ -3189,184 +3524,562 @@ function BusinessContextView({
     CA: ['GST/HST', 'CRA', 'OSC', 'PIPEDA']
   };
 
+  const getDefaultFormData = (): Omit<BusinessContext, 'id'> => ({
+    name: '',
+    country: countryConfigs[0]?.code || 'IN',
+    industry: 'technology',
+    subIndustry: undefined,
+    entitySize: 'small',
+    annualRevenue: undefined,
+    employeeCount: undefined,
+    fiscalYearEnd: 'march',
+    currency: countryConfigs[0]?.currency || 'INR',
+    complianceFrameworks: [],
+    isDefault: false
+  });
+
+  const [formData, setFormData] = useState<Omit<BusinessContext, 'id'>>(getDefaultFormData());
+
+  const openAddModal = () => {
+    setFormData(getDefaultFormData());
+    setEditingContext(null);
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (ctx: BusinessContext) => {
+    setFormData({
+      name: ctx.name || '',
+      country: ctx.country,
+      industry: ctx.industry,
+      subIndustry: ctx.subIndustry,
+      entitySize: ctx.entitySize,
+      annualRevenue: ctx.annualRevenue,
+      employeeCount: ctx.employeeCount,
+      fiscalYearEnd: ctx.fiscalYearEnd,
+      currency: ctx.currency,
+      complianceFrameworks: ctx.complianceFrameworks,
+      isDefault: ctx.isDefault
+    });
+    setEditingContext(ctx);
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingContext(null);
+  };
+
+  const handleSubmit = async () => {
+    setIsSaving(true);
+    try {
+      if (editingContext?.id) {
+        await onChange(formData, editingContext.id);
+      } else {
+        await onCreate(formData);
+      }
+      closeModal();
+    } catch (err) {
+      console.error('Failed to save context:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Are you sure you want to delete this business context?')) {
+      await onDelete(id);
+    }
+  };
+
+  const selectedCountry = countryConfigs.find(c => c.code === context.country);
+  const formSelectedCountry = countryConfigs.find(c => c.code === formData.country);
+  const selectedIndustry = industries.find(i => i.id === context.industry);
+  const formSelectedIndustry = industries.find(i => i.id === formData.industry);
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Business Context</h1>
-      <p className="text-gray-500 mb-6">Configure your organization's context for AI-powered insights</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Business Context</h1>
+          <p className="text-gray-500">Configure your organization's context for AI-powered insights</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+            <button
+              onClick={() => setActiveView('edit')}
+              className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                activeView === 'edit' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Current Context
+            </button>
+            <button
+              onClick={() => setActiveView('list')}
+              className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                activeView === 'list' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              All Contexts ({allContexts.length})
+            </button>
+          </div>
+          <button
+            onClick={openAddModal}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
+          >
+            <Plus size={18} /> Add Context
+          </button>
+        </div>
+      </div>
 
-      <div className="max-w-3xl space-y-6">
-        {/* Location & Currency */}
-        <div className="bg-white p-6 rounded-xl border">
-          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-            <Globe size={18} /> Location & Currency
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
+      {activeView === 'list' ? (
+        /* All Contexts List View */
+        <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Name</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Country</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Industry</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Entity Size</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Status</th>
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {allContexts.map(ctx => {
+                const country = countryConfigs.find(c => c.code === ctx.country);
+                const ind = industries.find(i => i.id === ctx.industry);
+                return (
+                  <tr key={ctx.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <span className="font-medium">{ctx.name || 'Unnamed Context'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="flex items-center gap-2">
+                        <span>{country?.flag}</span>
+                        <span>{country?.name}</span>
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{ind?.name || ctx.industry}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600 capitalize">{ctx.entitySize}</td>
+                    <td className="px-4 py-3">
+                      {ctx.isDefault ? (
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Default</span>
+                      ) : (
+                        <button
+                          onClick={() => ctx.id && onSetDefault(ctx.id)}
+                          className="text-xs text-blue-600 hover:underline"
+                        >
+                          Set as Default
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <button
+                          onClick={() => openEditModal(ctx)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                          title="Edit"
+                        >
+                          <Edit size={16} />
+                        </button>
+                        {!ctx.isDefault && (
+                          <button
+                            onClick={() => ctx.id && handleDelete(ctx.id)}
+                            className="p-2 text-red-500 hover:bg-red-50 rounded"
+                            title="Delete"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        /* Current Context Edit View */
+        <div className="max-w-3xl space-y-6">
+          {/* Context Name */}
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <FileText size={18} /> Context Details
+            </h3>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
-              <select
-                value={context.country}
-                onChange={(e) => {
-                  const newCountry = countryConfigs.find(c => c.code === e.target.value);
-                  onChange({ 
-                    country: e.target.value, 
-                    currency: newCountry?.currency || context.currency,
-                    complianceFrameworks: []
-                  });
-                }}
-                className="w-full px-3 py-2 border rounded-lg bg-white"
-              >
-                {countryConfigs.map(c => (
-                  <option key={c.code} value={c.code}>{c.flag} {c.name}</option>
-                ))}
-              </select>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Context Name</label>
+              <input
+                type="text"
+                value={context.name || ''}
+                onChange={(e) => onChange({ name: e.target.value })}
+                placeholder="e.g., Main Business, US Operations"
+                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Currency</label>
-              <div className="px-3 py-2 border rounded-lg bg-gray-50 text-gray-700">
-                {selectedCountry?.currencySymbol} {selectedCountry?.currency}
+          </div>
+
+          {/* Location & Currency */}
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <Globe size={18} /> Location & Currency
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
+                <select
+                  value={context.country}
+                  onChange={(e) => {
+                    const newCountry = countryConfigs.find(c => c.code === e.target.value);
+                    onChange({ 
+                      country: e.target.value, 
+                      currency: newCountry?.currency || context.currency,
+                      complianceFrameworks: []
+                    });
+                  }}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
+                >
+                  {countryConfigs.map(c => (
+                    <option key={c.code} value={c.code}>{c.flag} {c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Currency</label>
+                <div className="px-3 py-2 border rounded-lg bg-gray-50 text-gray-700">
+                  {selectedCountry?.currencySymbol} {selectedCountry?.currency}
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Industry */}
-        <div className="bg-white p-6 rounded-xl border">
-          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-            <Building2 size={18} /> Industry
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
-              <select
-                value={context.industry}
-                onChange={(e) => onChange({ industry: e.target.value, subIndustry: undefined })}
-                className="w-full px-3 py-2 border rounded-lg bg-white"
-              >
-                {industries.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Sub-Industry</label>
-              <select
-                value={context.subIndustry || ''}
-                onChange={(e) => onChange({ subIndustry: e.target.value || undefined })}
-                className="w-full px-3 py-2 border rounded-lg bg-white"
-              >
-                <option value="">Select sub-industry...</option>
-                {selectedIndustry?.subIndustries.map(s => (
-                  <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Entity Size */}
-        <div className="bg-white p-6 rounded-xl border">
-          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-            <Layers size={18} /> Entity Size
-          </h3>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Size Classification</label>
-              <select
-                value={context.entitySize}
-                onChange={(e) => onChange({ entitySize: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg bg-white"
-              >
-                <option value="micro">Micro - {selectedCountry?.displayThresholds.micro}</option>
-                <option value="small">Small - {selectedCountry?.displayThresholds.small}</option>
-                <option value="medium">Medium - {selectedCountry?.displayThresholds.medium}</option>
-                <option value="large">Large - {selectedCountry?.displayThresholds.large}</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Annual Revenue</label>
-              <input
-                type="number"
-                value={context.annualRevenue || ''}
-                onChange={(e) => onChange({ annualRevenue: parseInt(e.target.value) || undefined })}
-                placeholder="Enter annual revenue"
-                className="w-full px-3 py-2 border rounded-lg"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Employee Count</label>
-              <input
-                type="number"
-                value={context.employeeCount || ''}
-                onChange={(e) => onChange({ employeeCount: parseInt(e.target.value) || undefined })}
-                placeholder="Number of employees"
-                className="w-full px-3 py-2 border rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Fiscal Year End</label>
-              <select
-                value={context.fiscalYearEnd}
-                onChange={(e) => onChange({ fiscalYearEnd: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg bg-white"
-              >
-                <option value="march">March</option>
-                <option value="december">December</option>
-                <option value="june">June</option>
-                <option value="september">September</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Compliance Frameworks */}
-        <div className="bg-white p-6 rounded-xl border">
-          <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-            <FileText size={18} /> Compliance Frameworks
-          </h3>
-          <p className="text-sm text-gray-500 mb-4">Select applicable compliance frameworks for {selectedCountry?.name}</p>
-          <div className="flex flex-wrap gap-2">
-            {(complianceOptions[context.country] || []).map(framework => {
-              const isSelected = context.complianceFrameworks.includes(framework);
-              return (
-                <button
-                  key={framework}
-                  onClick={() => {
-                    if (isSelected) {
-                      onChange({ complianceFrameworks: context.complianceFrameworks.filter(f => f !== framework) });
-                    } else {
-                      onChange({ complianceFrameworks: [...context.complianceFrameworks, framework] });
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                    isSelected
-                      ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
+          {/* Industry */}
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <Building2 size={18} /> Industry
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
+                <select
+                  value={context.industry}
+                  onChange={(e) => onChange({ industry: e.target.value, subIndustry: undefined })}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
                 >
-                  {isSelected && <Check size={14} className="inline mr-1" />}
-                  {framework}
-                </button>
-              );
-            })}
+                  {industries.map(i => (
+                    <option key={i.id} value={i.id}>{i.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Sub-Industry</label>
+                <select
+                  value={context.subIndustry || ''}
+                  onChange={(e) => onChange({ subIndustry: e.target.value || undefined })}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
+                >
+                  <option value="">Select sub-industry...</option>
+                  {selectedIndustry?.subIndustries.map(s => (
+                    <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* Context Summary */}
-        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <h4 className="font-medium text-blue-900 mb-2">Current Context Summary</h4>
-          <div className="text-sm text-blue-700 space-y-1">
-            <p>📍 {selectedCountry?.flag} {selectedCountry?.name} ({context.currency})</p>
-            <p>🏭 {context.industry.replace(/_/g, ' ')} {context.subIndustry ? `→ ${context.subIndustry.replace(/_/g, ' ')}` : ''}</p>
-            <p>📊 {context.entitySize.charAt(0).toUpperCase() + context.entitySize.slice(1)} Entity ({selectedCountry?.displayThresholds[context.entitySize as keyof typeof selectedCountry.displayThresholds]})</p>
-            <p>📅 Fiscal Year End: {context.fiscalYearEnd.charAt(0).toUpperCase() + context.fiscalYearEnd.slice(1)}</p>
-            {context.complianceFrameworks.length > 0 && (
-              <p>📋 Compliance: {context.complianceFrameworks.join(', ')}</p>
-            )}
+          {/* Entity Size */}
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <Layers size={18} /> Entity Size
+            </h3>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Size Classification</label>
+                <select
+                  value={context.entitySize}
+                  onChange={(e) => onChange({ entitySize: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
+                >
+                  <option value="micro">Micro - {selectedCountry?.displayThresholds.micro}</option>
+                  <option value="small">Small - {selectedCountry?.displayThresholds.small}</option>
+                  <option value="medium">Medium - {selectedCountry?.displayThresholds.medium}</option>
+                  <option value="large">Large - {selectedCountry?.displayThresholds.large}</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Annual Revenue</label>
+                <input
+                  type="number"
+                  value={context.annualRevenue || ''}
+                  onChange={(e) => onChange({ annualRevenue: parseInt(e.target.value) || undefined })}
+                  placeholder="Enter annual revenue"
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Employee Count</label>
+                <input
+                  type="number"
+                  value={context.employeeCount || ''}
+                  onChange={(e) => onChange({ employeeCount: parseInt(e.target.value) || undefined })}
+                  placeholder="Number of employees"
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Fiscal Year End</label>
+                <select
+                  value={context.fiscalYearEnd}
+                  onChange={(e) => onChange({ fiscalYearEnd: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
+                >
+                  <option value="march">March</option>
+                  <option value="december">December</option>
+                  <option value="june">June</option>
+                  <option value="september">September</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Compliance Frameworks */}
+          <div className="bg-white p-6 rounded-xl border">
+            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+              <FileText size={18} /> Compliance Frameworks
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">Select applicable compliance frameworks for {selectedCountry?.name}</p>
+            <div className="flex flex-wrap gap-2">
+              {(complianceOptions[context.country] || []).map(framework => {
+                const isSelected = context.complianceFrameworks.includes(framework);
+                return (
+                  <button
+                    key={framework}
+                    onClick={() => {
+                      if (isSelected) {
+                        onChange({ complianceFrameworks: context.complianceFrameworks.filter(f => f !== framework) });
+                      } else {
+                        onChange({ complianceFrameworks: [...context.complianceFrameworks, framework] });
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      isSelected
+                        ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {isSelected && <Check size={14} className="inline mr-1" />}
+                    {framework}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Context Summary */}
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <h4 className="font-medium text-blue-900 mb-2">Current Context Summary</h4>
+            <div className="text-sm text-blue-700 space-y-1">
+              <p>📍 {selectedCountry?.flag} {selectedCountry?.name} ({context.currency})</p>
+              <p>🏭 {context.industry.replace(/_/g, ' ')} {context.subIndustry ? `→ ${context.subIndustry.replace(/_/g, ' ')}` : ''}</p>
+              <p>📊 {context.entitySize.charAt(0).toUpperCase() + context.entitySize.slice(1)} Entity ({selectedCountry?.displayThresholds[context.entitySize as keyof typeof selectedCountry.displayThresholds]})</p>
+              <p>📅 Fiscal Year End: {context.fiscalYearEnd.charAt(0).toUpperCase() + context.fiscalYearEnd.slice(1)}</p>
+              {context.complianceFrameworks.length > 0 && (
+                <p>📋 Compliance: {context.complianceFrameworks.join(', ')}</p>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Add/Edit Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h2 className="text-xl font-bold">{editingContext ? 'Edit Context' : 'Add Business Context'}</h2>
+              <button onClick={closeModal} className="text-gray-500 hover:text-gray-700">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Context Name</label>
+                <input
+                  type="text"
+                  value={formData.name || ''}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="e.g., Main Business, US Operations"
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* Country */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Country</label>
+                  <select
+                    value={formData.country}
+                    onChange={(e) => {
+                      const newCountry = countryConfigs.find(c => c.code === e.target.value);
+                      setFormData(prev => ({ 
+                        ...prev, 
+                        country: e.target.value,
+                        currency: newCountry?.currency || prev.currency,
+                        complianceFrameworks: []
+                      }));
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                  >
+                    {countryConfigs.map(c => (
+                      <option key={c.code} value={c.code}>{c.flag} {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Industry */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Industry</label>
+                  <select
+                    value={formData.industry}
+                    onChange={(e) => setFormData(prev => ({ ...prev, industry: e.target.value, subIndustry: undefined }))}
+                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                  >
+                    {industries.map(i => (
+                      <option key={i.id} value={i.id}>{i.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* Sub-Industry */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Sub-Industry</label>
+                  <select
+                    value={formData.subIndustry || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, subIndustry: e.target.value || undefined }))}
+                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                  >
+                    <option value="">Select sub-industry...</option>
+                    {formSelectedIndustry?.subIndustries.map(s => (
+                      <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Entity Size */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Entity Size</label>
+                  <select
+                    value={formData.entitySize}
+                    onChange={(e) => setFormData(prev => ({ ...prev, entitySize: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                  >
+                    <option value="micro">Micro</option>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* Annual Revenue */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Annual Revenue</label>
+                  <input
+                    type="number"
+                    value={formData.annualRevenue || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, annualRevenue: parseInt(e.target.value) || undefined }))}
+                    placeholder="Enter annual revenue"
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+
+                {/* Employee Count */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Employee Count</label>
+                  <input
+                    type="number"
+                    value={formData.employeeCount || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, employeeCount: parseInt(e.target.value) || undefined }))}
+                    placeholder="Number of employees"
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+              </div>
+
+              {/* Fiscal Year End */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fiscal Year End</label>
+                <select
+                  value={formData.fiscalYearEnd}
+                  onChange={(e) => setFormData(prev => ({ ...prev, fiscalYearEnd: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg bg-white"
+                >
+                  <option value="march">March</option>
+                  <option value="december">December</option>
+                  <option value="june">June</option>
+                  <option value="september">September</option>
+                </select>
+              </div>
+
+              {/* Compliance Frameworks */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Compliance Frameworks</label>
+                <div className="flex flex-wrap gap-2">
+                  {(complianceOptions[formData.country] || []).map(framework => {
+                    const isSelected = formData.complianceFrameworks.includes(framework);
+                    return (
+                      <button
+                        key={framework}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setFormData(prev => ({ ...prev, complianceFrameworks: prev.complianceFrameworks.filter(f => f !== framework) }));
+                          } else {
+                            setFormData(prev => ({ ...prev, complianceFrameworks: [...prev.complianceFrameworks, framework] }));
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                          isSelected
+                            ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {isSelected && <Check size={14} className="inline mr-1" />}
+                        {framework}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t flex justify-end gap-3">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={isSaving}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isSaving && <Loader2 size={16} className="animate-spin" />}
+                {editingContext ? 'Update' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4193,13 +4906,13 @@ export default function CFOQueryResolutionEngine() {
 
   // Database hooks for dynamic data
   const { modules, loading: modulesLoading } = useModules();
-  const { countryConfigs, loading: countryLoading } = useCountryConfigs();
+  const { countryConfigs, loading: countryLoading, createCountryConfig, updateCountryConfig, deleteCountryConfig } = useCountryConfigs();
   const { entityTypes, loading: entityTypesLoading } = useEntityTypes();
   const { enrichmentTypes, loading: enrichmentTypesLoading, createEnrichmentType, updateEnrichmentType, deleteEnrichmentType } = useEnrichmentTypes();
   const { llmProviders, loading: llmProvidersLoading } = useLLMProviders();
   const { responseTypes, loading: responseTypesLoading } = useResponseTypes();
   const { intents, loading: intentsLoading, createIntent, updateIntent, deleteIntent, fetchIntents } = useIntents();
-  const { businessContext, loading: businessContextLoading, updateContext } = useBusinessContext();
+  const { businessContext, allContexts, loading: businessContextLoading, updateContext, createContext, deleteContext, setAsDefault } = useBusinessContext();
   const { llmConfig, loading: llmConfigLoading, updateConfig } = useLLMConfig();
   const { tools: helloBooksMcpTools, loading: isFetchingMcpTools, error: mcpToolsError, fetchTools: fetchHelloBooksMcpTools } = useMCPTools();
 
@@ -4875,8 +5588,25 @@ export default function CFOQueryResolutionEngine() {
             onDelete={deleteEnrichmentType}
           />
         )}
-        {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
-        {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
+        {activeTab === 'business' && businessContext && (
+          <BusinessContextView 
+            context={businessContext} 
+            allContexts={allContexts}
+            countryConfigs={countryConfigs} 
+            onChange={updateContext} 
+            onCreate={createContext}
+            onDelete={deleteContext}
+            onSetDefault={setAsDefault}
+          />
+        )}
+        {activeTab === 'countries' && (
+          <CountryConfigView 
+            countryConfigs={countryConfigs}
+            onAdd={createCountryConfig}
+            onUpdate={updateCountryConfig}
+            onDelete={deleteCountryConfig}
+          />
+        )}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
         {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
         {activeTab === 'users' && isAdmin && (

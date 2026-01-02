@@ -34,6 +34,7 @@ export interface CountryConfig {
     medium: string;
     large: string;
   };
+  isActive?: boolean;
 }
 
 export interface EntityType {
@@ -133,6 +134,7 @@ export interface Intent {
 
 export interface BusinessContext {
   id?: string;
+  name?: string;
   country: string;
   industry: string;
   subIndustry?: string;
@@ -142,6 +144,7 @@ export interface BusinessContext {
   fiscalYearEnd: string;
   currency: string;
   complianceFrameworks: string[];
+  isDefault?: boolean;
 }
 
 export interface LLMConfig {
@@ -216,35 +219,113 @@ export function useModules() {
   return { modules, loading, error, refetch: fetchModules };
 }
 
-// Hook for fetching country configs
+// Hook for fetching and managing country configs (CRUD)
 export function useCountryConfigs() {
   const [countryConfigs, setCountryConfigs] = useState<CountryConfig[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function fetch() {
-      const { data, error } = await supabase
-        .from('country_configs')
-        .select('*')
-        .eq('is_active', true);
+  const fetchCountryConfigs = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('country_configs')
+      .select('*')
+      .order('name');
 
-      if (!error && data) {
-        setCountryConfigs(data.map(c => ({
-          code: c.code,
-          name: c.name,
-          flag: c.flag,
-          currency: c.currency,
-          currencySymbol: c.currency_symbol,
-          sizeThresholds: c.size_thresholds as CountryConfig['sizeThresholds'],
-          displayThresholds: c.display_thresholds as CountryConfig['displayThresholds']
-        })));
-      }
-      setLoading(false);
+    if (!error && data) {
+      setCountryConfigs(data.map(c => ({
+        code: c.code,
+        name: c.name,
+        flag: c.flag,
+        currency: c.currency,
+        currencySymbol: c.currency_symbol,
+        sizeThresholds: c.size_thresholds as CountryConfig['sizeThresholds'],
+        displayThresholds: c.display_thresholds as CountryConfig['displayThresholds'],
+        isActive: c.is_active
+      })));
     }
-    fetch();
+    setLoading(false);
   }, []);
 
-  return { countryConfigs, loading };
+  const createCountryConfig = useCallback(async (config: CountryConfig) => {
+    try {
+      const { error } = await supabase
+        .from('country_configs')
+        .insert([{
+          code: config.code,
+          name: config.name,
+          flag: config.flag,
+          currency: config.currency,
+          currency_symbol: config.currencySymbol,
+          size_thresholds: config.sizeThresholds,
+          display_thresholds: config.displayThresholds,
+          is_active: config.isActive ?? true
+        }]);
+
+      if (error) throw error;
+      await fetchCountryConfigs();
+      toast({ title: 'Country config created successfully' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to create country config', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchCountryConfigs]);
+
+  const updateCountryConfig = useCallback(async (code: string, updates: Partial<CountryConfig>) => {
+    try {
+      const dbUpdates: Record<string, any> = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.flag !== undefined) dbUpdates.flag = updates.flag;
+      if (updates.currency !== undefined) dbUpdates.currency = updates.currency;
+      if (updates.currencySymbol !== undefined) dbUpdates.currency_symbol = updates.currencySymbol;
+      if (updates.sizeThresholds !== undefined) dbUpdates.size_thresholds = updates.sizeThresholds;
+      if (updates.displayThresholds !== undefined) dbUpdates.display_thresholds = updates.displayThresholds;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+
+      const { error } = await supabase
+        .from('country_configs')
+        .update(dbUpdates)
+        .eq('code', code);
+
+      if (error) throw error;
+      await fetchCountryConfigs();
+      toast({ title: 'Country config updated' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to update country config', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchCountryConfigs]);
+
+  const deleteCountryConfig = useCallback(async (code: string) => {
+    try {
+      const { error } = await supabase
+        .from('country_configs')
+        .delete()
+        .eq('code', code);
+
+      if (error) throw error;
+      await fetchCountryConfigs();
+      toast({ title: 'Country config deleted' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to delete country config', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchCountryConfigs]);
+
+  useEffect(() => {
+    fetchCountryConfigs();
+  }, [fetchCountryConfigs]);
+
+  return { 
+    countryConfigs, 
+    loading, 
+    refetch: fetchCountryConfigs,
+    createCountryConfig,
+    updateCountryConfig,
+    deleteCountryConfig
+  };
 }
 
 // Hook for fetching entity types
@@ -570,37 +651,94 @@ export function useIntents() {
   return { intents, loading, error, fetchIntents, createIntent, updateIntent, deleteIntent };
 }
 
-// Hook for business context
+// Hook for business context (CRUD)
 export function useBusinessContext() {
   const [businessContext, setBusinessContext] = useState<BusinessContext | null>(null);
+  const [allContexts, setAllContexts] = useState<BusinessContext[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchContext = useCallback(async () => {
-    const { data, error } = await supabase
+    setLoading(true);
+    // Fetch default context
+    const { data: defaultData, error: defaultError } = await supabase
       .from('business_contexts')
       .select('*')
       .eq('is_default', true)
       .maybeSingle();
 
-    if (!error && data) {
+    if (!defaultError && defaultData) {
       setBusinessContext({
-        id: data.id,
-        country: data.country,
-        industry: data.industry,
-        subIndustry: data.sub_industry || undefined,
-        entitySize: data.entity_size,
-        annualRevenue: data.annual_revenue ? Number(data.annual_revenue) : undefined,
-        employeeCount: data.employee_count || undefined,
-        fiscalYearEnd: data.fiscal_year_end,
-        currency: data.currency,
-        complianceFrameworks: (data.compliance_frameworks as string[]) || []
+        id: defaultData.id,
+        country: defaultData.country,
+        industry: defaultData.industry,
+        subIndustry: defaultData.sub_industry || undefined,
+        entitySize: defaultData.entity_size,
+        annualRevenue: defaultData.annual_revenue ? Number(defaultData.annual_revenue) : undefined,
+        employeeCount: defaultData.employee_count || undefined,
+        fiscalYearEnd: defaultData.fiscal_year_end,
+        currency: defaultData.currency,
+        complianceFrameworks: (defaultData.compliance_frameworks as string[]) || [],
+        isDefault: defaultData.is_default,
+        name: defaultData.name || undefined
       });
+    }
+
+    // Fetch all contexts
+    const { data: allData, error: allError } = await supabase
+      .from('business_contexts')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!allError && allData) {
+      setAllContexts(allData.map(d => ({
+        id: d.id,
+        country: d.country,
+        industry: d.industry,
+        subIndustry: d.sub_industry || undefined,
+        entitySize: d.entity_size,
+        annualRevenue: d.annual_revenue ? Number(d.annual_revenue) : undefined,
+        employeeCount: d.employee_count || undefined,
+        fiscalYearEnd: d.fiscal_year_end,
+        currency: d.currency,
+        complianceFrameworks: (d.compliance_frameworks as string[]) || [],
+        isDefault: d.is_default,
+        name: d.name || undefined
+      })));
     }
     setLoading(false);
   }, []);
 
-  const updateContext = useCallback(async (updates: Partial<BusinessContext>) => {
-    if (!businessContext?.id) return;
+  const createContext = useCallback(async (context: Omit<BusinessContext, 'id'>) => {
+    try {
+      const { error } = await supabase
+        .from('business_contexts')
+        .insert([{
+          country: context.country,
+          industry: context.industry,
+          sub_industry: context.subIndustry,
+          entity_size: context.entitySize,
+          annual_revenue: context.annualRevenue,
+          employee_count: context.employeeCount,
+          fiscal_year_end: context.fiscalYearEnd,
+          currency: context.currency,
+          compliance_frameworks: context.complianceFrameworks,
+          is_default: context.isDefault ?? false,
+          name: context.name
+        }]);
+
+      if (error) throw error;
+      await fetchContext();
+      toast({ title: 'Business context created successfully' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to create business context', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchContext]);
+
+  const updateContext = useCallback(async (updates: Partial<BusinessContext>, id?: string) => {
+    const targetId = id || businessContext?.id;
+    if (!targetId) return;
 
     const dbUpdates: Record<string, any> = {};
     if (updates.country !== undefined) dbUpdates.country = updates.country;
@@ -612,22 +750,78 @@ export function useBusinessContext() {
     if (updates.fiscalYearEnd !== undefined) dbUpdates.fiscal_year_end = updates.fiscalYearEnd;
     if (updates.currency !== undefined) dbUpdates.currency = updates.currency;
     if (updates.complianceFrameworks !== undefined) dbUpdates.compliance_frameworks = updates.complianceFrameworks;
+    if (updates.isDefault !== undefined) dbUpdates.is_default = updates.isDefault;
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
 
     const { error } = await supabase
       .from('business_contexts')
       .update(dbUpdates)
-      .eq('id', businessContext.id);
+      .eq('id', targetId);
 
     if (!error) {
-      setBusinessContext(prev => prev ? { ...prev, ...updates } : prev);
+      if (!id || id === businessContext?.id) {
+        setBusinessContext(prev => prev ? { ...prev, ...updates } : prev);
+      }
+      await fetchContext();
+      toast({ title: 'Business context updated' });
     }
-  }, [businessContext?.id]);
+  }, [businessContext?.id, fetchContext]);
+
+  const deleteContext = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('business_contexts')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchContext();
+      toast({ title: 'Business context deleted' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to delete business context', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchContext]);
+
+  const setAsDefault = useCallback(async (id: string) => {
+    try {
+      // First, unset all defaults
+      await supabase
+        .from('business_contexts')
+        .update({ is_default: false })
+        .neq('id', 'placeholder');
+
+      // Then set the new default
+      const { error } = await supabase
+        .from('business_contexts')
+        .update({ is_default: true })
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchContext();
+      toast({ title: 'Default context updated' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to set default context', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchContext]);
 
   useEffect(() => {
     fetchContext();
   }, [fetchContext]);
 
-  return { businessContext, loading, updateContext, refetch: fetchContext };
+  return { 
+    businessContext, 
+    allContexts,
+    loading, 
+    updateContext, 
+    createContext,
+    deleteContext,
+    setAsDefault,
+    refetch: fetchContext 
+  };
 }
 
 // Hook for LLM config
