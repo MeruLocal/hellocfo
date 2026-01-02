@@ -756,8 +756,10 @@ serve(async (req) => {
       // Repair common model mistakes:
       // 1) literal newlines inside "..." strings
       // 2) trailing commas before ] or }
+      // 3) stray control characters
       candidate = sanitizeJsonNewlinesInStrings(candidate)
         .replace(/,\s*([}\]])/g, '$1')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
         .trim();
 
       try {
@@ -865,7 +867,13 @@ Invalid output to fix:\n${content}`;
         totalUsage.totalTokens += repairUsage.totalTokens;
         totalUsage.latencyMs += repairUsage.latencyMs;
 
-        result.dataPipeline = parseJSON<any[]>(repaired, 'pipeline');
+        try {
+          result.dataPipeline = parseJSON<any[]>(repaired, 'pipeline');
+        } catch (err2) {
+          // Final fallback: don't 500 the whole request.
+          console.error('[PIPELINE REPAIR] Repair pass still produced invalid JSON; falling back to empty pipeline.');
+          result.dataPipeline = [];
+        }
       }
 
       completedSections.push('pipeline');
