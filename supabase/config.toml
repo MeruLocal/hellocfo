@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.test-with-mcp]
 verify_jwt = false
+
+[functions.realtime-cfo-agent]
+verify_jwt = false
