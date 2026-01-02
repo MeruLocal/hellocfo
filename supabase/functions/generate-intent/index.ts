@@ -132,7 +132,9 @@ REQUIREMENTS:
 
 ${existingPhrases.length > 0 ? `AVOID duplicating these existing phrases:\n${existingPhrases.slice(0, 10).join('\n')}` : ''}
 
-OUTPUT: JSON array of ${count} strings only.`;
+CRITICAL: If the intent name or description is unclear, vague, or you cannot determine meaningful training phrases, return an EMPTY array []. Do NOT make assumptions or generate generic placeholder phrases. Only generate phrases if you have enough context to create relevant, useful ones.
+
+OUTPUT: JSON array of ${count} strings only. Return [] if insufficient context.`;
 };
 
 // Enhanced entities prompt with better type inference
@@ -181,7 +183,9 @@ GUIDELINES:
 - Include helpful follow-up prompts for required entities
 - Consider ${businessContext?.currency || 'USD'} for currency-related entities
 
-OUTPUT: JSON array of entity objects. Empty array [] if no entities needed.`;
+CRITICAL: If there are no training phrases provided, or if the intent/phrases are too vague to determine meaningful entities, return an EMPTY array []. Do NOT invent or assume entities. Only extract entities that are clearly implied by the training phrases or intent description.
+
+OUTPUT: JSON array of entity objects. Return [] if no entities can be confidently extracted.`;
 };
 
 // Enhanced pipeline prompt with REAL MCP tools
@@ -201,14 +205,7 @@ const generatePipelinePrompt = (
           : 'no params';
         return `- ${tool.name}: ${tool.description} (${params})`;
       }).join('\n')
-    : `FALLBACK TOOLS (use exact names):
-- get_all_bills: Fetch all vendor bills (is_deleted: boolean)
-- get_all_vendors: Fetch all vendors
-- get_all_invoices: Fetch all customer invoices
-- get_all_customers: Fetch all customers
-- get_all_payments: Fetch all payments
-- get_bill_by_id: Get specific bill by ID (billId: string)
-- find_bill_document: Find bill document`;
+    : 'NO MCP TOOLS AVAILABLE';
 
   const entityList = entities.length > 0 
     ? entities.map(e => `- {{${e.name}}}: ${e.type}${e.required ? ' (required)' : ''}`).join('\n')
@@ -254,13 +251,15 @@ PIPELINE NODE TYPES:
    }
 
 CRITICAL RULES:
-- Use EXACT tool names from the list above (e.g., "get_all_bills" not "get_vendor_bills")
+- Use EXACT tool names from the AVAILABLE MCP TOOLS list above
 - Design 2-4 nodes maximum for efficiency
 - Fetch raw data first, then compute aggregations
 - Keep ALL string fields single-line JSON strings (NO literal newlines). If you need line breaks, use "\\n".
 - Use meaningful outputVariable names
 
-OUTPUT: JSON array of pipeline nodes.`;
+CRITICAL: If NO MCP TOOLS are available, OR if the intent is unclear/vague and you cannot determine what data to fetch, return an EMPTY array []. Do NOT invent tool names or make assumptions about what tools exist. Only create pipeline nodes if you have actual tools to use and a clear understanding of the data flow needed.
+
+OUTPUT: JSON array of pipeline nodes. Return [] if no suitable tools available or intent is unclear.`;
 };
 
 // Enhanced enrichments prompt
@@ -269,7 +268,9 @@ const generateEnrichmentsPrompt = (
   module: string,
   pipeline: any[]
 ): string => {
-  const pipelineOutputs = pipeline.map(p => `- ${p.outputVariable}: ${p.description}`).join('\n');
+  const pipelineOutputs = pipeline.length > 0 
+    ? pipeline.map(p => `- ${p.outputVariable}: ${p.description}`).join('\n')
+    : 'NO PIPELINE DATA AVAILABLE';
 
   return `Select intelligent enrichment functions for this CFO query response:
 
@@ -277,7 +278,7 @@ INTENT: ${intentName}
 MODULE: ${module}
 
 PIPELINE DATA AVAILABLE:
-${pipelineOutputs || '- rawData: Fetched data'}
+${pipelineOutputs}
 
 AVAILABLE ENRICHMENTS:
 | Type | Purpose | Config Fields |
@@ -296,6 +297,8 @@ SELECT 2-4 enrichments that add real value. Consider:
 - What comparisons are meaningful?
 - What alerts are actionable?
 
+CRITICAL: If NO PIPELINE DATA is available, OR if the intent is unclear and you cannot determine what enrichments would be meaningful, return an EMPTY array []. Do NOT make assumptions about what data exists or invent enrichments. Only add enrichments if there is actual pipeline data to enrich.
+
 OUTPUT FORMAT:
 [
   {
@@ -304,7 +307,9 @@ OUTPUT FORMAT:
     "config": { relevant_config_fields },
     "description": "Business value this adds"
   }
-]`;
+]
+
+Return [] if no pipeline data or insufficient context.`;
 };
 
 // Enhanced response template prompt
@@ -314,8 +319,12 @@ const generateResponsePrompt = (
   pipeline: any[],
   enrichments: any[]
 ): string => {
-  const pipelineVars = pipeline.map(p => `{${p.outputVariable}} - ${p.description}`).join('\n');
-  const enrichmentVars = enrichments.map(e => `{${e.type}Result} - ${e.description}`).join('\n');
+  const pipelineVars = pipeline.length > 0 
+    ? pipeline.map(p => `{${p.outputVariable}} - ${p.description}`).join('\n')
+    : 'NO PIPELINE VARIABLES AVAILABLE';
+  const enrichmentVars = enrichments.length > 0 
+    ? enrichments.map(e => `{${e.type}Result} - ${e.description}`).join('\n')
+    : 'NO ENRICHMENT VARIABLES AVAILABLE';
 
   return `Create a professional, executive-ready response template:
 
@@ -324,13 +333,10 @@ MODULE: ${module}
 
 AVAILABLE DATA VARIABLES:
 From Pipeline:
-${pipelineVars || 'None'}
+${pipelineVars}
 
 From Enrichments:
-${enrichmentVars || 'None'}
-- {trendDescription} - Period comparison text
-- {alertStatus} - "critical" | "warning" | "healthy"
-- {recommendation} - AI-generated insight
+${enrichmentVars}
 
 TEMPLATE SYNTAX:
 - {variable} - Insert value
@@ -355,6 +361,15 @@ REQUIREMENTS:
 4. Add conditional alerts for thresholds
 5. End with actionable recommendation
 6. Generate 3 contextual follow-up questions
+
+CRITICAL: If NO PIPELINE VARIABLES and NO ENRICHMENT VARIABLES are available, OR if the intent is unclear, return a minimal default response:
+{
+  "type": "metric",
+  "template": "No data available for this query.",
+  "followUpQuestions": []
+}
+
+Do NOT make assumptions about what variables exist. Only reference variables that are explicitly listed above.
 
 OUTPUT:
 {
