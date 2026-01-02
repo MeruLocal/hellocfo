@@ -648,11 +648,39 @@ serve(async (req) => {
       const objectMatch = cleaned.match(/\{[\s\S]*\}/);
       
       try {
-        if (arrayMatch) return JSON.parse(arrayMatch[0]);
-        if (objectMatch) return JSON.parse(objectMatch[0]);
-        return JSON.parse(cleaned);
+        let parsed: any;
+        if (arrayMatch) {
+          parsed = JSON.parse(arrayMatch[0]);
+        } else if (objectMatch) {
+          parsed = JSON.parse(objectMatch[0]);
+        } else {
+          parsed = JSON.parse(cleaned);
+        }
+        
+        // Handle wrapped responses - AI sometimes returns { "pipeline": [...] } or { "intent": { "pipeline": [...] } }
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          // Check for common wrapper keys
+          const wrapperKeys = ['pipeline', 'entities', 'trainingPhrases', 'training_phrases', 'enrichments', 'response', 'data', 'result', 'nodes'];
+          for (const key of wrapperKeys) {
+            if (Array.isArray(parsed[key])) {
+              console.log(`[PARSE] Found ${sectionName} data in wrapper key: ${key}`);
+              return parsed[key] as T;
+            }
+          }
+          // Check for nested intent wrapper
+          if (parsed.intent && typeof parsed.intent === 'object') {
+            for (const key of wrapperKeys) {
+              if (Array.isArray(parsed.intent[key])) {
+                console.log(`[PARSE] Found ${sectionName} data in intent.${key}`);
+                return parsed.intent[key] as T;
+              }
+            }
+          }
+        }
+        
+        return parsed as T;
       } catch (parseError) {
-        console.error(`[PARSE ERROR] Failed to parse ${sectionName} response:`, cleaned.substring(0, 200));
+        console.error(`[PARSE ERROR] Failed to parse ${sectionName} response:`, cleaned.substring(0, 300));
         throw new Error(`Failed to parse AI response for ${sectionName}. The AI returned invalid JSON.`);
       }
     };
