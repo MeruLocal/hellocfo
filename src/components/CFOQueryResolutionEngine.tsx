@@ -5694,7 +5694,7 @@ export default function CFOQueryResolutionEngine() {
       {/* Sidebar */}
       <div className="w-64 bg-slate-800 text-white flex flex-col">
         <div className="p-4 border-b border-slate-700">
-          <h1 className="text-xl font-bold">HelloCRM</h1>
+          <h1 className="text-xl font-bold">HelloCFO</h1>
           <p className="text-xs text-slate-400 mt-1">Query Resolution Platform v3.0</p>
         </div>
 
