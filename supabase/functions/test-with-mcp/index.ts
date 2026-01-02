@@ -71,7 +71,9 @@ class MCPClient {
       
       for (const event of events) {
         if (event.event === "endpoint" && event.data) {
-          this.messageEndpoint = `${this.baseUrl}${event.data}`;
+          this.messageEndpoint = event.data.startsWith("http")
+            ? event.data
+            : `${this.baseUrl}${event.data}`;
           console.log(`[${reqId}] MCP: Got endpoint: ${this.messageEndpoint}`);
           return;
         }
@@ -82,39 +84,38 @@ class MCPClient {
   }
 
   private parseSSEBuffer(): Array<{ event?: string; data?: string }> {
+    // Robust SSE parsing:
+    // - normalize CRLF
+    // - split events by blank line ("\n\n")
+    // - accumulate multiple data: lines
     const events: Array<{ event?: string; data?: string }> = [];
-    const lines = this.buffer.split(/\r?\n/);
-    
-    let currentEvent: { event?: string; data?: string } = {};
-    const remainingLines: string[] = [];
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      
-      if (line === "") {
-        // Empty line = end of event
-        if (currentEvent.event || currentEvent.data) {
-          events.push(currentEvent);
-          currentEvent = {};
+
+    const normalized = this.buffer.replace(/\r\n/g, "\n");
+    const parts = normalized.split("\n\n");
+
+    // The last part may be an incomplete event → keep it in buffer
+    const remaining = parts.pop() ?? "";
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+
+      let eventType: string | undefined;
+      const dataLines: string[] = [];
+
+      for (const line of part.split("\n")) {
+        if (line.startsWith("event:")) {
+          eventType = line.substring(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.substring(5).trim());
         }
-      } else if (line.startsWith("event:")) {
-        currentEvent.event = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        currentEvent.data = line.slice(5).trim();
-      } else if (i === lines.length - 1 && line !== "") {
-        // Last incomplete line
-        remainingLines.push(line);
+      }
+
+      if (dataLines.length > 0 || eventType) {
+        events.push({ event: eventType, data: dataLines.length ? dataLines.join("\n") : undefined });
       }
     }
-    
-    // Keep unparsed content in buffer
-    this.buffer = remainingLines.join("\n");
-    if (currentEvent.event || currentEvent.data) {
-      // Incomplete event, put back
-      if (currentEvent.event) this.buffer = `event:${currentEvent.event}\n` + this.buffer;
-      if (currentEvent.data) this.buffer = `data:${currentEvent.data}\n` + this.buffer;
-    }
-    
+
+    this.buffer = remaining;
     return events;
   }
 
