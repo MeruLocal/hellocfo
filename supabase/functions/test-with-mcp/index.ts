@@ -28,11 +28,15 @@ interface AnthropicTool {
   input_schema: Record<string, unknown>;
 }
 
-// Simple MCP Client (based on reference code)
+// SSE-based MCP Client for production server (mcp.hellobooks.ai)
+// The production server returns 202 Accepted for POSTs and delivers responses via SSE
 class MCPClient {
   private baseUrl: string;
   private headers: Record<string, string>;
-  private sessionUrl: string | null = null;
+  private messageEndpoint: string | null = null;
+  private sseReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private decoder = new TextDecoder();
+  private buffer = "";
 
   constructor(baseUrl: string, headers: Record<string, string>) {
     this.baseUrl = baseUrl;
@@ -50,44 +54,117 @@ class MCPClient {
       throw new Error(`SSE connection failed: ${response.status}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("Failed to get SSE reader");
-
-    const decoder = new TextDecoder();
+    this.sseReader = response.body!.getReader();
+    
+    // Read until we get the endpoint event
     const startTime = Date.now();
-    const timeout = 10000;
+    const timeout = 15000;
 
     while (Date.now() - startTime < timeout) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      const { value, done } = await this.sseReader.read();
+      if (done) throw new Error("SSE stream ended unexpectedly");
 
-      const text = decoder.decode(value);
-      const lines = text.split("\n");
+      this.buffer += this.decoder.decode(value, { stream: true });
+      
+      // Parse SSE events from buffer
+      const events = this.parseSSEBuffer();
+      
+      for (const event of events) {
+        if (event.event === "endpoint" && event.data) {
+          this.messageEndpoint = `${this.baseUrl}${event.data}`;
+          console.log(`[${reqId}] MCP: Got endpoint: ${this.messageEndpoint}`);
+          return;
+        }
+      }
+    }
 
-      for (const line of lines) {
-        if (line.startsWith("data:")) {
-          const data = line.slice(5).trim();
-          if (data.startsWith("/")) {
-            this.sessionUrl = `${this.baseUrl}${data}`;
-            console.log(`[${reqId}] MCP: Got session URL: ${this.sessionUrl}`);
-            reader.cancel();
-            return;
+    throw new Error("Timeout waiting for endpoint");
+  }
+
+  private parseSSEBuffer(): Array<{ event?: string; data?: string }> {
+    const events: Array<{ event?: string; data?: string }> = [];
+    const lines = this.buffer.split(/\r?\n/);
+    
+    let currentEvent: { event?: string; data?: string } = {};
+    const remainingLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      if (line === "") {
+        // Empty line = end of event
+        if (currentEvent.event || currentEvent.data) {
+          events.push(currentEvent);
+          currentEvent = {};
+        }
+      } else if (line.startsWith("event:")) {
+        currentEvent.event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        currentEvent.data = line.slice(5).trim();
+      } else if (i === lines.length - 1 && line !== "") {
+        // Last incomplete line
+        remainingLines.push(line);
+      }
+    }
+    
+    // Keep unparsed content in buffer
+    this.buffer = remainingLines.join("\n");
+    if (currentEvent.event || currentEvent.data) {
+      // Incomplete event, put back
+      if (currentEvent.event) this.buffer = `event:${currentEvent.event}\n` + this.buffer;
+      if (currentEvent.data) this.buffer = `data:${currentEvent.data}\n` + this.buffer;
+    }
+    
+    return events;
+  }
+
+  private async waitForResponse(requestId: number, reqId: string, timeoutMs = 30000): Promise<unknown> {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeoutMs) {
+      if (!this.sseReader) throw new Error("SSE reader not available");
+      
+      const { value, done } = await this.sseReader.read();
+      if (done) throw new Error("SSE stream ended while waiting for response");
+
+      this.buffer += this.decoder.decode(value, { stream: true });
+      
+      const events = this.parseSSEBuffer();
+      
+      for (const event of events) {
+        if (event.event === "message" && event.data) {
+          try {
+            const parsed = JSON.parse(event.data);
+            console.log(`[${reqId}] MCP: Got message, id=${parsed.id}, looking for ${requestId}`);
+            
+            if (parsed.id === requestId) {
+              if (parsed.error) {
+                throw new Error(parsed.error.message || JSON.stringify(parsed.error));
+              }
+              return parsed.result;
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) {
+              console.log(`[${reqId}] MCP: Failed to parse SSE data: ${event.data.slice(0, 100)}`);
+            } else {
+              throw e;
+            }
           }
         }
       }
     }
 
-    reader.cancel();
-    throw new Error("Timeout waiting for session URL");
+    throw new Error(`Timeout waiting for response to request ${requestId}`);
   }
 
-  private async sendRequest(method: string, params?: unknown, reqId?: string): Promise<unknown> {
-    if (!this.sessionUrl) throw new Error("Not connected");
+  private async sendRequest(method: string, params?: unknown, reqId = "?"): Promise<unknown> {
+    if (!this.messageEndpoint) throw new Error("Not connected");
 
     const requestId = Date.now();
-    console.log(`[${reqId}] MCP: Sending ${method}`);
+    console.log(`[${reqId}] MCP: Sending ${method} (id=${requestId})`);
 
-    const response = await fetch(this.sessionUrl, {
+    // Send POST request (will return 202 Accepted)
+    const response = await fetch(this.messageEndpoint, {
       method: "POST",
       headers: {
         ...this.headers,
@@ -97,17 +174,14 @@ class MCPClient {
         jsonrpc: "2.0",
         id: requestId,
         method,
-        params,
+        params: params || {},
       }),
     });
 
-    const result = await response.json();
-    
-    if (result.error) {
-      throw new Error(result.error.message || JSON.stringify(result.error));
-    }
-    
-    return result.result;
+    console.log(`[${reqId}] MCP: POST ${method} returned ${response.status}`);
+
+    // Wait for response on SSE stream
+    return this.waitForResponse(requestId, reqId);
   }
 
   async initialize(reqId: string): Promise<void> {
@@ -119,8 +193,9 @@ class MCPClient {
       clientInfo: { name: "lovable-cfo", version: "1.0.0" }
     }, reqId);
 
-    if (this.sessionUrl) {
-      await fetch(this.sessionUrl, {
+    // Send initialized notification (no response expected)
+    if (this.messageEndpoint) {
+      await fetch(this.messageEndpoint, {
         method: "POST",
         headers: {
           ...this.headers,
@@ -158,6 +233,13 @@ class MCPClient {
     
     console.log(`[${reqId}] MCP: Tool ${name} returned ${textContent.length} chars`);
     return textContent;
+  }
+
+  close(): void {
+    if (this.sseReader) {
+      this.sseReader.cancel();
+      this.sseReader = null;
+    }
   }
 }
 
@@ -208,6 +290,7 @@ serve(async (req) => {
   }
 
   const debugLogs: DebugLog[] = [];
+  let mcpClient: MCPClient | null = null;
 
   try {
     const { query, intents, businessContext, debug = false } = await req.json();
@@ -242,7 +325,6 @@ serve(async (req) => {
     const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
     const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
 
-    let mcpClient: MCPClient | null = null;
     let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
 
     if (authToken && entityId && orgId) {
@@ -254,6 +336,13 @@ serve(async (req) => {
         });
 
         await mcpClient.connect(reqId);
+        
+        debugLogs.push({ 
+          timestamp: new Date().toISOString(), 
+          type: 'mcp_connection', 
+          data: { status: 'connected' } 
+        });
+
         await mcpClient.initialize(reqId);
         mcpTools = await mcpClient.listTools(reqId);
 
@@ -269,7 +358,10 @@ serve(async (req) => {
           type: 'error', 
           data: { phase: 'mcp_connection', error: String(error) } 
         });
-        mcpClient = null;
+        if (mcpClient) {
+          mcpClient.close();
+          mcpClient = null;
+        }
       }
     } else {
       console.log(`[${reqId}] MCP credentials not configured`);
@@ -388,6 +480,12 @@ Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'IN
         }
       } else if (mcpClient) {
         try {
+          debugLogs.push({ 
+            timestamp: new Date().toISOString(), 
+            type: 'mcp_request', 
+            data: { tool: toolUse.name, input: toolUse.input } 
+          });
+
           const mcpResult = await mcpClient.callTool(toolUse.name, toolUse.input || {}, reqId);
           mcpResults.push({ tool: toolUse.name, input: toolUse.input, result: mcpResult, success: true });
           result = mcpResult;
@@ -402,6 +500,12 @@ Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'IN
           mcpResults.push({ tool: toolUse.name, error: String(error), success: false });
           result = JSON.stringify({ error: String(error) });
           isError = true;
+          
+          debugLogs.push({ 
+            timestamp: new Date().toISOString(), 
+            type: 'error', 
+            data: { phase: 'mcp_tool_call', tool: toolUse.name, error: String(error) } 
+          });
         }
       } else {
         result = JSON.stringify({ error: "MCP not connected" });
@@ -418,6 +522,11 @@ Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'IN
       response = await callAnthropic(llmConfig, systemPrompt, messages, allTools, reqId);
       inputTokens += response.usage?.input_tokens || 0;
       outputTokens += response.usage?.output_tokens || 0;
+    }
+
+    // Cleanup MCP connection
+    if (mcpClient) {
+      mcpClient.close();
     }
 
     const textBlock = response.content.find((b: any) => b.type === "text");
@@ -444,6 +553,12 @@ Context: ${businessContext?.country || 'IN'}, ${businessContext?.currency || 'IN
 
   } catch (error) {
     console.error(`[${reqId}] Error:`, error);
+    
+    // Cleanup on error
+    if (mcpClient) {
+      mcpClient.close();
+    }
+    
     return new Response(
       JSON.stringify({ error: String(error), debugLogs }), 
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
