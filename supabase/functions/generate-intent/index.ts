@@ -297,16 +297,16 @@ MODULE: ${module}
 PIPELINE DATA AVAILABLE:
 ${pipelineOutputs}
 
-OUT-OF-THE-BOX ENRICHMENT TYPES (use these EXACT type IDs):
+AVAILABLE OUT-OF-THE-BOX ENRICHMENT TYPES (PREFERRED - use these EXACT type IDs when applicable):
 | Type ID | Name | Purpose | Config Fields |
 |---------|------|---------|---------------|
 ${enrichmentTypesTable}
 
 YOUR TASK:
 1. Analyze the intent and pipeline data
-2. Select 2-4 enrichments that would add REAL VALUE for a CFO
-3. Use ONLY the enrichment type IDs listed above (e.g., "trend_analysis", "ranking", etc.)
-4. Configure each enrichment with appropriate config fields
+2. Select 2-5 enrichments that would add REAL VALUE for a CFO
+3. PREFER using available enrichment types from the table above
+4. If a specific enrichment need is NOT covered by available types, you CAN suggest a CUSTOM enrichment
 
 SELECTION CRITERIA:
 - What insights would a CFO want from this data?
@@ -314,23 +314,48 @@ SELECTION CRITERIA:
 - What alerts would be actionable?
 - What formatting would improve readability?
 
+ENRICHMENT CATEGORIES:
+1. AVAILABLE (from table above): Use EXACT type IDs (e.g., "trend_analysis", "ranking")
+2. CUSTOM (when no available type fits): Create new enrichment with:
+   - isCustom: true
+   - suggestedType: descriptive snake_case id (e.g., "variance_analysis", "budget_comparison")
+   - suggestedName: Human readable name
+   - suggestedIcon: Appropriate emoji
+   - purpose: What this enrichment does
+
 CRITICAL RULES:
-- Use EXACT type IDs from the table above (e.g., "trend_analysis" not "trendAnalysis")
+- PREFER available enrichments from the table when they fit the need
+- Only suggest CUSTOM enrichments when no available type can fulfill the requirement
 - Only include enrichments if there is actual pipeline data to enrich
 - If NO PIPELINE DATA is available, return an EMPTY array []
 - If the intent is unclear or vague, return an EMPTY array []
-- Do NOT make assumptions or invent enrichment types
+- Do NOT make assumptions without clear context
 
 OUTPUT FORMAT:
 [
   {
     "id": "e1",
     "type": "exact_type_id_from_table",
+    "isCustom": false,
     "config": { 
       "configField1": "value1",
       "configField2": "value2"
     },
     "description": "Business value this enrichment adds"
+  },
+  {
+    "id": "e2",
+    "type": "custom",
+    "isCustom": true,
+    "suggestedType": "variance_analysis",
+    "suggestedName": "Variance Analysis",
+    "suggestedIcon": "📊",
+    "purpose": "Compare actual vs budgeted values",
+    "config": { 
+      "actualField": "value",
+      "budgetField": "budget"
+    },
+    "description": "Shows budget vs actual variance for financial planning insights"
   }
 ]
 
