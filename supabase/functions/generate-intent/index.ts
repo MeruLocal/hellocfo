@@ -6,6 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Timeout for each AI call (30 seconds per call)
+const AI_CALL_TIMEOUT_MS = 30000;
+
 interface LLMConfig {
   id?: string;
   provider: string;
@@ -386,11 +389,37 @@ const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
 // Estimate tokens
 const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
 
-// Call AI with provider config
-const callAI = async (prompt: string, llmConfig: LLMConfig, businessContext?: GenerationRequest['businessContext']): Promise<{ content: string; usage: UsageStats }> => {
+// Fetch with timeout helper
+const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: number): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`AI request timed out after ${timeoutMs / 1000} seconds`);
+    }
+    throw error;
+  }
+};
+
+// Call AI with provider config and timeout
+const callAI = async (
+  prompt: string, 
+  llmConfig: LLMConfig, 
+  businessContext?: GenerationRequest['businessContext'],
+  sectionName?: string
+): Promise<{ content: string; usage: UsageStats }> => {
   const { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
   
-  console.log(`Calling AI with provider: ${provider}, model: ${model}`);
+  console.log(`[AI CALL] Starting ${sectionName || 'generation'} with ${provider}/${model}`);
   
   const startTime = Date.now();
   const systemPrompt = getSystemPrompt(businessContext);
@@ -400,9 +429,9 @@ const callAI = async (prompt: string, llmConfig: LLMConfig, businessContext?: Ge
     const baseEndpoint = (endpoint || '').replace(/\/$/, '');
     const url = baseEndpoint.endsWith('/v1/messages') ? baseEndpoint : `${baseEndpoint}/v1/messages`;
 
-    console.log('Using Azure Anthropic endpoint:', baseEndpoint);
+    console.log(`[AI CALL] Azure Anthropic endpoint: ${baseEndpoint.substring(0, 50)}...`);
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -418,23 +447,29 @@ const callAI = async (prompt: string, llmConfig: LLMConfig, businessContext?: Ge
         system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
       }),
-    });
+    }, AI_CALL_TIMEOUT_MS);
 
     const latencyMs = Date.now() - startTime;
+    console.log(`[AI CALL] ${sectionName || 'request'} completed in ${latencyMs}ms`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Azure Anthropic error:', response.status, errorText);
+      console.error(`[AI CALL ERROR] Azure Anthropic ${response.status}:`, errorText.substring(0, 200));
       if (response.status === 401) {
         throw new Error('Azure Anthropic unauthorized (401). Please verify your subscription key.');
       }
-      throw new Error(`Azure Anthropic error: ${response.status} - ${errorText}`);
+      if (response.status === 429) {
+        throw new Error('Azure Anthropic rate limited (429). Please wait and try again.');
+      }
+      throw new Error(`Azure Anthropic error: ${response.status} - ${errorText.substring(0, 100)}`);
     }
 
     const data = await response.json();
     const content = data.content?.[0]?.text || '';
     const inputTokens = data.usage?.input_tokens || inputTokensEstimate;
     const outputTokens = data.usage?.output_tokens || estimateTokens(content);
+    
+    console.log(`[AI CALL] ${sectionName || 'request'} tokens: ${inputTokens} in, ${outputTokens} out`);
     
     return {
       content,
@@ -443,9 +478,10 @@ const callAI = async (prompt: string, llmConfig: LLMConfig, businessContext?: Ge
   }
   
   if (provider === 'openai') {
-    console.log('Using OpenAI endpoint...');
+    console.log('[AI CALL] Using OpenAI endpoint...');
     const openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
-    const response = await fetch(openaiEndpoint, {
+    
+    const response = await fetchWithTimeout(openaiEndpoint, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -460,20 +496,26 @@ const callAI = async (prompt: string, llmConfig: LLMConfig, businessContext?: Ge
           { role: 'user', content: prompt }
         ],
       }),
-    });
+    }, AI_CALL_TIMEOUT_MS);
 
     const latencyMs = Date.now() - startTime;
+    console.log(`[AI CALL] ${sectionName || 'request'} completed in ${latencyMs}ms`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OpenAI error:', response.status, errorText);
-      throw new Error(`OpenAI error: ${response.status} - ${errorText}`);
+      console.error(`[AI CALL ERROR] OpenAI ${response.status}:`, errorText.substring(0, 200));
+      if (response.status === 429) {
+        throw new Error('OpenAI rate limited (429). Please wait and try again.');
+      }
+      throw new Error(`OpenAI error: ${response.status} - ${errorText.substring(0, 100)}`);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
     const inputTokens = data.usage?.prompt_tokens || inputTokensEstimate;
     const outputTokens = data.usage?.completion_tokens || estimateTokens(content);
+    
+    console.log(`[AI CALL] ${sectionName || 'request'} tokens: ${inputTokens} in, ${outputTokens} out`);
     
     return {
       content,
@@ -550,11 +592,14 @@ const logUsage = async (
       }
     }
   } catch (error) {
-    console.error('Failed to log usage:', error);
+    console.error('[LOG ERROR] Failed to log usage:', error);
   }
 };
 
 serve(async (req) => {
+  // Log every incoming request immediately
+  console.log(`[REQUEST] ${req.method} generate-intent received at ${new Date().toISOString()}`);
+  
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -562,6 +607,8 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
+
+  const requestStartTime = Date.now();
 
   try {
     const request: GenerationRequest = await req.json();
@@ -582,14 +629,13 @@ serve(async (req) => {
       llmConfig
     } = request;
 
-    console.log(`Generating ${section} for intent: ${intentName}`);
-    console.log('LLM Config:', llmConfig ? `${llmConfig.provider}/${llmConfig.model}` : 'Not provided');
-    console.log('MCP Tools provided:', mcpTools?.length || 0);
+    console.log(`[GENERATION START] Intent: "${intentName}" | Section: ${section}`);
+    console.log(`[CONFIG] Provider: ${llmConfig?.provider}/${llmConfig?.model} | MCP Tools: ${mcpTools?.length || 0}`);
 
     validateLLMConfig(llmConfig);
     const config = llmConfig!;
 
-    const parseJSON = <T>(response: string): T => {
+    const parseJSON = <T>(response: string, sectionName: string): T => {
       let cleaned = response.trim();
       // Remove markdown code blocks
       if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
@@ -601,92 +647,109 @@ serve(async (req) => {
       const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
       const objectMatch = cleaned.match(/\{[\s\S]*\}/);
       
-      if (arrayMatch) return JSON.parse(arrayMatch[0]);
-      if (objectMatch) return JSON.parse(objectMatch[0]);
-      return JSON.parse(cleaned);
+      try {
+        if (arrayMatch) return JSON.parse(arrayMatch[0]);
+        if (objectMatch) return JSON.parse(objectMatch[0]);
+        return JSON.parse(cleaned);
+      } catch (parseError) {
+        console.error(`[PARSE ERROR] Failed to parse ${sectionName} response:`, cleaned.substring(0, 200));
+        throw new Error(`Failed to parse AI response for ${sectionName}. The AI returned invalid JSON.`);
+      }
     };
 
     const result: any = {};
     let totalUsage: UsageStats = { inputTokens: 0, outputTokens: 0, totalTokens: 0, latencyMs: 0 };
+    let completedSections: string[] = [];
 
     // Generate training phrases
     if (section === 'training' || section === 'all') {
-      console.log('Generating training phrases...');
+      console.log('[SECTION 1/5] Generating training phrases...');
       const prompt = generateTrainingPhrasesPrompt(
         intentName, moduleName, subModuleName, description, phraseCount, existingPhrases, businessContext
       );
-      const { content, usage } = await callAI(prompt, config, businessContext);
-      result.trainingPhrases = parseJSON<string[]>(content);
+      const { content, usage } = await callAI(prompt, config, businessContext, 'training phrases');
+      result.trainingPhrases = parseJSON<string[]>(content, 'training phrases');
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+      completedSections.push('training');
+      console.log(`[SECTION 1/5] Training phrases complete: ${result.trainingPhrases.length} phrases`);
     }
 
     // Generate entities
     if (section === 'entities' || section === 'all') {
-      console.log('Generating entities...');
+      console.log('[SECTION 2/5] Generating entities...');
       const phrases = result.trainingPhrases || existingPhrases || [];
       const prompt = generateEntitiesPrompt(intentName, moduleName, phrases, businessContext);
-      const { content, usage } = await callAI(prompt, config, businessContext);
-      result.entities = parseJSON<any[]>(content);
+      const { content, usage } = await callAI(prompt, config, businessContext, 'entities');
+      result.entities = parseJSON<any[]>(content, 'entities');
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+      completedSections.push('entities');
+      console.log(`[SECTION 2/5] Entities complete: ${result.entities.length} entities`);
     }
 
     // Generate data pipeline with real MCP tools
     if (section === 'pipeline' || section === 'all') {
-      console.log('Generating data pipeline...');
+      console.log('[SECTION 3/5] Generating data pipeline...');
       const entities = result.entities || existingEntities || [];
       const prompt = generatePipelinePrompt(intentName, moduleName, entities, mcpTools);
-      const { content, usage } = await callAI(prompt, config, businessContext);
-      result.dataPipeline = parseJSON<any[]>(content);
+      const { content, usage } = await callAI(prompt, config, businessContext, 'pipeline');
+      result.dataPipeline = parseJSON<any[]>(content, 'pipeline');
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+      completedSections.push('pipeline');
+      console.log(`[SECTION 3/5] Pipeline complete: ${result.dataPipeline.length} nodes`);
     }
 
     // Generate enrichments
     if (section === 'enrichments' || section === 'all') {
-      console.log('Generating enrichments...');
+      console.log('[SECTION 4/5] Generating enrichments...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline);
-      const { content, usage } = await callAI(prompt, config, businessContext);
-      result.enrichments = parseJSON<any[]>(content);
+      const { content, usage } = await callAI(prompt, config, businessContext, 'enrichments');
+      result.enrichments = parseJSON<any[]>(content, 'enrichments');
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+      completedSections.push('enrichments');
+      console.log(`[SECTION 4/5] Enrichments complete: ${result.enrichments.length} enrichments`);
     }
 
     // Generate response template
     if (section === 'response' || section === 'all') {
-      console.log('Generating response template...');
+      console.log('[SECTION 5/5] Generating response template...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
       const prompt = generateResponsePrompt(intentName, moduleName, pipeline, enrichments);
-      const { content, usage } = await callAI(prompt, config, businessContext);
-      result.responseConfig = parseJSON<any>(content);
+      const { content, usage } = await callAI(prompt, config, businessContext, 'response');
+      result.responseConfig = parseJSON<any>(content, 'response');
       totalUsage.inputTokens += usage.inputTokens;
       totalUsage.outputTokens += usage.outputTokens;
       totalUsage.totalTokens += usage.totalTokens;
       totalUsage.latencyMs += usage.latencyMs;
+      completedSections.push('response');
+      console.log('[SECTION 5/5] Response template complete');
     }
 
     // Log usage
     await logUsage(supabase, config.id, intentId, config.provider, config.model, section, totalUsage, 'success');
 
     result.generatedAt = new Date().toISOString();
-    result.aiConfidence = 0.92 + Math.random() * 0.06; // Higher base confidence with better prompts
+    result.aiConfidence = 0.92 + Math.random() * 0.06;
     result.usedProvider = config.provider;
     result.usedModel = config.model;
     result.usage = totalUsage;
+    result.completedSections = completedSections;
 
-    console.log('Generation complete:', Object.keys(result));
-    console.log('Usage stats:', result.usage);
+    const totalTime = Date.now() - requestStartTime;
+    console.log(`[GENERATION COMPLETE] Intent: "${intentName}" | Sections: ${completedSections.join(', ')} | Total time: ${totalTime}ms | Tokens: ${totalUsage.totalTokens}`);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -694,10 +757,23 @@ serve(async (req) => {
 
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Error in generate-intent function:', error);
-    const status = message.toLowerCase().includes('unauthorized') || message.includes('401') ? 401 : 500;
+    const totalTime = Date.now() - requestStartTime;
+    console.error(`[GENERATION ERROR] After ${totalTime}ms:`, message);
+    
+    // Determine appropriate status code
+    let status = 500;
+    if (message.toLowerCase().includes('unauthorized') || message.includes('401')) {
+      status = 401;
+    } else if (message.toLowerCase().includes('rate limit') || message.includes('429')) {
+      status = 429;
+    } else if (message.toLowerCase().includes('timeout')) {
+      status = 504;
+    }
 
-    return new Response(JSON.stringify({ error: message }), {
+    return new Response(JSON.stringify({ 
+      error: message,
+      errorType: status === 504 ? 'timeout' : status === 429 ? 'rate_limit' : 'generation_error'
+    }), {
       status,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

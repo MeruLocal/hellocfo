@@ -5066,8 +5066,9 @@ export default function CFOQueryResolutionEngine() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'configured' | 'pending'>('all');
   const [isImporting, setIsImporting] = useState(false);
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
-  const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
+  const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, step: '' });
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
 
   // Fetch MCP tools on initial mount
   useEffect(() => {
@@ -5099,8 +5100,11 @@ export default function CFOQueryResolutionEngine() {
     return matchesSearch && matchesModule && matchesStatus;
   }), [intents, searchTerm, filterModule, filterStatus]);
 
+  // Generation timeout (2 minutes total for all 5 sections)
+  const GENERATION_TIMEOUT_MS = 120000;
+
   // AI Generation Functions - Using LLM Config from database
-  const generateIntentConfig = async (intent: Intent): Promise<Intent> => {
+  const generateIntentConfig = async (intent: Intent, abortSignal?: AbortSignal): Promise<Intent> => {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
@@ -5123,12 +5127,30 @@ export default function CFOQueryResolutionEngine() {
       throw new Error('LLM endpoint not set');
     }
     
+    // Set progress at start
+    setGenerationProgress({ current: 1, total: 5, step: 'Generating training phrases...' });
+    
     try {
       console.log('🤖 Generating intent config via AI...');
       console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
       
-      const { data, error, response: invokeResponse } = await supabase.functions.invoke('generate-intent', {
+      // Create a promise that rejects on timeout
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Generation timed out after 2 minutes. Please try again.'));
+        }, GENERATION_TIMEOUT_MS);
+        
+        // Clear timeout if abort signal is triggered
+        abortSignal?.addEventListener('abort', () => {
+          clearTimeout(timeoutId);
+          reject(new Error('Generation was cancelled'));
+        });
+      });
+      
+      // Create the actual generation promise
+      const generationPromise = supabase.functions.invoke('generate-intent', {
         body: {
+          intentId: intent.id,
           intentName: intent.name,
           moduleName: moduleInfo?.name || intent.moduleId,
           subModuleName: subModuleInfo?.name || intent.subModuleId,
@@ -5164,6 +5186,12 @@ export default function CFOQueryResolutionEngine() {
           }
         }
       });
+      
+      // Race between timeout and generation
+      const { data, error, response: invokeResponse } = await Promise.race([
+        generationPromise,
+        timeoutPromise
+      ]) as Awaited<typeof generationPromise>;
 
       if (error) {
         console.error('Edge function error:', error);
@@ -5488,16 +5516,43 @@ export default function CFOQueryResolutionEngine() {
   };
 
   const handleGenerateFlow = async (intentId: string) => {
+    const controller = new AbortController();
+    setGenerationAbortController(controller);
     setIsGenerating(intentId);
+    setGenerationProgress({ current: 0, total: 5, step: 'Starting generation...' });
     try {
       const intent = intents.find(i => i.id === intentId);
       if (intent) {
-        const generated = await generateIntentConfig(intent);
+        const generated = await generateIntentConfig(intent, controller.signal);
         await updateIntent(intentId, generated);
+        toast({ title: 'Generation Complete', description: `Successfully generated configuration for "${intent.name}"` });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Generation failed';
+      if (!message.includes('cancelled')) {
+        toast({ title: 'Generation Failed', description: message, variant: 'destructive' });
       }
     } finally {
       setIsGenerating(null);
+      setGenerationAbortController(null);
+      setGenerationProgress({ current: 0, total: 0, step: '' });
     }
+  };
+
+  // Cancel ongoing generation
+  const handleCancelGeneration = () => {
+    if (generationAbortController) {
+      generationAbortController.abort();
+      toast({ title: 'Generation Cancelled', description: 'You can retry when ready.' });
+    }
+  };
+
+  // Retry generation for stuck/failed intents
+  const handleRetryGeneration = async (intentId: string) => {
+    // Reset intent status first
+    await updateIntent(intentId, { generatedBy: 'pending' as const });
+    // Then regenerate
+    await handleGenerateFlow(intentId);
   };
 
   // Import handlers
@@ -5529,21 +5584,21 @@ export default function CFOQueryResolutionEngine() {
       
       // Get newly created intents for generation
       const pendingIntents = intents.filter(i => i.generatedBy === 'pending');
-      setGenerationProgress({ current: 0, total: pendingIntents.length });
+      setGenerationProgress({ current: 0, total: pendingIntents.length, step: 'Starting...' });
       
       for (let i = 0; i < pendingIntents.length; i++) {
-        setGenerationProgress({ current: i + 1, total: pendingIntents.length });
+        setGenerationProgress({ current: i + 1, total: pendingIntents.length, step: `Generating ${pendingIntents[i].name}` });
         const generated = await generateIntentConfig(pendingIntents[i]);
         await updateIntent(pendingIntents[i].id, generated);
       }
       
-      setGenerationProgress({ current: 0, total: 0 });
+      setGenerationProgress({ current: 0, total: 0, step: '' });
       toast({ title: `Successfully imported ${importedData.length} intents!` });
     } catch (error) {
       console.error('Import error:', error);
       toast({ title: 'Error importing intents', variant: 'destructive' });
       setIsImporting(false);
-      setGenerationProgress({ current: 0, total: 0 });
+      setGenerationProgress({ current: 0, total: 0, step: '' });
     }
   };
 
