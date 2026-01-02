@@ -48,6 +48,8 @@ export interface EnrichmentType {
   icon: string;
   description: string;
   configFields: string[];
+  isActive?: boolean;
+  sortOrder?: number;
 }
 
 export interface LLMProvider {
@@ -273,34 +275,111 @@ export function useEntityTypes() {
   return { entityTypes, loading };
 }
 
-// Hook for fetching enrichment types
+// Hook for fetching and managing enrichment types (CRUD)
 export function useEnrichmentTypes() {
   const [enrichmentTypes, setEnrichmentTypes] = useState<EnrichmentType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function fetch() {
-      const { data, error } = await supabase
-        .from('enrichment_types')
-        .select('*')
-        .eq('is_active', true)
-        .order('sort_order');
+  const fetchEnrichmentTypes = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('enrichment_types')
+      .select('*')
+      .order('sort_order');
 
-      if (!error && data) {
-        setEnrichmentTypes(data.map(e => ({
-          id: e.id,
-          name: e.name,
-          icon: e.icon,
-          description: e.description || '',
-          configFields: (e.config_fields as string[]) || []
-        })));
-      }
-      setLoading(false);
+    if (!error && data) {
+      setEnrichmentTypes(data.map(e => ({
+        id: e.id,
+        name: e.name,
+        icon: e.icon,
+        description: e.description || '',
+        configFields: (e.config_fields as string[]) || [],
+        isActive: e.is_active,
+        sortOrder: e.sort_order
+      })));
     }
-    fetch();
+    setLoading(false);
   }, []);
 
-  return { enrichmentTypes, loading };
+  const createEnrichmentType = useCallback(async (enrichment: Omit<EnrichmentType, 'sortOrder'> & { sortOrder?: number }) => {
+    try {
+      const maxSort = enrichmentTypes.length > 0 ? Math.max(...enrichmentTypes.map(e => e.sortOrder || 0)) : 0;
+      const { error } = await supabase
+        .from('enrichment_types')
+        .insert([{
+          id: enrichment.id,
+          name: enrichment.name,
+          icon: enrichment.icon,
+          description: enrichment.description,
+          config_fields: enrichment.configFields,
+          is_active: enrichment.isActive ?? true,
+          sort_order: enrichment.sortOrder ?? maxSort + 1
+        }]);
+
+      if (error) throw error;
+      await fetchEnrichmentTypes();
+      toast({ title: 'Enrichment type created successfully' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to create enrichment type', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchEnrichmentTypes, enrichmentTypes]);
+
+  const updateEnrichmentType = useCallback(async (id: string, updates: Partial<EnrichmentType>) => {
+    try {
+      const dbUpdates: Record<string, any> = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.icon !== undefined) dbUpdates.icon = updates.icon;
+      if (updates.description !== undefined) dbUpdates.description = updates.description;
+      if (updates.configFields !== undefined) dbUpdates.config_fields = updates.configFields;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+      if (updates.sortOrder !== undefined) dbUpdates.sort_order = updates.sortOrder;
+
+      const { error } = await supabase
+        .from('enrichment_types')
+        .update(dbUpdates)
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchEnrichmentTypes();
+      toast({ title: 'Enrichment type updated' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to update enrichment type', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchEnrichmentTypes]);
+
+  const deleteEnrichmentType = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('enrichment_types')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchEnrichmentTypes();
+      toast({ title: 'Enrichment type deleted' });
+      return true;
+    } catch (err) {
+      toast({ title: 'Failed to delete enrichment type', variant: 'destructive' });
+      throw err;
+    }
+  }, [fetchEnrichmentTypes]);
+
+  useEffect(() => {
+    fetchEnrichmentTypes();
+  }, [fetchEnrichmentTypes]);
+
+  return { 
+    enrichmentTypes, 
+    loading, 
+    refetch: fetchEnrichmentTypes,
+    createEnrichmentType,
+    updateEnrichmentType,
+    deleteEnrichmentType
+  };
 }
 
 // Hook for fetching LLM providers

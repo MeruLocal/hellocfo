@@ -2794,21 +2794,172 @@ function MCPToolsView({
   );
 }
 
-// Enrichments View
-function EnrichmentsView({ enrichmentTypes }: { enrichmentTypes: EnrichmentType[] }) {
+// Enrichments View with CRUD
+function EnrichmentsView({ 
+  enrichmentTypes,
+  onAdd,
+  onUpdate,
+  onDelete
+}: { 
+  enrichmentTypes: EnrichmentType[];
+  onAdd: (enrichment: Omit<EnrichmentType, 'sortOrder'>) => Promise<boolean>;
+  onUpdate: (id: string, updates: Partial<EnrichmentType>) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
+}) {
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
+    id: '',
+    name: '',
+    icon: '✨',
+    description: '',
+    configFields: [] as string[],
+    isActive: true
+  });
+  const [newConfigField, setNewConfigField] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const resetForm = () => {
+    setFormData({
+      id: '',
+      name: '',
+      icon: '✨',
+      description: '',
+      configFields: [],
+      isActive: true
+    });
+    setNewConfigField('');
+  };
+
+  const openAddModal = () => {
+    resetForm();
+    setEditingId(null);
+    setIsAddModalOpen(true);
+  };
+
+  const openEditModal = (enrichment: EnrichmentType) => {
+    setFormData({
+      id: enrichment.id,
+      name: enrichment.name,
+      icon: enrichment.icon,
+      description: enrichment.description,
+      configFields: [...enrichment.configFields],
+      isActive: enrichment.isActive ?? true
+    });
+    setEditingId(enrichment.id);
+    setIsAddModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsAddModalOpen(false);
+    setEditingId(null);
+    resetForm();
+  };
+
+  const addConfigField = () => {
+    if (newConfigField.trim() && !formData.configFields.includes(newConfigField.trim())) {
+      setFormData(prev => ({
+        ...prev,
+        configFields: [...prev.configFields, newConfigField.trim()]
+      }));
+      setNewConfigField('');
+    }
+  };
+
+  const removeConfigField = (field: string) => {
+    setFormData(prev => ({
+      ...prev,
+      configFields: prev.configFields.filter(f => f !== field)
+    }));
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.name.trim()) {
+      toast({ title: 'Name is required', variant: 'destructive' });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      if (editingId) {
+        await onUpdate(editingId, {
+          name: formData.name,
+          icon: formData.icon,
+          description: formData.description,
+          configFields: formData.configFields,
+          isActive: formData.isActive
+        });
+      } else {
+        const id = formData.id.trim() || formData.name.toLowerCase().replace(/\s+/g, '_');
+        await onAdd({
+          id,
+          name: formData.name,
+          icon: formData.icon,
+          description: formData.description,
+          configFields: formData.configFields,
+          isActive: formData.isActive
+        });
+      }
+      closeModal();
+    } catch (err) {
+      console.error('Failed to save enrichment:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Are you sure you want to delete this enrichment type?')) {
+      await onDelete(id);
+    }
+  };
+
+  const emojiOptions = ['✨', '📈', '🎯', '⏱️', '📊', '🏆', '🚨', '💡', '🔮', '⚠️', '💵', '📉', '🔄', '📋', '🎨'];
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Enrichment Functions</h1>
-      <p className="text-gray-500 mb-6">Available intelligence functions for data enrichment (read-only)</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Enrichment Functions</h1>
+          <p className="text-gray-500">Intelligence functions for data enrichment</p>
+        </div>
+        <button
+          onClick={openAddModal}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
+        >
+          <Plus size={18} /> Add Enrichment
+        </button>
+      </div>
 
       <div className="grid grid-cols-2 gap-4">
         {enrichmentTypes.map(type => (
-          <div key={type.id} className="p-4 border rounded-lg bg-white">
-            <div className="flex items-center gap-3 mb-2">
-              <span className="text-2xl">{type.icon}</span>
-              <div>
-                <div className="font-medium">{type.name}</div>
-                <div className="text-sm text-gray-500">!{type.id}</div>
+          <div key={type.id} className={`p-4 border rounded-lg bg-white ${!type.isActive ? 'opacity-60' : ''}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">{type.icon}</span>
+                <div>
+                  <div className="font-medium flex items-center gap-2">
+                    {type.name}
+                    {!type.isActive && (
+                      <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded">Inactive</span>
+                    )}
+                  </div>
+                  <div className="text-sm text-gray-500 font-mono">!{type.id}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => openEditModal(type)}
+                  className="p-2 text-gray-500 hover:bg-gray-100 rounded"
+                >
+                  <Edit size={16} />
+                </button>
+                <button
+                  onClick={() => handleDelete(type.id)}
+                  className="p-2 text-red-500 hover:bg-red-50 rounded"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             </div>
             <p className="text-sm text-gray-600 mb-3">{type.description}</p>
@@ -2820,6 +2971,145 @@ function EnrichmentsView({ enrichmentTypes }: { enrichmentTypes: EnrichmentType[
           </div>
         ))}
       </div>
+
+      {/* Add/Edit Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b">
+              <h2 className="text-xl font-bold">
+                {editingId ? 'Edit Enrichment Type' : 'Add Enrichment Type'}
+              </h2>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* ID (only for new) */}
+              {!editingId && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    ID (optional, auto-generated from name)
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, id: e.target.value }))}
+                    placeholder="e.g., trend_analysis"
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                  />
+                </div>
+              )}
+
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="e.g., Trend Analysis"
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              {/* Icon */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Icon</label>
+                <div className="flex flex-wrap gap-2">
+                  {emojiOptions.map(emoji => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, icon: emoji }))}
+                      className={`text-2xl p-2 rounded-lg border transition-colors ${
+                        formData.icon === emoji 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Describe what this enrichment does..."
+                  rows={3}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              {/* Config Fields */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Config Fields</label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {formData.configFields.map(field => (
+                    <span key={field} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-sm">
+                      {field}
+                      <button onClick={() => removeConfigField(field)} className="text-gray-500 hover:text-red-500">
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newConfigField}
+                    onChange={(e) => setNewConfigField(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addConfigField())}
+                    placeholder="Add config field..."
+                    className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={addConfigField}
+                    className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                  >
+                    <Plus size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Active Toggle */}
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-gray-700">Active</label>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.isActive}
+                    onChange={(e) => setFormData(prev => ({ ...prev, isActive: e.target.checked }))}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+            </div>
+
+            <div className="p-6 border-t flex justify-end gap-3">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={isSaving}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isSaving && <Loader2 size={16} className="animate-spin" />}
+                {editingId ? 'Update' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3905,7 +4195,7 @@ export default function CFOQueryResolutionEngine() {
   const { modules, loading: modulesLoading } = useModules();
   const { countryConfigs, loading: countryLoading } = useCountryConfigs();
   const { entityTypes, loading: entityTypesLoading } = useEntityTypes();
-  const { enrichmentTypes, loading: enrichmentTypesLoading } = useEnrichmentTypes();
+  const { enrichmentTypes, loading: enrichmentTypesLoading, createEnrichmentType, updateEnrichmentType, deleteEnrichmentType } = useEnrichmentTypes();
   const { llmProviders, loading: llmProvidersLoading } = useLLMProviders();
   const { responseTypes, loading: responseTypesLoading } = useResponseTypes();
   const { intents, loading: intentsLoading, createIntent, updateIntent, deleteIntent, fetchIntents } = useIntents();
@@ -4577,7 +4867,14 @@ export default function CFOQueryResolutionEngine() {
             onRefresh={fetchHelloBooksMcpTools}
           />
         )}
-        {activeTab === 'enrichments' && <EnrichmentsView enrichmentTypes={enrichmentTypes} />}
+        {activeTab === 'enrichments' && (
+          <EnrichmentsView 
+            enrichmentTypes={enrichmentTypes} 
+            onAdd={createEnrichmentType}
+            onUpdate={updateEnrichmentType}
+            onDelete={deleteEnrichmentType}
+          />
+        )}
         {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
         {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
