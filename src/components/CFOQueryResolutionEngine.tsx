@@ -3346,100 +3346,23 @@ function LLMConfigView({
   );
 }
 
-// Test Console View
+// Test Console View with LLM + MCP Integration
 function TestConsoleView({ 
   intents, 
   businessContext,
-  countryConfigs
+  countryConfigs,
+  mcpTools
 }: { 
   intents: Intent[]; 
   businessContext: BusinessContext;
   countryConfigs: CountryConfig[];
+  mcpTools?: MCPTool[];
 }) {
   const [query, setQuery] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [testHistory, setTestHistory] = useState<any[]>([]);
-
-  // Find best matching intent using word similarity
-  const findMatchingIntent = (testQuery: string): { intent: Intent | null; confidence: number } => {
-    const queryWords = testQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    let bestMatch: Intent | null = null;
-    let bestScore = 0;
-
-    for (const intent of intents) {
-      if (!intent.isActive) continue;
-      
-      for (const phrase of intent.trainingPhrases) {
-        // Remove entity placeholders for comparison
-        const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
-        const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
-        
-        // Calculate word overlap score
-        const matchingWords = queryWords.filter(qw => 
-          phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
-        );
-        
-        const score = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
-        
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = intent;
-        }
-      }
-      
-      // Also check intent name and description
-      const intentNameWords = intent.name.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const nameMatches = queryWords.filter(qw => 
-        intentNameWords.some(iw => iw.includes(qw) || qw.includes(iw))
-      );
-      const nameScore = nameMatches.length / Math.max(queryWords.length, intentNameWords.length, 1) * 0.7;
-      
-      if (nameScore > bestScore) {
-        bestScore = nameScore;
-        bestMatch = intent;
-      }
-    }
-
-    return {
-      intent: bestScore > 0.2 ? bestMatch : null,
-      confidence: Math.min(0.98, bestScore * 0.9 + 0.1)
-    };
-  };
-
-  // Extract entities from query
-  const extractEntities = (testQuery: string, entities: Entity[]): Record<string, any> => {
-    const extracted: Record<string, any> = {};
-    
-    entities.forEach(entity => {
-      if (entity.type === 'number' || entity.type === 'amount') {
-        const numberMatch = testQuery.match(/\b(\d+(?:\.\d+)?)\b/);
-        if (numberMatch) {
-          extracted[entity.name] = parseFloat(numberMatch[1]);
-        }
-      } else if (entity.type === 'period') {
-        const periodPatterns = ['MTD', 'QTD', 'YTD', '7d', '30d', '90d', 'week', 'month', 'quarter', 'year'];
-        for (const period of periodPatterns) {
-          if (testQuery.toLowerCase().includes(period.toLowerCase())) {
-            extracted[entity.name] = period;
-            break;
-          }
-        }
-      } else if (entity.type === 'date_range') {
-        const dateMatch = testQuery.match(/(\w+\s+\d{4})\s*(?:to|-)\s*(\w+\s+\d{4})/i);
-        if (dateMatch) {
-          extracted[entity.name] = { start: dateMatch[1], end: dateMatch[2] };
-        }
-      }
-      
-      // Apply default value if not extracted
-      if (extracted[entity.name] === undefined && entity.defaultValue) {
-        extracted[entity.name] = entity.defaultValue;
-      }
-    });
-    
-    return extracted;
-  };
+  const [useLLM, setUseLLM] = useState(true);
 
   const runTest = async () => {
     if (!query.trim()) return;
@@ -3447,50 +3370,147 @@ function TestConsoleView({
     setIsRunning(true);
     const startTime = Date.now();
     
-    // Find matching intent
-    const { intent: matchedIntent, confidence } = findMatchingIntent(query);
-    
-    let testResult: any = {
-      query,
-      timestamp: new Date().toISOString(),
-      executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`
-    };
+    try {
+      if (useLLM) {
+        // Use LLM with MCP tools via edge function
+        const { data, error } = await supabase.functions.invoke('test-with-mcp', {
+          body: {
+            query,
+            intents: intents.filter(i => i.isActive).map(i => ({
+              id: i.id,
+              name: i.name,
+              description: i.description,
+              moduleId: i.moduleId,
+              trainingPhrases: i.trainingPhrases,
+              entities: i.entities,
+              isActive: i.isActive,
+              resolutionFlow: i.resolutionFlow
+            })),
+            businessContext: {
+              country: businessContext.country,
+              industry: businessContext.industry,
+              entitySize: businessContext.entitySize,
+              currency: businessContext.currency,
+              fiscalYearEnd: businessContext.fiscalYearEnd
+            },
+            mcpTools: mcpTools || []
+          }
+        });
 
-    if (matchedIntent) {
-      const extractedEntities = extractEntities(query, matchedIntent.entities);
-      const pipeline = matchedIntent.resolutionFlow?.dataPipeline || [];
-      const enrichments = matchedIntent.resolutionFlow?.enrichments || [];
-      const responseTemplate = matchedIntent.resolutionFlow?.responseConfig?.template || 'No response template configured';
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        const testResult = {
+          ...data,
+          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          usedLLM: true,
+          mcpToolsAvailable: (mcpTools || []).length
+        };
+
+        setResult(testResult);
+        setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
+      } else {
+        // Fallback to simple word matching (no LLM)
+        const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        let bestMatch: Intent | null = null;
+        let bestScore = 0;
+
+        for (const intent of intents) {
+          if (!intent.isActive) continue;
+          
+          for (const phrase of intent.trainingPhrases) {
+            const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
+            const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
+            
+            const matchingWords = queryWords.filter(qw => 
+              phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
+            );
+            
+            const score = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
+            
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = intent;
+            }
+          }
+        }
+
+        const matchedIntent = bestScore > 0.2 ? bestMatch : null;
+        const confidence = Math.min(0.98, bestScore * 0.9 + 0.1);
+
+        const testResult: any = {
+          query,
+          timestamp: new Date().toISOString(),
+          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          usedLLM: false
+        };
+
+        if (matchedIntent) {
+          testResult.matchedIntent = {
+            id: matchedIntent.id,
+            name: matchedIntent.name,
+            module: matchedIntent.moduleId,
+            confidence
+          };
+          testResult.response = matchedIntent.resolutionFlow?.responseConfig?.template || 'No response template';
+          testResult.followUpQuestions = matchedIntent.resolutionFlow?.responseConfig?.followUpQuestions || [];
+        } else {
+          testResult.matchedIntent = null;
+        }
+
+        setResult(testResult);
+        setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
+      }
+    } catch (error) {
+      console.error('Test error:', error);
+      toast({
+        title: 'Test Failed',
+        description: error instanceof Error ? error.message : 'Unknown error occurred',
+        variant: 'destructive'
+      });
       
-      testResult = {
-        ...testResult,
-        matchedIntent: {
-          id: matchedIntent.id,
-          name: matchedIntent.name,
-          module: matchedIntent.moduleId,
-          confidence
-        },
-        entities: extractedEntities,
-        pipelineSteps: pipeline.length,
-        enrichmentsCount: enrichments.length,
-        response: responseTemplate,
-        followUpQuestions: matchedIntent.resolutionFlow?.responseConfig?.followUpQuestions || []
-      };
-    } else {
-      testResult.matchedIntent = null;
+      setResult({
+        query,
+        timestamp: new Date().toISOString(),
+        executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        usedLLM: useLLM
+      });
+    } finally {
+      setIsRunning(false);
     }
-    
-    testResult.executionTime = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
-    
-    setResult(testResult);
-    setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
-    setIsRunning(false);
   };
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Test Console</h1>
-      <p className="text-gray-500 mb-6">Test queries against all active intents and view AI matching decisions</p>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-bold text-gray-900">Test Console</h1>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={useLLM}
+              onChange={(e) => setUseLLM(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            <span className="flex items-center gap-1">
+              <Brain size={14} className="text-purple-500" />
+              Use AI (LLM + MCP)
+            </span>
+          </label>
+          {mcpTools && mcpTools.length > 0 && (
+            <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">
+              {mcpTools.length} MCP Tools
+            </span>
+          )}
+        </div>
+      </div>
+      <p className="text-gray-500 mb-6">
+        {useLLM 
+          ? 'AI-powered intent matching with MCP tool integration for real data' 
+          : 'Simple word-matching mode (no AI)'}
+      </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Test Area */}
@@ -3513,7 +3533,7 @@ function TestConsoleView({
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
               >
                 {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                Run Test
+                {useLLM ? 'Run AI Test' : 'Run Test'}
               </button>
             </div>
 
@@ -3551,9 +3571,15 @@ function TestConsoleView({
           {result && (
             <div className="bg-white rounded-xl border overflow-hidden">
               <div className={`px-4 py-3 border-b flex items-center gap-2 ${
+                result.error ? 'bg-red-50' :
                 result.matchedIntent ? 'bg-green-50' : 'bg-amber-50'
               }`}>
-                {result.matchedIntent ? (
+                {result.error ? (
+                  <>
+                    <AlertCircle size={16} className="text-red-600" />
+                    <span className="font-medium text-red-700">Error</span>
+                  </>
+                ) : result.matchedIntent ? (
                   <>
                     <Check size={16} className="text-green-600" />
                     <span className="font-medium text-green-700">Intent Matched</span>
@@ -3564,9 +3590,27 @@ function TestConsoleView({
                     <span className="font-medium text-amber-700">No Intent Match</span>
                   </>
                 )}
-                <span className="text-sm ml-auto">⏱️ {result.executionTime}</span>
+                <div className="flex items-center gap-2 ml-auto text-sm">
+                  {result.usedLLM && (
+                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs flex items-center gap-1">
+                      <Brain size={12} />
+                      AI
+                    </span>
+                  )}
+                  {result.llmModel && (
+                    <span className="text-xs text-gray-500">{result.llmModel}</span>
+                  )}
+                  <span>⏱️ {result.executionTime}</span>
+                </div>
               </div>
               <div className="p-4 space-y-4">
+                {/* Error Display */}
+                {result.error && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-700">{result.error}</p>
+                  </div>
+                )}
+
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Query</div>
                   <div className="font-medium">{result.query}</div>
@@ -3585,15 +3629,30 @@ function TestConsoleView({
                         }`}>
                           {Math.round(result.matchedIntent.confidence * 100)}% confidence
                         </span>
-                        <span className="ml-2 text-xs text-gray-500">({result.matchedIntent.module})</span>
+                        {result.matchedIntent.moduleId && (
+                          <span className="ml-2 text-xs text-gray-500">({result.matchedIntent.moduleId})</span>
+                        )}
                       </div>
                     </div>
+
+                    {/* AI Reasoning */}
+                    {result.reasoning && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                          <Brain size={12} />
+                          AI Reasoning
+                        </div>
+                        <div className="text-sm bg-purple-50 p-3 rounded-lg border border-purple-100">
+                          {result.reasoning}
+                        </div>
+                      </div>
+                    )}
                     
-                    {Object.keys(result.entities || {}).length > 0 && (
+                    {Object.keys(result.extractedEntities || result.entities || {}).length > 0 && (
                       <div>
                         <div className="text-xs text-gray-500 mb-1">Extracted Entities</div>
                         <div className="bg-gray-50 p-2 rounded">
-                          {Object.entries(result.entities).map(([key, value]) => (
+                          {Object.entries(result.extractedEntities || result.entities || {}).map(([key, value]) => (
                             <div key={key} className="flex items-center gap-2 text-sm">
                               <span className="font-mono text-purple-600">{key}:</span>
                               <span className="font-mono text-gray-700">{JSON.stringify(value)}</span>
@@ -3602,20 +3661,56 @@ function TestConsoleView({
                         </div>
                       </div>
                     )}
-                    
-                    <div className="flex gap-4 text-sm">
-                      <div className="flex items-center gap-1">
-                        <GitBranch size={14} className="text-blue-500" />
-                        <span>{result.pipelineSteps || 0} pipeline steps</span>
+
+                    {/* MCP Tool Results */}
+                    {result.mcpToolResults && result.mcpToolResults.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                          <Zap size={12} />
+                          MCP Tool Calls ({result.mcpToolResults.length})
+                        </div>
+                        <div className="space-y-2">
+                          {result.mcpToolResults.map((mcpResult: any, idx: number) => (
+                            <div key={idx} className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-mono text-sm font-medium text-blue-700">{mcpResult.tool}</span>
+                                {mcpResult.error && (
+                                  <span className="text-xs text-red-600">Error</span>
+                                )}
+                              </div>
+                              {mcpResult.args && Object.keys(mcpResult.args).length > 0 && (
+                                <pre className="text-xs text-gray-600 mb-1">{JSON.stringify(mcpResult.args, null, 2)}</pre>
+                              )}
+                              {mcpResult.result && (
+                                <pre className="text-xs bg-white p-2 rounded overflow-auto max-h-32">
+                                  {JSON.stringify(mcpResult.result, null, 2)}
+                                </pre>
+                              )}
+                              {mcpResult.error && (
+                                <p className="text-xs text-red-600">{mcpResult.error}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Sparkles size={14} className="text-purple-500" />
-                        <span>{result.enrichmentsCount || 0} enrichments</span>
+                    )}
+
+                    {/* Data Sources */}
+                    {result.dataSources && result.dataSources.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Data Sources</div>
+                        <div className="flex flex-wrap gap-1">
+                          {result.dataSources.map((source: string, idx: number) => (
+                            <span key={idx} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                              {source}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     
                     <div>
-                      <div className="text-xs text-gray-500 mb-1">Response Preview</div>
+                      <div className="text-xs text-gray-500 mb-1">Response</div>
                       <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap border max-h-48">{result.response}</pre>
                     </div>
                     
@@ -3635,10 +3730,21 @@ function TestConsoleView({
                         </div>
                       </div>
                     )}
+
+                    {/* Token Usage */}
+                    {result.usage && (
+                      <div className="pt-2 border-t">
+                        <div className="text-xs text-gray-500 flex items-center gap-4">
+                          <span>Tokens: {result.usage.total_tokens || 0}</span>
+                          <span>Input: {result.usage.prompt_tokens || 0}</span>
+                          <span>Output: {result.usage.completion_tokens || 0}</span>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 
-                {!result.matchedIntent && (
+                {!result.matchedIntent && !result.error && (
                   <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
                     <p className="font-medium mb-1">💡 Suggestions:</p>
                     <ul className="list-disc list-inside space-y-1 text-amber-700">
@@ -4396,7 +4502,7 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'business' && businessContext && <BusinessContextView context={businessContext} countryConfigs={countryConfigs} onChange={updateContext} />}
         {activeTab === 'countries' && <CountryConfigView countryConfigs={countryConfigs} />}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
-        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} />}
+        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
             <UsersManagement />

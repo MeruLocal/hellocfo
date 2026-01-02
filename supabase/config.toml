@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.check-super-admin]
 verify_jwt = false
+
+[functions.test-with-mcp]
+verify_jwt = false
