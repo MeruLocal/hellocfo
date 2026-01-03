@@ -289,8 +289,13 @@ serve(async (req) => {
       }
       console.error(`[${reqId}] Timeout in state: ${state}`);
       return new Response(
-        JSON.stringify({ error: errorMsg, state, tools: [] }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: "MCP server temporarily unavailable",
+          details: "The HelloBooks MCP server did not respond in time. Please try again in a few minutes.",
+          state,
+          tools: [],
+        }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
