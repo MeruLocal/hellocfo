@@ -630,22 +630,25 @@ If no intent matches well (confidence < 0.3), still return the closest match but
 User Query: "${query}"
 
 Matched Intent: ${matchedIntent?.name || 'None'} (${(confidence * 100).toFixed(0)}% confidence)
-Reasoning: ${matchReasoning}
-
-Extracted Entities: ${JSON.stringify(extractedEntities)}
 
 Data Retrieved:
 ${toolResults.map(r => `- ${r.tool}: ${r.success ? r.data : `Error: ${r.error}`}`).join('\n')}
 
-${responseConfig?.template ? `Response Template: ${responseConfig.template}` : ''}
+CRITICAL INSTRUCTIONS:
+1. When the user asks for "all customers", "list customers", or similar - you MUST display the ACTUAL customer records from the retrieved data, not just summary statistics.
+2. Format each customer record clearly with all available fields (name, ID, contact info, balance, status, etc.)
+3. If the data contains customer records, list them in a clear table or bullet format.
+4. Include summary statistics AFTER listing the actual data, not as a replacement.
+5. Do NOT generate fake/placeholder data - only use the actual data retrieved.
+6. If no data was retrieved or there was an error, explain what happened.
 
-Generate a helpful, professional response that:
-1. Addresses the user's query directly
-2. Uses the retrieved data if available
-3. Provides actionable insights
-4. Is formatted clearly with headers/bullets if appropriate
+Response Format Guidelines:
+- For list queries: Show the actual records first, then optionally add summary stats
+- For aggregate queries: Show calculations and totals
+- For specific lookups: Show the matching record(s) in detail
+- Use markdown formatting for clarity (tables, bullets, headers)
 
-If no data was retrieved, provide a helpful response explaining what you would need to answer the query.`;
+${responseConfig?.template ? `Response Template Hint: ${responseConfig.template}` : ''}`;
 
       const finalMessages: ChatMessage[] = [
         ...conversationHistory,
