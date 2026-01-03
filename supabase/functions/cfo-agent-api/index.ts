@@ -405,15 +405,34 @@ serve(async (req) => {
             'Authorization': `Bearer ${mcpAuthToken}`,
             'X-Entity-Id': mcpEntityId,
             'X-Org-Id': mcpOrgId,
+            'Accept': 'text/event-stream',
+            'Cache-Control': 'no-cache',
           });
-          await mcpClient.connect();
-          await mcpClient.initialize();
-          mcpTools = await mcpClient.listTools();
-          console.log(`[MCP] Loaded ${mcpTools.length} tools`);
-          sendEvent('mcp_connected', { toolCount: mcpTools.length });
+
+          // Retry because MCP can occasionally return 503
+          const maxAttempts = 3;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+              await mcpClient.connect();
+              await mcpClient.initialize();
+              mcpTools = await mcpClient.listTools();
+              console.log(`[MCP] Loaded ${mcpTools.length} tools`);
+              sendEvent('mcp_connected', { toolCount: mcpTools.length });
+              break;
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.error(`[MCP] Attempt ${attempt}/${maxAttempts} failed:`, msg);
+              if (attempt === maxAttempts) throw e;
+              await new Promise((r) => setTimeout(r, 300 * attempt));
+            }
+          }
         } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
           console.error('[MCP] Connection failed:', e);
-          sendEvent('error', { message: 'MCP connection failed, continuing without external data', recoverable: true });
+          try { mcpClient?.close(); } catch { /* ignore */ }
+          mcpClient = null;
+          mcpTools = [];
+          sendEvent('error', { message: `MCP connection failed: ${msg}`, recoverable: true });
         }
       } else {
         console.log('[MCP] Credentials not configured - missing:', {
@@ -514,8 +533,8 @@ If no intent matches well (confidence < 0.3), still return the closest match but
 
       // Send pipeline planned event
       sendEvent('pipeline_planned', {
-        steps: dataPipeline.map(step => ({
-          tool: step.tool,
+        steps: dataPipeline.map((step: any) => ({
+          tool: step.mcpTool || step.tool || null,
           description: step.description,
           purpose: step.purpose || 'Fetch data'
         }))
@@ -532,48 +551,56 @@ If no intent matches well (confidence < 0.3), still return the closest match but
       // Execute MCP tools if available
       const toolResults: { tool: string; success: boolean; data?: unknown; error?: string }[] = [];
 
-      if (mcpClient && dataPipeline.length > 0) {
-        for (const step of dataPipeline) {
-          sendEvent('executing_tool', { tool: step.tool, status: 'running' });
+      if (mcpClient && mcpTools.length > 0 && dataPipeline.length > 0) {
+        for (const step of dataPipeline as any[]) {
+          // Only execute api_call nodes; computation nodes are handled by the LLM response stage.
+          if (step.nodeType && step.nodeType !== 'api_call') continue;
+
+          const toolName: string | undefined = step.mcpTool || step.tool;
+          if (!toolName) {
+            continue;
+          }
+
+          sendEvent('executing_tool', { tool: toolName, status: 'running' });
 
           try {
             // Find matching MCP tool
-            const mcpTool = mcpTools.find(t => 
-              t.name === step.tool || 
-              t.name.toLowerCase().includes(step.tool.toLowerCase())
+            const mcpTool = mcpTools.find(t =>
+              t.name === toolName ||
+              t.name.toLowerCase().includes(toolName.toLowerCase())
             );
 
             if (mcpTool) {
               const result = await mcpClient.callTool(mcpTool.name, extractedEntities);
               const truncatedResult = truncateResult(result);
-              
+
               // Try to count records if result is JSON array
               let recordCount = 1;
               try {
                 const parsed = JSON.parse(result);
                 if (Array.isArray(parsed)) recordCount = parsed.length;
               } catch { /* ignore parse errors */ }
-              
+
               toolResults.push({
-                tool: step.tool,
+                tool: toolName,
                 success: true,
                 data: truncatedResult
               });
 
               sendEvent('tool_result', {
-                tool: step.tool,
+                tool: toolName,
                 success: true,
                 recordCount
               });
             } else {
               toolResults.push({
-                tool: step.tool,
+                tool: toolName,
                 success: false,
                 error: 'Tool not found in MCP'
               });
 
               sendEvent('tool_result', {
-                tool: step.tool,
+                tool: toolName,
                 success: false,
                 error: 'Tool not available'
               });
@@ -581,13 +608,13 @@ If no intent matches well (confidence < 0.3), still return the closest match but
           } catch (e) {
             const errorMsg = e instanceof Error ? e.message : 'Unknown error';
             toolResults.push({
-              tool: step.tool,
+              tool: toolName,
               success: false,
               error: errorMsg
             });
 
             sendEvent('tool_result', {
-              tool: step.tool,
+              tool: toolName,
               success: false,
               error: errorMsg
             });
