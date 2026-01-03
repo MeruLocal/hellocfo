@@ -22,4 +22,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.cfo-agent-api]
+verify_jwt = false
+
+[functions.manage-api-keys]
 verify_jwt = true
