@@ -40,110 +40,169 @@ function truncateResult(result: unknown, maxLength = 8000): string {
   return str.substring(0, maxLength) + `... [truncated, ${str.length - maxLength} chars omitted]`;
 }
 
-// MCP Client for HelloBooks integration
+// MCP Client for HelloBooks integration (matching test-with-mcp implementation)
 class MCPClient {
   private baseUrl: string;
-  private authToken: string;
-  private sessionId: string | null = null;
+  private headers: Record<string, string>;
+  private sessionUrl: string | null = null;
+  private sseReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private pendingRequests = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private buffer = "";
 
-  constructor(baseUrl: string, authToken: string) {
+  constructor(baseUrl: string, headers: Record<string, string>) {
     this.baseUrl = baseUrl;
-    this.authToken = authToken;
+    this.headers = headers;
   }
 
   async connect(): Promise<void> {
-    console.log('[MCP] Connecting to:', this.baseUrl);
-    const response = await fetch(`${this.baseUrl}/sse`, {
-      headers: { 'Authorization': `Bearer ${this.authToken}` }
-    });
-
-    if (!response.ok) {
-      throw new Error(`MCP connection failed: ${response.status}`);
+    console.log('[MCP] Connecting to:', `${this.baseUrl}/sse`);
+    
+    const res = await fetch(`${this.baseUrl}/sse`, { headers: this.headers });
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errorText}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
-
+    this.sseReader = res.body!.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
 
-    // Read until we get the endpoint event
     while (true) {
-      const { done, value } = await reader.read();
+      const { value, done } = await this.sseReader.read();
       if (done) break;
+      this.buffer += decoder.decode(value, { stream: true });
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      for (const line of this.buffer.split("\n")) {
+        if (line.startsWith("data: /")) {
+          this.sessionUrl = `${this.baseUrl}${line.slice(6).trim()}`;
+          console.log('[MCP] Got session URL:', this.sessionUrl);
+          this.listenSSE(decoder);
+          return;
+        } else if (line.startsWith("data: http")) {
+          this.sessionUrl = line.slice(6).trim();
+          console.log('[MCP] Got full session URL:', this.sessionUrl);
+          this.listenSSE(decoder);
+          return;
+        }
+      }
+      this.buffer = "";
+    }
+    throw new Error("Failed to get session URL from SSE");
+  }
 
-      for (const line of lines) {
-        if (line.startsWith('event: endpoint')) {
-          const dataLine = lines[lines.indexOf(line) + 1];
-          if (dataLine?.startsWith('data: ')) {
-            const endpoint = dataLine.slice(6).trim();
-            const urlParams = new URL(endpoint, this.baseUrl);
-            this.sessionId = urlParams.searchParams.get('sessionId');
-            console.log('[MCP] Connected with sessionId:', this.sessionId);
-            reader.cancel();
-            return;
+  private listenSSE(decoder: TextDecoder): void {
+    (async () => {
+      while (true) {
+        const { value, done } = await this.sseReader!.read();
+        if (done) {
+          console.log('[MCP] SSE stream ended');
+          break;
+        }
+        this.buffer += decoder.decode(value, { stream: true });
+
+        const normalized = this.buffer.replace(/\r\n/g, "\n");
+        const messages = normalized.split("\n\n");
+        this.buffer = messages.pop() || "";
+
+        for (const msg of messages) {
+          const lines = msg.split("\n");
+          let eventType = "";
+          let data = "";
+          
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              data = line.slice(5).trim();
+            }
+          }
+
+          if (eventType === "message" && data) {
+            try {
+              const result = JSON.parse(data);
+              console.log('[MCP] Received message id=', result.id);
+              
+              const pending = this.pendingRequests.get(result.id);
+              if (pending) {
+                this.pendingRequests.delete(result.id);
+                if (result.error) {
+                  pending.reject(new Error(result.error.message || JSON.stringify(result.error)));
+                } else {
+                  pending.resolve(result.result);
+                }
+              }
+            } catch (e) {
+              console.log('[MCP] Failed to parse SSE data');
+            }
           }
         }
       }
-    }
+    })();
+  }
+
+  private async request(method: string, params?: unknown): Promise<unknown> {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.pendingRequests.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error(`Request timeout for ${method}`));
+        }
+      }, 30000);
+    });
+
+    console.log(`[MCP] Sending ${method} (id=${id})`);
+
+    await fetch(this.sessionUrl!, {
+      method: "POST",
+      headers: { ...this.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+    });
+
+    return promise;
+  }
+
+  async initialize(): Promise<void> {
+    console.log('[MCP] Initializing...');
+    
+    await this.request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "cfo-agent-api", version: "1.0" },
+    });
+
+    await fetch(this.sessionUrl!, {
+      method: "POST",
+      headers: { ...this.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+
+    console.log('[MCP] Initialized');
   }
 
   async listTools(): Promise<{ name: string; description: string; inputSchema: unknown }[]> {
-    if (!this.sessionId) throw new Error('Not connected');
-
-    const response = await fetch(`${this.baseUrl}/message?sessionId=${this.sessionId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.authToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/list',
-        params: {}
-      })
-    });
-
-    const result = await response.json();
-    return result.result?.tools || [];
+    const result = await this.request("tools/list") as { tools: { name: string; description: string; inputSchema: unknown }[] };
+    console.log(`[MCP] Got ${result.tools?.length || 0} tools`);
+    return result.tools || [];
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    if (!this.sessionId) throw new Error('Not connected');
-
+  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     console.log(`[MCP] Calling tool: ${name}`, args);
-
-    const response = await fetch(`${this.baseUrl}/message?sessionId=${this.sessionId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.authToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/call',
-        params: { name, arguments: args }
-      })
-    });
-
-    const result = await response.json();
-    console.log(`[MCP] Tool ${name} result received`);
-
-    if (result.error) {
-      throw new Error(result.error.message || 'Tool call failed');
-    }
-
-    return result.result?.content?.[0]?.text || result.result;
+    
+    const result = await this.request("tools/call", { name, arguments: args }) as { 
+      content: Array<{ type: string; text?: string }> 
+    };
+    
+    const textContent = result.content?.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(result);
+    console.log(`[MCP] Tool ${name} returned ${textContent.length} chars`);
+    
+    return textContent;
   }
 
   close(): void {
-    this.sessionId = null;
+    this.sseReader?.cancel();
+    console.log('[MCP] Closed');
   }
 }
 
@@ -272,9 +331,11 @@ serve(async (req) => {
     });
   }
 
-  // Get MCP credentials
-  const mcpUrl = Deno.env.get('HELLOBOOKS_MCP_URL');
-  const mcpToken = Deno.env.get('HELLOBOOKS_MCP_TOKEN');
+  // Get MCP credentials (same as test-with-mcp)
+  const mcpAuthToken = Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
+  const mcpEntityId = Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
+  const mcpOrgId = Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
+  const mcpBaseUrl = 'https://mcp.hellobooks.ai';
 
   const startTime = Date.now();
 
@@ -337,16 +398,29 @@ serve(async (req) => {
 
       // Connect to MCP if configured
       let mcpTools: { name: string; description: string; inputSchema: unknown }[] = [];
-      if (mcpUrl && mcpToken) {
+      if (mcpAuthToken && mcpEntityId && mcpOrgId) {
         try {
-          mcpClient = new MCPClient(mcpUrl, mcpToken);
+          console.log('[MCP] Credentials found, connecting...');
+          mcpClient = new MCPClient(mcpBaseUrl, {
+            'Authorization': `Bearer ${mcpAuthToken}`,
+            'X-Entity-Id': mcpEntityId,
+            'X-Org-Id': mcpOrgId,
+          });
           await mcpClient.connect();
+          await mcpClient.initialize();
           mcpTools = await mcpClient.listTools();
           console.log(`[MCP] Loaded ${mcpTools.length} tools`);
+          sendEvent('mcp_connected', { toolCount: mcpTools.length });
         } catch (e) {
           console.error('[MCP] Connection failed:', e);
           sendEvent('error', { message: 'MCP connection failed, continuing without external data', recoverable: true });
         }
+      } else {
+        console.log('[MCP] Credentials not configured - missing:', {
+          hasAuthToken: !!mcpAuthToken,
+          hasEntityId: !!mcpEntityId,
+          hasOrgId: !!mcpOrgId
+        });
       }
 
       // Build intent matching prompt
@@ -473,6 +547,13 @@ If no intent matches well (confidence < 0.3), still return the closest match but
               const result = await mcpClient.callTool(mcpTool.name, extractedEntities);
               const truncatedResult = truncateResult(result);
               
+              // Try to count records if result is JSON array
+              let recordCount = 1;
+              try {
+                const parsed = JSON.parse(result);
+                if (Array.isArray(parsed)) recordCount = parsed.length;
+              } catch { /* ignore parse errors */ }
+              
               toolResults.push({
                 tool: step.tool,
                 success: true,
@@ -482,7 +563,7 @@ If no intent matches well (confidence < 0.3), still return the closest match but
               sendEvent('tool_result', {
                 tool: step.tool,
                 success: true,
-                recordCount: Array.isArray(result) ? result.length : 1
+                recordCount
               });
             } else {
               toolResults.push({
