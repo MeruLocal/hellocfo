@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -31,15 +31,6 @@ interface Intent {
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
-}
-
-// Hash API key using SHA-256
-async function hashApiKey(key: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(key);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Truncate large results to prevent token overflow
@@ -223,105 +214,33 @@ serve(async (req) => {
     });
   }
 
-  // Initialize Supabase client with service role for API key lookups
+  // Validate Authorization header
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized', code: 'MISSING_AUTH' }), {
+      status: 401,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  // Initialize Supabase client
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // Support both JWT and API key authentication
-  const authHeader = req.headers.get('Authorization');
-  const apiKeyHeader = req.headers.get('X-API-Key');
-
-  let authenticatedUserId: string | null = null;
-  let authMethod: 'jwt' | 'api_key' = 'jwt';
-
-  if (apiKeyHeader) {
-    // API Key authentication
-    authMethod = 'api_key';
-    console.log('[Auth] Attempting API key authentication');
-
-    try {
-      // Hash the provided key and lookup
-      const keyHash = await hashApiKey(apiKeyHeader);
-
-      const { data: keyData, error: keyError } = await supabase
-        .from('api_keys')
-        .select('id, user_id, scopes, expires_at')
-        .eq('key_hash', keyHash)
-        .eq('is_active', true)
-        .single();
-
-      if (keyError || !keyData) {
-        console.error('[Auth] Invalid API key:', keyError?.message);
-        return new Response(JSON.stringify({ error: 'Invalid API key', code: 'INVALID_API_KEY' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Check expiration
-      if (keyData.expires_at && new Date(keyData.expires_at) < new Date()) {
-        console.error('[Auth] API key expired');
-        return new Response(JSON.stringify({ error: 'API key expired', code: 'API_KEY_EXPIRED' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Check scope
-      if (!keyData.scopes?.includes('cfo-agent')) {
-        console.error('[Auth] Insufficient scope');
-        return new Response(JSON.stringify({ error: 'Insufficient scope', code: 'INSUFFICIENT_SCOPE' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      authenticatedUserId = keyData.user_id;
-      console.log('[Auth] API key authenticated for user:', authenticatedUserId);
-
-      // Update last used timestamp (non-blocking)
-      supabase.from('api_keys')
-        .update({ last_used_at: new Date().toISOString() })
-        .eq('id', keyData.id)
-        .then(() => console.log('[Auth] Updated last_used_at for API key'));
-
-    } catch (e) {
-      console.error('[Auth] API key validation error:', e);
-      return new Response(JSON.stringify({ error: 'Authentication failed', code: 'AUTH_ERROR' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-  } else if (authHeader?.startsWith('Bearer ')) {
-    // JWT Bearer token authentication
-    const token = authHeader.replace('Bearer ', '');
-    console.log('[Auth] Attempting JWT authentication');
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      console.error('[Auth] Invalid token:', authError?.message);
-      return new Response(JSON.stringify({ error: 'Invalid token', code: 'INVALID_TOKEN' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-    authenticatedUserId = user.id;
-    console.log('[Auth] JWT authenticated for user:', authenticatedUserId);
-
-  } else {
-    // No valid authentication provided
-    return new Response(JSON.stringify({ 
-      error: 'Unauthorized',
-      message: 'Provide either Authorization: Bearer <jwt> or X-API-Key: <key>',
-      code: 'MISSING_AUTH'
-    }), { 
-      status: 401, 
+  // Verify user token
+  const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+  if (authError || !user) {
+    console.error('[Auth] Invalid token:', authError?.message);
+    return new Response(JSON.stringify({ error: 'Invalid token', code: 'INVALID_TOKEN' }), {
+      status: 401,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
+
+  console.log('[Auth] User authenticated:', user.id);
 
   // Parse request body
   let body: { query: string; conversationId?: string; conversationHistory?: ChatMessage[]; stream?: boolean };
@@ -397,8 +316,7 @@ serve(async (req) => {
       // Send connected event
       sendEvent('connected', {
         sessionId: conversationId || crypto.randomUUID(),
-        userId: authenticatedUserId,
-        authMethod,
+        userId: user.id,
         message: 'Connected to CFO Agent API'
       });
 
@@ -641,7 +559,6 @@ If no data was retrieved, provide a helpful response explaining what you would n
       sendEvent('complete', {
         success: true,
         query,
-        authMethod,
         matchedIntent: matchedIntent ? {
           id: matchedIntent.id,
           name: matchedIntent.name,
