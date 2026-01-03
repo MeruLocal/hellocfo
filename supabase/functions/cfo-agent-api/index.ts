@@ -223,7 +223,8 @@ serve(async (req) => {
     });
   }
 
-  const token = authHeader.replace('Bearer ', '');
+  const token = authHeader.replace('Bearer ', '').trim();
+  console.log(`[Auth] Token received, length: ${token.length}, prefix: ${token.substring(0, 20)}...`);
 
   // Initialize Supabase client
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
