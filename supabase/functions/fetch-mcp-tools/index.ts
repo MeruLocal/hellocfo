@@ -80,24 +80,59 @@ serve(async (req) => {
 
     console.log(`[${reqId}] Connecting to MCP SSE endpoint...`);
 
-    // Connect to SSE endpoint
-    const sseResponse = await fetch("https://mcp.hellobooks.ai/sse", {
-      method: "GET",
-      headers: {
-        ...mcpHeaders,
-        "Accept": "text/event-stream",
-        "Cache-Control": "no-cache",
-      },
-    });
+    // Connect to SSE endpoint with retry logic for 503 errors
+    const MAX_RETRIES = 3;
+    let sseResponse: Response | null = null;
+    let lastError = "";
+    
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
+        
+        sseResponse = await fetch("https://mcp.hellobooks.ai/sse", {
+          method: "GET",
+          headers: {
+            ...mcpHeaders,
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+          },
+        });
 
-    console.log(`[${reqId}] SSE response status: ${sseResponse.status}`);
+        console.log(`[${reqId}] SSE response status: ${sseResponse.status}`);
 
-    if (!sseResponse.ok) {
-      const errorText = await sseResponse.text();
-      console.error(`[${reqId}] SSE connection failed: ${errorText}`);
+        if (sseResponse.ok) {
+          break; // Success, exit retry loop
+        }
+
+        // Handle 503 with retry
+        if (sseResponse.status === 503 && attempt < MAX_RETRIES) {
+          const retryDelay = attempt * 1000; // 1s, 2s, 3s
+          console.log(`[${reqId}] MCP server unavailable (503), retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          continue;
+        }
+
+        // Non-retryable error or last attempt
+        lastError = await sseResponse.text();
+        console.error(`[${reqId}] SSE connection failed: ${lastError}`);
+      } catch (fetchError) {
+        lastError = fetchError instanceof Error ? fetchError.message : "Network error";
+        console.error(`[${reqId}] SSE fetch error: ${lastError}`);
+        if (attempt < MAX_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        }
+      }
+    }
+
+    if (!sseResponse || !sseResponse.ok) {
       return new Response(
-        JSON.stringify({ error: "Failed to connect to MCP SSE", details: errorText }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ 
+          error: "MCP server temporarily unavailable", 
+          details: "The HelloBooks MCP server is currently down for maintenance. Please try again in a few minutes.",
+          status: sseResponse?.status || 0,
+          tools: [] // Return empty tools so UI can still function
+        }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
