@@ -302,7 +302,7 @@ export default function ApiConsole() {
             </div>
 
             <TabsContent value="body" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 <div className="p-3 space-y-3 pb-6">
                   {/* Query */}
                   <div>
@@ -409,7 +409,7 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="headers" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 <div className="p-3 space-y-2">
                   {/* Static headers */}
                   <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Request Headers</div>
@@ -448,7 +448,7 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="auth" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 <div className="p-3 space-y-3">
                   {/* Session Toggle */}
                   <div className="flex items-center justify-between p-2 bg-[#2a2a2a] rounded">
@@ -512,7 +512,7 @@ export default function ApiConsole() {
             </div>
 
             <TabsContent value="events" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 {events.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-48 text-slate-600">
                     <Zap size={24} className="mb-2 opacity-50" />
@@ -568,7 +568,7 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="body" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 {finalResponse ? (
                   <div className="p-3 relative">
                     <Button
@@ -593,7 +593,7 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="raw" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 {rawResponse ? (
                   <div className="p-2 relative">
                     <Button
@@ -617,7 +617,7 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="headers" className="flex-1 m-0 overflow-hidden min-h-0">
-              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full" orientation="both">
                 {Object.keys(responseHeaders).length > 0 ? (
                   <div className="p-2 space-y-1">
                     {Object.entries(responseHeaders).map(([key, value]) => (
