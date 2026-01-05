@@ -415,7 +415,7 @@ serve(async (req) => {
         try {
           console.log('[MCP] Credentials found, connecting...');
           mcpClient = new MCPClient(mcpBaseUrl, {
-            'H-Authorization': `Bearer ${mcpAuthToken}`,
+            'Authorization': `Bearer ${mcpAuthToken}`,
             'X-Entity-Id': mcpEntityId,
             'X-Org-Id': mcpOrgId,
             'Accept': 'text/event-stream',

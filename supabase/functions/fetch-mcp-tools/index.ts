@@ -94,7 +94,7 @@ serve(async (req) => {
     }
 
     const mcpHeaders = {
-      "H-Authorization": `Bearer ${authToken}`,
+      "Authorization": `Bearer ${authToken}`,
       "X-Entity-Id": entityId,
       "X-Org-Id": orgId,
     };
