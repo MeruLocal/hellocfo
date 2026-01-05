@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, h-authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -303,7 +303,14 @@ serve(async (req) => {
   console.log('[Auth] User authenticated:', user.id);
 
   // Parse request body
-  let body: { query: string; conversationId?: string; conversationHistory?: ChatMessage[]; stream?: boolean };
+  let body: { 
+    query: string; 
+    conversationId?: string; 
+    conversationHistory?: ChatMessage[]; 
+    stream?: boolean;
+    entityId?: string;
+    orgId?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -313,7 +320,11 @@ serve(async (req) => {
     });
   }
 
-  const { query, conversationId, conversationHistory = [], stream = true } = body;
+  const { query, conversationId, conversationHistory = [], stream = true, entityId, orgId } = body;
+  
+  // Get MCP auth from H-Authorization header (fallback to env)
+  const hAuthHeader = req.headers.get('H-Authorization');
+  const mcpAuthFromHeader = hAuthHeader?.startsWith('Bearer ') ? hAuthHeader.replace('Bearer ', '').trim() : null;
 
   if (!query || typeof query !== 'string') {
     return new Response(JSON.stringify({ error: 'Query is required' }), {
@@ -331,11 +342,13 @@ serve(async (req) => {
     });
   }
 
-  // Get MCP credentials (same as test-with-mcp)
-  const mcpAuthToken = Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
-  const mcpEntityId = Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
-  const mcpOrgId = Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
+  // Get MCP credentials - prefer request params, fallback to env
+  const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
+  const mcpEntityId = entityId || Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
+  const mcpOrgId = orgId || Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
   const mcpBaseUrl = 'https://mcp.hellobooks.ai';
+  
+  console.log(`[MCP] Using credentials from: ${mcpAuthFromHeader ? 'request header' : 'env'}, entityId from: ${entityId ? 'body' : 'env'}, orgId from: ${orgId ? 'body' : 'env'}`);
 
   const startTime = Date.now();
 
@@ -402,7 +415,7 @@ serve(async (req) => {
         try {
           console.log('[MCP] Credentials found, connecting...');
           mcpClient = new MCPClient(mcpBaseUrl, {
-            'Authorization': `Bearer ${mcpAuthToken}`,
+            'H-Authorization': `Bearer ${mcpAuthToken}`,
             'X-Entity-Id': mcpEntityId,
             'X-Org-Id': mcpOrgId,
             'Accept': 'text/event-stream',
