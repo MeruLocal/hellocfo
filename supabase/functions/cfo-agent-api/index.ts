@@ -33,6 +33,22 @@ interface ChatMessage {
   content: string;
 }
 
+interface LLMConfig {
+  id: string;
+  provider: string;
+  model: string;
+  api_key: string | null;
+  endpoint: string | null;
+  max_tokens: number;
+  temperature: number;
+}
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
 // Truncate large results to prevent token overflow
 function truncateResult(result: unknown, maxLength = 8000): string {
   const str = typeof result === 'string' ? result : JSON.stringify(result);
@@ -206,57 +222,62 @@ class MCPClient {
   }
 }
 
-// Call Lovable AI Gateway
-async function callLovableAI(
-  apiKey: string,
-  systemPrompt: string,
-  messages: ChatMessage[],
-  tools?: unknown[]
+// Call Anthropic API (matching realtime-cfo-agent implementation)
+async function callAnthropic(
+  config: LLMConfig,
+  system: string,
+  messages: unknown[],
+  tools?: AnthropicTool[]
 ): Promise<{ content: string; toolCalls?: { name: string; arguments: Record<string, unknown> }[] }> {
-  const body: Record<string, unknown> = {
-    model: 'google/gemini-2.5-flash',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages
-    ],
-    max_tokens: 4096
-  };
+  const endpoint = config.provider === "azure-anthropic"
+    ? `${config.endpoint || "https://cursor-api-west-us-resource.openai.azure.com/anthropic"}/v1/messages`
+    : "https://api.anthropic.com/v1/messages";
 
-  if (tools && tools.length > 0) {
-    body.tools = tools;
-    body.tool_choice = 'auto';
-  }
+  console.log(`[Anthropic] Calling: ${config.model} via ${config.provider}`);
 
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
+  const res = await fetch(endpoint, {
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json",
+      "x-api-key": config.api_key || "",
+      "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      model: config.model,
+      max_tokens: config.max_tokens || 4096,
+      system,
+      messages,
+      tools: tools && tools.length > 0 ? tools : undefined,
+    }),
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    console.error('[LovableAI] Error:', response.status, error);
-    throw new Error(`AI request failed: ${response.status}`);
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`[Anthropic] Error: ${res.status} - ${err}`);
+    throw new Error(`Anthropic API error: ${res.status} - ${err.slice(0, 200)}`);
   }
 
-  const result = await response.json();
-  const choice = result.choices?.[0];
-  const message = choice?.message;
-
-  if (message?.tool_calls && message.tool_calls.length > 0) {
-    return {
-      content: message.content || '',
-      toolCalls: message.tool_calls.map((tc: { function: { name: string; arguments: string } }) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments || '{}')
-      }))
-    };
+  const result = await res.json();
+  
+  // Extract text content and tool uses from Anthropic response
+  let textContent = '';
+  const toolCalls: { name: string; arguments: Record<string, unknown> }[] = [];
+  
+  for (const block of result.content || []) {
+    if (block.type === 'text') {
+      textContent += block.text;
+    } else if (block.type === 'tool_use') {
+      toolCalls.push({
+        name: block.name,
+        arguments: block.input || {}
+      });
+    }
   }
 
-  return { content: message?.content || '' };
+  return { 
+    content: textContent, 
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined 
+  };
 }
 
 serve(async (req) => {
@@ -333,14 +354,22 @@ serve(async (req) => {
     });
   }
 
-  // Get Lovable AI key
-  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-  if (!lovableApiKey) {
-    return new Response(JSON.stringify({ error: 'AI service not configured' }), {
+  // Get LLM config from database (same as realtime-cfo-agent)
+  const { data: llmConfig, error: llmError } = await supabase
+    .from("llm_configs")
+    .select("*")
+    .eq("is_default", true)
+    .single();
+  
+  if (llmError || !llmConfig?.api_key) {
+    console.error('[LLM] Config error:', llmError?.message);
+    return new Response(JSON.stringify({ error: 'LLM not configured. Please set up your LLM configuration.' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
+
+  console.log(`[LLM] Using config: ${llmConfig.provider}/${llmConfig.model}`);
 
   // Get MCP credentials - prefer request params, fallback to env
   const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
@@ -466,26 +495,24 @@ serve(async (req) => {
         entities: i.entities?.map((e: Record<string, unknown>) => e.name) || []
       }));
 
-      const matchIntentTool = {
-        type: 'function',
-        function: {
-          name: 'match_intent',
-          description: 'Match the user query to the best matching intent',
-          parameters: {
-            type: 'object',
-            properties: {
-              intentId: { type: 'string', description: 'The ID of the matched intent' },
-              intentName: { type: 'string', description: 'Name of the matched intent' },
-              confidence: { type: 'number', description: 'Confidence score 0-1' },
-              reasoning: { type: 'string', description: 'Why this intent was matched' },
-              extractedEntities: {
-                type: 'object',
-                description: 'Entities extracted from the query',
-                additionalProperties: true
-              }
-            },
-            required: ['intentId', 'intentName', 'confidence', 'reasoning']
-          }
+      // Anthropic tool format
+      const matchIntentTool: AnthropicTool = {
+        name: 'match_intent',
+        description: 'Match the user query to the best matching intent',
+        input_schema: {
+          type: 'object',
+          properties: {
+            intentId: { type: 'string', description: 'The ID of the matched intent' },
+            intentName: { type: 'string', description: 'Name of the matched intent' },
+            confidence: { type: 'number', description: 'Confidence score 0-1' },
+            reasoning: { type: 'string', description: 'Why this intent was matched' },
+            extractedEntities: {
+              type: 'object',
+              description: 'Entities extracted from the query',
+              additionalProperties: true
+            }
+          },
+          required: ['intentId', 'intentName', 'confidence', 'reasoning']
         }
       };
 
@@ -503,8 +530,8 @@ Analyze the query and use the match_intent tool to return:
 
 If no intent matches well (confidence < 0.3), still return the closest match but with low confidence.`;
 
-      const matchResult = await callLovableAI(
-        lovableApiKey,
+      const matchResult = await callAnthropic(
+        llmConfig as LLMConfig,
         intentMatchPrompt,
         [{ role: 'user', content: query }],
         [matchIntentTool]
@@ -668,7 +695,11 @@ ${responseConfig?.template ? `Response Template Hint: ${responseConfig.template}
         { role: 'user', content: query }
       ];
 
-      const response = await callLovableAI(lovableApiKey, responsePrompt, finalMessages);
+      const response = await callAnthropic(
+        llmConfig as LLMConfig,
+        responsePrompt,
+        [...conversationHistory.map((m: ChatMessage) => ({ role: m.role, content: m.content })), { role: 'user', content: query }]
+      );
 
       // Stream response in chunks
       const responseText = response.content;
