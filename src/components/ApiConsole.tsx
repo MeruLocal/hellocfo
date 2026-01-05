@@ -48,27 +48,16 @@ export default function ApiConsole() {
   const [statusCode, setStatusCode] = useState<number | null>(null);
   const [responseHeaders, setResponseHeaders] = useState<Record<string, string>>({});
   
+  // Editable auth headers
+  const [authToken, setAuthToken] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "");
+  const [useSessionToken, setUseSessionToken] = useState(true);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
 
   const baseUrl = import.meta.env.VITE_SUPABASE_URL;
   const endpoint = "/functions/v1/cfo-agent-api";
-
-  const config: RequestConfig = {
-    method: "POST",
-    endpoint: `${baseUrl}${endpoint}`,
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-    },
-    body: {
-      query: query,
-      conversationHistory: JSON.parse(conversationHistory || "[]"),
-      conversationId: conversationId || undefined,
-      stream: streamEnabled,
-    },
-    stream: streamEnabled,
-  };
 
   const sendRequest = async () => {
     if (!query.trim()) {
@@ -88,10 +77,25 @@ export default function ApiConsole() {
     abortControllerRef.current = new AbortController();
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      let bearerToken = authToken;
       
-      if (!session) {
-        toast({ title: "Error", description: "Please login to test the API", variant: "destructive" });
+      // If using session token, get it from Supabase
+      if (useSessionToken) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          toast({ title: "Error", description: "Please login to test the API or provide a custom token", variant: "destructive" });
+          setIsLoading(false);
+          return;
+        }
+        bearerToken = session.access_token;
+      } else if (!authToken.trim()) {
+        toast({ title: "Error", description: "Please provide an Authorization token", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
+
+      if (!apiKey.trim()) {
+        toast({ title: "Error", description: "Please provide an API key", variant: "destructive" });
         setIsLoading(false);
         return;
       }
@@ -103,12 +107,12 @@ export default function ApiConsole() {
         stream: streamEnabled,
       };
 
-      const response = await fetch(config.endpoint, {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          "Authorization": `Bearer ${bearerToken}`,
+          "apikey": apiKey,
         },
         body: JSON.stringify(requestBody),
         signal: abortControllerRef.current.signal,
@@ -252,7 +256,6 @@ export default function ApiConsole() {
 
   return (
     <div className="h-full flex flex-col bg-slate-900 text-slate-100">
-      {/* Header */}
       <div className="p-4 border-b border-slate-700 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold">API Console</h2>
@@ -260,13 +263,15 @@ export default function ApiConsole() {
             POST
           </Badge>
         </div>
-        {executionTime && (
-          <div className="flex items-center gap-2 text-sm text-slate-400">
-            <Clock size={14} />
-            <span className="font-mono">{executionTime}</span>
-            {getStatusBadge()}
-          </div>
-        )}
+        <div className="flex items-center gap-4">
+          {executionTime && (
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <Clock size={14} />
+              <span className="font-mono">{executionTime}</span>
+            </div>
+          )}
+          {getStatusBadge()}
+        </div>
       </div>
 
       {/* URL Bar */}
@@ -281,7 +286,7 @@ export default function ApiConsole() {
             </SelectContent>
           </Select>
           <Input
-            value={config.endpoint}
+            value={`${baseUrl}${endpoint}`}
             readOnly
             className="flex-1 bg-slate-700 border-slate-600 font-mono text-sm text-slate-300"
           />
@@ -396,31 +401,57 @@ export default function ApiConsole() {
             </TabsContent>
 
             <TabsContent value="headers" className="flex-1 p-4 overflow-auto">
-              <div className="space-y-3">
+              <div className="space-y-4">
+                {/* Use Session Toggle */}
+                <div className="flex items-center justify-between p-3 bg-slate-800 rounded-lg border border-slate-700">
+                  <div className="space-y-0.5">
+                    <Label className="text-slate-300">Use Session Token</Label>
+                    <p className="text-xs text-slate-500">Auto-fetch from current session</p>
+                  </div>
+                  <Switch
+                    checked={useSessionToken}
+                    onCheckedChange={setUseSessionToken}
+                  />
+                </div>
+
+                {/* Authorization Token */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Authorization (Bearer Token)</Label>
+                  <Textarea
+                    placeholder={useSessionToken ? "Using session token automatically..." : "Enter your Bearer token here"}
+                    value={authToken}
+                    onChange={(e) => setAuthToken(e.target.value)}
+                    disabled={useSessionToken}
+                    className="bg-slate-800 border-slate-600 font-mono text-xs min-h-[80px] text-slate-100 placeholder:text-slate-500 disabled:opacity-50"
+                  />
+                  {useSessionToken && (
+                    <p className="text-xs text-green-400 flex items-center gap-1">
+                      <Check size={12} /> Token will be fetched from your current session
+                    </p>
+                  )}
+                </div>
+
+                {/* API Key */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">API Key (apikey header)</Label>
+                  <Input
+                    placeholder="Enter your API key"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    className="bg-slate-800 border-slate-600 font-mono text-sm text-slate-100 placeholder:text-slate-500"
+                  />
+                  <p className="text-xs text-slate-500">
+                    Default: Supabase anonymous key
+                  </p>
+                </div>
+
+                {/* Content-Type (readonly) */}
                 <div className="p-3 bg-slate-800 rounded-lg border border-slate-700">
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium text-slate-300">Content-Type</span>
                     <code className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-400">application/json</code>
                   </div>
                 </div>
-                <div className="p-3 bg-slate-800 rounded-lg border border-slate-700">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-slate-300">Authorization</span>
-                    <code className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-400">Bearer &lt;session_token&gt;</code>
-                  </div>
-                </div>
-                <div className="p-3 bg-slate-800 rounded-lg border border-slate-700">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-slate-300">apikey</span>
-                    <code className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-400 truncate max-w-[200px]">
-                      {import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY.slice(0, 20)}...
-                    </code>
-                  </div>
-                </div>
-                <p className="text-xs text-slate-500 mt-4">
-                  <AlertCircle size={12} className="inline mr-1" />
-                  Headers are automatically set based on your session
-                </p>
               </div>
             </TabsContent>
 
