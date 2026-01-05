@@ -53,6 +53,11 @@ export default function ApiConsole() {
   const [apiKey, setApiKey] = useState<string>(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "");
   const [useSessionToken, setUseSessionToken] = useState(true);
   
+  // MCP credentials (H-Authorization, Entity ID, Org ID)
+  const [hAuthToken, setHAuthToken] = useState<string>("");
+  const [entityId, setEntityId] = useState<string>("");
+  const [orgId, setOrgId] = useState<string>("");
+  
   const abortControllerRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
 
@@ -105,15 +110,26 @@ export default function ApiConsole() {
         conversationHistory: JSON.parse(conversationHistory || "[]"),
         ...(conversationId && { conversationId }),
         stream: streamEnabled,
+        ...(entityId.trim() && { entityId: entityId.trim() }),
+        ...(orgId.trim() && { orgId: orgId.trim() }),
       };
+
+      // Build headers with optional H-Authorization
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${bearerToken}`,
+        "apikey": apiKey,
+      };
+      
+      if (hAuthToken.trim()) {
+        requestHeaders["H-Authorization"] = hAuthToken.trim().startsWith("Bearer ") 
+          ? hAuthToken.trim() 
+          : `Bearer ${hAuthToken.trim()}`;
+      }
 
       const response = await fetch(`${baseUrl}${endpoint}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${bearerToken}`,
-          "apikey": apiKey,
-        },
+        headers: requestHeaders,
         body: JSON.stringify(requestBody),
         signal: abortControllerRef.current.signal,
       });
@@ -380,6 +396,42 @@ export default function ApiConsole() {
                   />
                 </div>
 
+                <Separator className="bg-slate-700" />
+
+                {/* MCP Credentials Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Zap size={14} className="text-yellow-400" />
+                    <Label className="text-slate-300 font-medium">MCP Credentials (HelloBooks)</Label>
+                  </div>
+                  
+                  {/* Entity ID */}
+                  <div className="space-y-2">
+                    <Label className="text-slate-400 text-sm">Entity ID</Label>
+                    <Input
+                      placeholder="Enter HelloBooks entity ID"
+                      value={entityId}
+                      onChange={(e) => setEntityId(e.target.value)}
+                      className="bg-slate-800 border-slate-600 font-mono text-sm text-slate-100 placeholder:text-slate-500"
+                    />
+                  </div>
+
+                  {/* Org ID */}
+                  <div className="space-y-2">
+                    <Label className="text-slate-400 text-sm">Org ID</Label>
+                    <Input
+                      placeholder="Enter HelloBooks org ID"
+                      value={orgId}
+                      onChange={(e) => setOrgId(e.target.value)}
+                      className="bg-slate-800 border-slate-600 font-mono text-sm text-slate-100 placeholder:text-slate-500"
+                    />
+                  </div>
+
+                  <p className="text-xs text-slate-500">
+                    Entity ID and Org ID are sent in the request body. Leave empty to use server defaults.
+                  </p>
+                </div>
+
                 {/* Request Preview */}
                 <Collapsible>
                   <CollapsibleTrigger className="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-300">
@@ -393,6 +445,8 @@ export default function ApiConsole() {
                         conversationHistory: JSON.parse(conversationHistory || "[]"),
                         ...(conversationId && { conversationId }),
                         stream: streamEnabled,
+                        ...(entityId.trim() && { entityId: entityId.trim() }),
+                        ...(orgId.trim() && { orgId: orgId.trim() }),
                       }, null, 2)}
                     </pre>
                   </CollapsibleContent>
@@ -442,6 +496,25 @@ export default function ApiConsole() {
                   />
                   <p className="text-xs text-slate-500">
                     Default: Supabase anonymous key
+                  </p>
+                </div>
+
+                <Separator className="bg-slate-700" />
+
+                {/* H-Authorization for MCP */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Zap size={14} className="text-yellow-400" />
+                    <Label className="text-slate-300">H-Authorization (MCP Token)</Label>
+                  </div>
+                  <Textarea
+                    placeholder="Enter HelloBooks MCP Bearer token (optional)"
+                    value={hAuthToken}
+                    onChange={(e) => setHAuthToken(e.target.value)}
+                    className="bg-slate-800 border-slate-600 font-mono text-xs min-h-[80px] text-slate-100 placeholder:text-slate-500"
+                  />
+                  <p className="text-xs text-slate-500">
+                    Sent as H-Authorization header. Leave empty to use server default.
                   </p>
                 </div>
 

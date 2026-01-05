@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, h-authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 // Parse SSE events properly - handles \r\n and \n\n delimiters
@@ -60,20 +61,40 @@ serve(async (req) => {
   }
 
   try {
-    const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-    const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
-    const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+    // Get credentials from H-Authorization header and body first, fallback to env
+    const hAuthHeader = req.headers.get("H-Authorization");
+    const authTokenFromHeader = hAuthHeader?.startsWith("Bearer ") ? hAuthHeader.replace("Bearer ", "").trim() : null;
+    
+    // Parse body for entityId and orgId if POST request
+    let bodyEntityId: string | null = null;
+    let bodyOrgId: string | null = null;
+    
+    if (req.method === "POST") {
+      try {
+        const body = await req.json();
+        bodyEntityId = body.entityId || null;
+        bodyOrgId = body.orgId || null;
+      } catch {
+        // Body parsing failed, continue with env vars
+      }
+    }
+    
+    const authToken = authTokenFromHeader || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
+    const entityId = bodyEntityId || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
+    const orgId = bodyOrgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+    
+    console.log(`[${reqId}] Using credentials from: auth=${authTokenFromHeader ? 'header' : 'env'}, entityId=${bodyEntityId ? 'body' : 'env'}, orgId=${bodyOrgId ? 'body' : 'env'}`);
 
     if (!authToken || !entityId || !orgId) {
       console.error(`[${reqId}] Missing MCP credentials`);
       return new Response(
-        JSON.stringify({ error: "MCP credentials not configured" }),
+        JSON.stringify({ error: "MCP credentials not configured. Provide H-Authorization header and entityId/orgId in body, or configure env vars." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const mcpHeaders = {
-      "Authorization": `Bearer ${authToken}`,
+      "H-Authorization": `Bearer ${authToken}`,
       "X-Entity-Id": entityId,
       "X-Org-Id": orgId,
     };
