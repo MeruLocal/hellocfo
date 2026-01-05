@@ -283,10 +283,10 @@ export default function ApiConsole() {
       </div>
 
       {/* Main Content - Horizontal Split */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left Panel - Request Config */}
-        <div className="w-[45%] min-w-[300px] border-r border-[#333] flex flex-col">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+        <div className="w-[45%] min-w-[300px] border-r border-[#333] flex flex-col min-h-0">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
             <div className="border-b border-[#333] bg-[#252526]">
               <TabsList className="h-8 bg-transparent p-0 gap-0">
                 <TabsTrigger value="body" className="h-8 px-3 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-orange-500 data-[state=active]:bg-transparent">
@@ -301,9 +301,9 @@ export default function ApiConsole() {
               </TabsList>
             </div>
 
-            <TabsContent value="body" className="flex-1 m-0 overflow-auto">
-              <ScrollArea className="h-full">
-                <div className="p-3 space-y-3">
+            <TabsContent value="body" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
+                <div className="p-3 space-y-3 pb-6">
                   {/* Query */}
                   <div>
                     <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Query *</label>
@@ -408,8 +408,8 @@ export default function ApiConsole() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="headers" className="flex-1 m-0 overflow-auto">
-              <ScrollArea className="h-full">
+            <TabsContent value="headers" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 <div className="p-3 space-y-2">
                   {/* Static headers */}
                   <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Request Headers</div>
@@ -447,8 +447,8 @@ export default function ApiConsole() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="auth" className="flex-1 m-0 overflow-auto">
-              <ScrollArea className="h-full">
+            <TabsContent value="auth" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 <div className="p-3 space-y-3">
                   {/* Session Toggle */}
                   <div className="flex items-center justify-between p-2 bg-[#2a2a2a] rounded">
@@ -489,8 +489,8 @@ export default function ApiConsole() {
         </div>
 
         {/* Right Panel - Response */}
-        <div className="flex-1 flex flex-col bg-[#1a1a1a]">
-          <Tabs value={responseTab} onValueChange={setResponseTab} className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col bg-[#1a1a1a] min-h-0">
+          <Tabs value={responseTab} onValueChange={setResponseTab} className="flex-1 flex flex-col min-h-0">
             <div className="border-b border-[#333] bg-[#252526]">
               <TabsList className="h-8 bg-transparent p-0 gap-0">
                 <TabsTrigger value="events" className="h-8 px-3 text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-orange-500 data-[state=active]:bg-transparent">
@@ -511,8 +511,8 @@ export default function ApiConsole() {
               </TabsList>
             </div>
 
-            <TabsContent value="events" className="flex-1 m-0 overflow-hidden">
-              <ScrollArea className="h-full">
+            <TabsContent value="events" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 {events.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-48 text-slate-600">
                     <Zap size={24} className="mb-2 opacity-50" />
@@ -567,8 +567,8 @@ export default function ApiConsole() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="body" className="flex-1 m-0 overflow-hidden">
-              <ScrollArea className="h-full">
+            <TabsContent value="body" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 {finalResponse ? (
                   <div className="p-3 relative">
                     <Button
@@ -592,8 +592,8 @@ export default function ApiConsole() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="raw" className="flex-1 m-0 overflow-hidden">
-              <ScrollArea className="h-full">
+            <TabsContent value="raw" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 {rawResponse ? (
                   <div className="p-2 relative">
                     <Button
@@ -616,8 +616,8 @@ export default function ApiConsole() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="headers" className="flex-1 m-0 overflow-hidden">
-              <ScrollArea className="h-full">
+            <TabsContent value="headers" className="flex-1 m-0 overflow-hidden min-h-0">
+              <ScrollArea className="h-full [&>[data-radix-scroll-area-viewport]]:max-h-full">
                 {Object.keys(responseHeaders).length > 0 ? (
                   <div className="p-2 space-y-1">
                     {Object.entries(responseHeaders).map(([key, value]) => (
