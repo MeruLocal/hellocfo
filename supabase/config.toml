@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.cfo-agent-api]
 verify_jwt = false
+
+[functions.generate-batch-intents]
+verify_jwt = false
