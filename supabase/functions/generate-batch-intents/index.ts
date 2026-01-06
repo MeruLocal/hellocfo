@@ -225,6 +225,7 @@ CRITICAL RULES:
 4. Use EXACT tool names from the provided MCP tools list
 5. Design practical, real-world CFO queries
 6. Include diverse training phrases with entity placeholders like {{limit}}, {{period}}, {{vendor}}
+7. EVERY pipeline step MUST have complete information - no empty or placeholder values
 
 Domain expertise areas:
 - Cash Management: runway analysis, burn rate, liquidity ratios, cash flow forecasting
@@ -244,27 +245,58 @@ ${existingNamesStr}
 AVAILABLE MCP TOOLS:
 ${toolsDescription}
 
-For EACH intent, provide:
-1. "name": A clear, descriptive intent name (e.g., "Top Vendor Spend Analysis", "Cash Runway Projection")
-2. "description": Brief description of what this intent handles
-3. "trainingPhrases": Array of 8-10 diverse training phrases with {{entity}} placeholders
-4. "entities": Array of entities to extract (name, type, required, defaultValue, prompt)
-5. "dataPipeline": Array of pipeline nodes using available MCP tools
-6. "enrichments": Array of 2-4 enrichments (trend_analysis, ranking, percentage_of_total, recommendation, etc.)
-7. "responseConfig": Response template with type, template, and 3 followUpQuestions
+For EACH intent, you MUST provide ALL of these with COMPLETE information:
 
-Entity types: project, vendor, customer, date, date_range, number, amount, percentage, period, enum, string
+1. "name": A clear, descriptive PascalCase intent name (e.g., "TopVendorSpendAnalysis", "CashRunwayProjection")
 
-Output format - JSON array of ${intentCount} complete intent objects:
+2. "description": Detailed description (2-3 sentences) of what this intent handles and its business value
+
+3. "trainingPhrases": Array of 8-10 diverse training phrases with {{entity}} placeholders. Examples:
+   - "Show me {{entity}} for {{period}}"
+   - "What are the top {{limit}} {{items}} by {{metric}}"
+
+4. "entities": Array of entities with ALL fields:
+   - "name": entity variable name (e.g., "limit", "period", "vendor")
+   - "type": one of [project, vendor, customer, date, date_range, number, amount, percentage, period, enum, string]
+   - "required": boolean
+   - "defaultValue": sensible default value as string
+   - "prompt": question to ask user if entity is missing (e.g., "How many results would you like to see?")
+
+5. "dataPipeline": Array of 2-4 pipeline nodes. EACH node MUST have:
+   - "nodeId": unique id like "n1", "n2", "n3"
+   - "nodeType": one of ["api_call", "calculation", "filter", "aggregation", "transformation"]
+   - "sequence": number starting from 1
+   - "mcpTool": exact tool name from AVAILABLE MCP TOOLS (if nodeType is api_call)
+   - "parameters": array of {"name": "param_name", "value": "{{entity_name}} or static_value", "source": "entity|static|previous_node"}
+   - "formula": calculation formula if nodeType is calculation (e.g., "sum(amount) / count(*)")
+   - "outputVariable": variable name to store result (e.g., "vendorData", "totalAmount")
+   - "description": what this step does (e.g., "Fetch vendor payment data from accounting system")
+
+6. "enrichments": Array of 2-4 enrichments. EACH enrichment MUST have:
+   - "id": unique id like "e1", "e2"
+   - "type": one of ["trend_analysis", "ranking", "percentage_of_total", "recommendation", "comparison", "forecast", "benchmark"]
+   - "config": object with type-specific config:
+     * trend_analysis: {"periods": 6, "metric": "amount"}
+     * ranking: {"by": "field_name", "order": "desc", "limit": 10}
+     * percentage_of_total: {"value": "field_name", "total": "total_field"}
+     * recommendation: {"threshold": 0.1, "metric": "field_name"}
+   - "description": what insight this provides (e.g., "Analyze spending trend over past 6 months")
+
+7. "responseConfig": Complete response configuration:
+   - "type": one of ["metric_with_trend", "ranked_list", "comparison_table", "summary_card", "chart_data"]
+   - "template": full response template with {variable} placeholders, e.g., "📊 Top {limit} vendors by spend:\\n{vendorList}\\n\\n💡 Total: {totalAmount}"
+   - "followUpQuestions": array of 3 relevant follow-up questions users might ask
+
+OUTPUT ONLY the JSON array - no explanations:
 [
   {
-    "name": "Intent Name",
-    "description": "What this intent handles",
+    "name": "IntentName",
+    "description": "Full description...",
     "trainingPhrases": ["phrase 1", "phrase 2", ...],
-    "entities": [{"name": "limit", "type": "number", "required": false, "defaultValue": "10"}],
-    "dataPipeline": [...],
-    "enrichments": [...],
-    "responseConfig": {"type": "ranked_list", "template": "...", "followUpQuestions": [...]}
+    "entities": [{"name": "...", "type": "...", "required": true/false, "defaultValue": "...", "prompt": "..."}],
+    "dataPipeline": [{"nodeId": "n1", "nodeType": "api_call", "sequence": 1, "mcpTool": "tool_name", "parameters": [...], "outputVariable": "...", "description": "..."}],
+    "enrichments": [{"id": "e1", "type": "trend_analysis", "config": {...}, "description": "..."}],
+    "responseConfig": {"type": "ranked_list", "template": "...", "followUpQuestions": ["...", "...", "..."]}
   }
 ]`;
 
@@ -294,43 +326,71 @@ Output format - JSON array of ${intentCount} complete intent objects:
 
     console.log(`✅ ${uniqueIntents.length} unique intents after filtering duplicates`);
 
-    // Validate and structure each intent
+    // Validate and structure each intent with complete information
     const validatedIntents = uniqueIntents.map((intent, idx) => ({
-      name: intent.name || `Intent ${idx + 1}`,
-      description: intent.description || '',
+      name: intent.name || `Intent${idx + 1}`,
+      description: intent.description || `Auto-generated intent for ${subModuleName}`,
       moduleId,
       subModuleId,
-      trainingPhrases: Array.isArray(intent.trainingPhrases) ? intent.trainingPhrases : [],
-      entities: Array.isArray(intent.entities) ? intent.entities.map(e => ({
-        name: e.name || '',
+      trainingPhrases: Array.isArray(intent.trainingPhrases) && intent.trainingPhrases.length > 0 
+        ? intent.trainingPhrases 
+        : [`What is the ${intent.name}?`, `Show me ${intent.name}`, `Tell me about ${intent.name}`],
+      entities: Array.isArray(intent.entities) ? intent.entities.map((e, eIdx) => ({
+        name: e.name || `entity${eIdx + 1}`,
         type: e.type || 'string',
-        required: e.required || false,
-        defaultValue: e.defaultValue,
-        prompt: e.prompt
+        required: typeof e.required === 'boolean' ? e.required : false,
+        defaultValue: e.defaultValue || '',
+        prompt: e.prompt || `Please provide the ${e.name || 'value'}`
       })) : [],
       resolutionFlow: {
-        dataPipeline: Array.isArray(intent.dataPipeline) ? intent.dataPipeline.map((node, nodeIdx) => ({
-          nodeId: node.nodeId || `n${nodeIdx + 1}`,
-          nodeType: node.nodeType || 'api_call',
-          sequence: node.sequence || nodeIdx + 1,
-          mcpTool: node.mcpTool,
-          parameters: Array.isArray(node.parameters) ? node.parameters : [],
-          formula: node.formula,
-          outputVariable: node.outputVariable || `output${nodeIdx + 1}`,
-          description: node.description || ''
-        })) : [],
-        enrichments: Array.isArray(intent.enrichments) ? intent.enrichments.map((e, eIdx) => ({
-          id: e.id || `e${eIdx + 1}`,
-          type: e.type || 'trend_analysis',
-          config: e.config || {},
-          description: e.description || ''
-        })) : [],
+        dataPipeline: Array.isArray(intent.dataPipeline) && intent.dataPipeline.length > 0 
+          ? intent.dataPipeline.map((node, nodeIdx) => ({
+              nodeId: node.nodeId || `n${nodeIdx + 1}`,
+              nodeType: node.nodeType || 'api_call',
+              sequence: typeof node.sequence === 'number' ? node.sequence : nodeIdx + 1,
+              mcpTool: node.mcpTool || null,
+              parameters: Array.isArray(node.parameters) ? node.parameters.map(p => ({
+                name: p.name || '',
+                value: p.value || '',
+                source: p.source || 'static'
+              })) : [],
+              formula: node.formula || null,
+              outputVariable: node.outputVariable || `result${nodeIdx + 1}`,
+              description: node.description || `Step ${nodeIdx + 1}: ${node.nodeType || 'Process data'}`
+            }))
+          : [{
+              nodeId: 'n1',
+              nodeType: 'api_call',
+              sequence: 1,
+              mcpTool: mcpTools?.[0]?.name || null,
+              parameters: [],
+              formula: null,
+              outputVariable: 'result1',
+              description: 'Fetch data from source'
+            }],
+        enrichments: Array.isArray(intent.enrichments) && intent.enrichments.length > 0
+          ? intent.enrichments.map((e, eIdx) => ({
+              id: e.id || `e${eIdx + 1}`,
+              type: e.type || 'trend_analysis',
+              config: e.config && typeof e.config === 'object' ? e.config : {},
+              description: e.description || `${e.type || 'Enrichment'} analysis`
+            }))
+          : [{
+              id: 'e1',
+              type: 'trend_analysis',
+              config: { periods: 6, metric: 'amount' },
+              description: 'Analyze trends over time'
+            }],
         responseConfig: {
           type: intent.responseConfig?.type || 'metric_with_trend',
-          template: intent.responseConfig?.template || '📊 Result: {data}',
-          followUpQuestions: Array.isArray(intent.responseConfig?.followUpQuestions) 
+          template: intent.responseConfig?.template || `📊 ${intent.name || 'Result'}:\n\n{data}\n\n💡 Analysis complete.`,
+          followUpQuestions: Array.isArray(intent.responseConfig?.followUpQuestions) && intent.responseConfig.followUpQuestions.length > 0
             ? intent.responseConfig.followUpQuestions 
-            : []
+            : [
+                `Would you like more details on this ${subModuleName}?`,
+                `Should I compare this with the previous period?`,
+                `Would you like to export this data?`
+              ]
         }
       },
       isActive: true,
