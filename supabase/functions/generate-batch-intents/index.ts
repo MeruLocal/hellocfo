@@ -125,7 +125,12 @@ const callLovableAI = async (
 
 // Parse JSON safely with repair attempts
 const parseJSON = (text: string): unknown => {
+  console.log('📝 Raw AI response length:', text.length);
+  console.log('📝 First 500 chars:', text.substring(0, 500));
+  
   let cleaned = text.trim();
+  
+  // Remove markdown code blocks
   if (cleaned.startsWith('```json')) {
     cleaned = cleaned.slice(7);
   } else if (cleaned.startsWith('```')) {
@@ -136,10 +141,40 @@ const parseJSON = (text: string): unknown => {
   }
   cleaned = cleaned.trim();
 
+  // First attempt: direct parse
   try {
     return JSON.parse(cleaned);
-  } catch {
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  } catch (e1) {
+    console.log('📝 Direct parse failed, trying extraction...');
+    
+    // Find the outermost array brackets
+    const firstBracket = cleaned.indexOf('[');
+    const lastBracket = cleaned.lastIndexOf(']');
+    
+    if (firstBracket !== -1 && lastBracket > firstBracket) {
+      const arrayStr = cleaned.substring(firstBracket, lastBracket + 1);
+      try {
+        return JSON.parse(arrayStr);
+      } catch (e2) {
+        console.log('📝 Array extraction failed, trying to fix common issues...');
+        
+        // Try to fix common JSON issues
+        let fixedStr = arrayStr
+          .replace(/,\s*}/g, '}')  // Remove trailing commas in objects
+          .replace(/,\s*\]/g, ']') // Remove trailing commas in arrays
+          .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3') // Quote unquoted keys
+          .replace(/:\s*'([^']*)'/g, ': "$1"'); // Convert single quotes to double
+        
+        try {
+          return JSON.parse(fixedStr);
+        } catch (e3) {
+          console.log('📝 Fixed parse failed:', (e3 as Error).message);
+        }
+      }
+    }
+    
+    // Try to find any valid JSON array
+    const arrayMatch = cleaned.match(/\[\s*\{[\s\S]*\}\s*\]/);
     if (arrayMatch) {
       try {
         return JSON.parse(arrayMatch[0]);
@@ -147,14 +182,8 @@ const parseJSON = (text: string): unknown => {
         // Continue
       }
     }
-    const objectMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (objectMatch) {
-      try {
-        return JSON.parse(objectMatch[0]);
-      } catch {
-        // Continue
-      }
-    }
+    
+    console.error('📝 All parse attempts failed. Response preview:', cleaned.substring(0, 1000));
     throw new Error('Failed to parse AI response as JSON');
   }
 };
