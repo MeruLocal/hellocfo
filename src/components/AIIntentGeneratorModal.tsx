@@ -18,7 +18,7 @@ import {
 import { Loader2, Wand2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
-import type { Module, Intent, LLMConfig, BusinessContext } from '@/hooks/useCFOData';
+import type { Module, Intent, BusinessContext } from '@/hooks/useCFOData';
 import type { MCPTool } from '@/hooks/useMCPTools';
 
 interface AIIntentGeneratorModalProps {
@@ -26,7 +26,6 @@ interface AIIntentGeneratorModalProps {
   onClose: () => void;
   modules: Module[];
   existingIntents: Intent[];
-  llmConfig: LLMConfig | null;
   businessContext: BusinessContext | null;
   mcpTools: MCPTool[];
   onIntentsGenerated: () => void;
@@ -37,7 +36,6 @@ export function AIIntentGeneratorModal({
   onClose,
   modules,
   existingIntents,
-  llmConfig,
   businessContext,
   mcpTools,
   onIntentsGenerated,
@@ -92,24 +90,6 @@ export function AIIntentGeneratorModal({
       return;
     }
 
-    if (!llmConfig?.apiKey) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API key in LLM Settings first.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API endpoint for Azure Anthropic.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
     setIsGenerating(true);
     setProgress({ step: 'Generating 15 unique intents with AI...', count: 0 });
 
@@ -141,14 +121,6 @@ export function AIIntentGeneratorModal({
                 entitySize: businessContext.entitySize,
               }
             : undefined,
-          llmConfig: {
-            provider: llmConfig.provider,
-            endpoint: llmConfig.endpoint,
-            model: llmConfig.model,
-            apiKey: llmConfig.apiKey,
-            temperature: llmConfig.temperature,
-            maxTokens: llmConfig.maxTokens,
-          },
         },
       });
 

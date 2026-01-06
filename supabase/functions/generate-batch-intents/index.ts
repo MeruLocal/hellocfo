@@ -6,16 +6,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface LLMConfig {
-  id?: string;
-  provider: string;
-  endpoint?: string;
-  model: string;
-  apiKey?: string;
-  temperature: number;
-  maxTokens: number;
-}
-
 interface MCPTool {
   name: string;
   description: string;
@@ -39,7 +29,6 @@ interface BatchGenerationRequest {
     currency?: string;
     entitySize?: string;
   };
-  llmConfig: LLMConfig;
 }
 
 interface GeneratedIntent {
@@ -76,91 +65,55 @@ interface GeneratedIntent {
   };
 }
 
-// Validate LLM config
-const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
-  if (!llmConfig) {
-    throw new Error('LLM configuration is required');
-  }
-  if (!llmConfig.provider) {
-    throw new Error('LLM provider is required');
-  }
-  if (!llmConfig.model) {
-    throw new Error('LLM model is required');
-  }
-  if (!llmConfig.apiKey) {
-    throw new Error('LLM API key is required');
-  }
-  if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
-    throw new Error('Azure Anthropic requires an endpoint URL');
-  }
-};
-
-// Call AI with timeout
-const callAI = async (
+// Call Lovable AI Gateway
+const callLovableAI = async (
   systemPrompt: string,
   userPrompt: string,
-  llmConfig: LLMConfig,
-  timeoutMs: number = 90000
+  timeoutMs: number = 120000
 ): Promise<string> => {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) {
+    throw new Error("LOVABLE_API_KEY is not configured");
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    let response: Response;
-    
-    if (llmConfig.provider === 'azure-anthropic') {
-      response = await fetch(`${llmConfig.endpoint}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': llmConfig.apiKey!,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: llmConfig.model,
-          max_tokens: llmConfig.maxTokens || 4096,
-          temperature: llmConfig.temperature || 0.7,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }]
-        }),
-        signal: controller.signal
-      });
-    } else {
-      // OpenAI compatible
-      const endpoint = llmConfig.endpoint || 'https://api.openai.com';
-      response = await fetch(`${endpoint}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${llmConfig.apiKey}`
-        },
-        body: JSON.stringify({
-          model: llmConfig.model,
-          max_tokens: llmConfig.maxTokens || 4096,
-          temperature: llmConfig.temperature || 0.7,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ]
-        }),
-        signal: controller.signal
-      });
-    }
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        max_tokens: 8192,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      if (response.status === 429) {
+        throw new Error("Rate limit exceeded. Please try again later.");
+      }
+      if (response.status === 402) {
+        throw new Error("AI credits exhausted. Please add credits to continue.");
+      }
       const errorText = await response.text();
-      throw new Error(`AI API error: ${response.status} - ${errorText}`);
+      console.error("AI Gateway error:", response.status, errorText);
+      throw new Error(`AI API error: ${response.status}`);
     }
 
     const data = await response.json();
-
-    if (llmConfig.provider === 'azure-anthropic') {
-      return data.content?.[0]?.text || '';
-    } else {
-      return data.choices?.[0]?.message?.content || '';
-    }
+    return data.choices?.[0]?.message?.content || '';
   } catch (error: unknown) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
@@ -172,7 +125,6 @@ const callAI = async (
 
 // Parse JSON safely with repair attempts
 const parseJSON = (text: string): unknown => {
-  // Remove markdown code blocks if present
   let cleaned = text.trim();
   if (cleaned.startsWith('```json')) {
     cleaned = cleaned.slice(7);
@@ -187,13 +139,12 @@ const parseJSON = (text: string): unknown => {
   try {
     return JSON.parse(cleaned);
   } catch {
-    // Try to find JSON array or object
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (arrayMatch) {
       try {
         return JSON.parse(arrayMatch[0]);
       } catch {
-        // Continue to next attempt
+        // Continue
       }
     }
     const objectMatch = cleaned.match(/\{[\s\S]*\}/);
@@ -201,7 +152,7 @@ const parseJSON = (text: string): unknown => {
       try {
         return JSON.parse(objectMatch[0]);
       } catch {
-        // Continue to next attempt
+        // Continue
       }
     }
     throw new Error('Failed to parse AI response as JSON');
@@ -237,14 +188,11 @@ serve(async (req) => {
     }
 
     const body: BatchGenerationRequest = await req.json();
-    const { moduleId, moduleName, subModuleId, subModuleName, intentCount, existingIntentNames, mcpTools, businessContext, llmConfig } = body;
-
-    validateLLMConfig(llmConfig);
+    const { moduleId, moduleName, subModuleId, subModuleName, intentCount, existingIntentNames, mcpTools, businessContext } = body;
 
     console.log(`📋 Generating ${intentCount} intents for ${moduleName} / ${subModuleName}`);
     console.log(`📋 Existing intent names to avoid:`, existingIntentNames);
 
-    // Build context for generation
     const contextInfo = businessContext 
       ? `Business Context: ${businessContext.industry || 'General'} industry, ${businessContext.country || 'Global'}, ${businessContext.currency || 'USD'} currency, ${businessContext.entitySize || 'Mid-sized'} entity.`
       : '';
@@ -320,8 +268,8 @@ Output format - JSON array of ${intentCount} complete intent objects:
   }
 ]`;
 
-    console.log('🤖 Calling AI for batch intent generation...');
-    const aiResponse = await callAI(systemPrompt, userPrompt, llmConfig, 120000);
+    console.log('🤖 Calling Lovable AI for batch intent generation...');
+    const aiResponse = await callLovableAI(systemPrompt, userPrompt);
     console.log('✅ AI response received');
 
     const generatedIntents = parseJSON(aiResponse) as GeneratedIntent[];
@@ -332,7 +280,7 @@ Output format - JSON array of ${intentCount} complete intent objects:
 
     console.log(`✅ Parsed ${generatedIntents.length} intents from AI response`);
 
-    // Filter out any duplicates with existing names
+    // Filter out duplicates
     const existingNamesLower = new Set(existingIntentNames.map(n => n.toLowerCase().trim()));
     const uniqueIntents = generatedIntents.filter(intent => {
       const nameLower = intent.name?.toLowerCase().trim();
@@ -346,7 +294,7 @@ Output format - JSON array of ${intentCount} complete intent objects:
 
     console.log(`✅ ${uniqueIntents.length} unique intents after filtering duplicates`);
 
-    // Validate and clean up each intent
+    // Validate and structure each intent
     const validatedIntents = uniqueIntents.map((intent, idx) => ({
       name: intent.name || `Intent ${idx + 1}`,
       description: intent.description || '',

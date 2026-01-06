@@ -5883,7 +5883,6 @@ export default function CFOQueryResolutionEngine() {
         onClose={() => setShowAIGeneratorModal(false)}
         modules={modules}
         existingIntents={intents}
-        llmConfig={llmConfig}
         businessContext={businessContext}
         mcpTools={allMcpTools}
         onIntentsGenerated={fetchIntents}
