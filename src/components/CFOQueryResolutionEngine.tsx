@@ -61,6 +61,11 @@ import {
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
 
+// Helper to convert PascalCase to spaced words
+const formatIntentName = (name: string): string => {
+  return name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+};
+
 // PipelineParameter is only used locally
 interface PipelineParameter {
   name: string;
@@ -2732,7 +2737,7 @@ function IntentListView({
                   className="grid grid-cols-12 gap-4 px-4 py-3 items-center hover:bg-gray-50 cursor-pointer transition-colors"
                 >
                   <div className="col-span-4">
-                    <div className="font-medium text-gray-900">{intent.name}</div>
+                    <div className="font-medium text-gray-900">{formatIntentName(intent.name)}</div>
                     <div className="text-sm text-gray-500 truncate">{intent.description}</div>
                   </div>
                   <div className="col-span-2">
