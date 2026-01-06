@@ -59,6 +59,7 @@ import {
   ListOrdered, Variable, FileText, Users, LogOut, Terminal
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
+import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
 
 // PipelineParameter is only used locally
 interface PipelineParameter {
@@ -2514,6 +2515,7 @@ interface IntentListViewProps {
   onExportCSV: () => void;
   onExportJSON: () => void;
   onDownloadTemplate: () => void;
+  onOpenAIGenerator: () => void;
   isGenerating: string | null;
   isImporting: boolean;
   generationProgress: { current: number; total: number };
@@ -2536,6 +2538,7 @@ function IntentListView({
   onExportCSV,
   onExportJSON,
   onDownloadTemplate,
+  onOpenAIGenerator,
   isGenerating,
   isImporting,
   generationProgress
@@ -2609,6 +2612,13 @@ function IntentListView({
               </button>
             </div>
           </div>
+          
+          <button
+            onClick={onOpenAIGenerator}
+            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-purple-700 hover:to-indigo-700"
+          >
+            <Wand2 size={16} /> Generate with AI
+          </button>
           
           <button
             onClick={onAddIntent}
@@ -5069,6 +5079,7 @@ export default function CFOQueryResolutionEngine() {
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, step: '' });
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showAIGeneratorModal, setShowAIGeneratorModal] = useState(false);
   const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
 
   // Fetch MCP tools on initial mount
@@ -5806,6 +5817,7 @@ export default function CFOQueryResolutionEngine() {
             onExportCSV={handleExportCSV}
             onExportJSON={handleExportJSON}
             onDownloadTemplate={handleDownloadTemplate}
+            onOpenAIGenerator={() => setShowAIGeneratorModal(true)}
             isGenerating={isGenerating}
             isImporting={isImporting}
             generationProgress={generationProgress}
@@ -5863,6 +5875,18 @@ export default function CFOQueryResolutionEngine() {
         onClose={() => setShowCreateModal(false)}
         onCreate={handleCreateIntent}
         modules={modules}
+      />
+
+      {/* AI Intent Generator Modal */}
+      <AIIntentGeneratorModal
+        isOpen={showAIGeneratorModal}
+        onClose={() => setShowAIGeneratorModal(false)}
+        modules={modules}
+        existingIntents={intents}
+        llmConfig={llmConfig}
+        businessContext={businessContext}
+        mcpTools={allMcpTools}
+        onIntentsGenerated={fetchIntents}
       />
     </div>
   );
