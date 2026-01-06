@@ -91,7 +91,7 @@ export function AIIntentGeneratorModal({
     }
 
     setIsGenerating(true);
-    setProgress({ step: 'Generating 15 unique intents with AI...', count: 0 });
+    setProgress({ step: 'Generating 10 unique intents with AI...', count: 0 });
 
     try {
       const { data, error } = await supabase.functions.invoke('generate-batch-intents', {
@@ -100,7 +100,7 @@ export function AIIntentGeneratorModal({
           moduleName: selectedModule?.name || selectedModuleId,
           subModuleId: selectedSubModuleId,
           subModuleName: selectedSubModule?.name || selectedSubModuleId,
-          intentCount: 15,
+          intentCount: 10,
           existingIntentNames: allExistingIntentNames,
           mcpTools: mcpTools.map((tool) => ({
             name: tool.id,
@@ -205,7 +205,7 @@ export function AIIntentGeneratorModal({
             Generate Intents with AI
           </DialogTitle>
           <DialogDescription>
-            Select a module and sub-module to automatically generate 15 unique intents with full configurations.
+            Select a module and sub-module to automatically generate 10 unique intents with full configurations.
           </DialogDescription>
         </DialogHeader>
 
@@ -282,7 +282,7 @@ export function AIIntentGeneratorModal({
             <div className="text-sm text-purple-700">
               <p className="font-medium">What will be generated:</p>
               <ul className="list-disc list-inside text-purple-600 mt-1 space-y-0.5">
-                <li>15 unique intent names with descriptions</li>
+                <li>10 unique intent names with descriptions</li>
                 <li>8-10 training phrases per intent</li>
                 <li>Entity extraction configurations</li>
                 <li>Data pipeline with MCP tools</li>
@@ -318,7 +318,7 @@ export function AIIntentGeneratorModal({
             ) : (
               <>
                 <Wand2 className="mr-2 h-4 w-4" />
-                Generate 15 Intents
+                Generate 10 Intents
               </>
             )}
           </Button>
