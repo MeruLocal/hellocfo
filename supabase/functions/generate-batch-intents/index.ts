@@ -93,7 +93,7 @@ const callLovableAI = async (
           { role: "user", content: userPrompt }
         ],
         max_tokens: 8192,
-        temperature: 0.7,
+        temperature: 0.3,
       }),
       signal: controller.signal,
     });
