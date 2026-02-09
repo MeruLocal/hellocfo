@@ -32,7 +32,7 @@ const DEMO_CONVERSATIONS = [
 
 type Phase = 'typing-prompt' | 'thinking' | 'typing-response' | 'pausing';
 
-const LiveDemoSection = () => {
+const LiveDemoSection = ({ embedded = false }: { embedded?: boolean }) => {
   const [currentDemo, setCurrentDemo] = useState(0);
   const [displayedPrompt, setDisplayedPrompt] = useState('');
   const [displayedResponse, setDisplayedResponse] = useState('');
@@ -85,6 +85,88 @@ const LiveDemoSection = () => {
     <span className="inline-block w-0.5 h-4 bg-foreground animate-pulse ml-0.5 align-text-bottom" />
   );
 
+  const chatCard = (
+    <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+      {/* Title bar */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/50">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
+            <div className="w-3 h-3 rounded-full bg-destructive/60" />
+            <div className="w-3 h-3 rounded-full bg-warning/60" />
+            <div className="w-3 h-3 rounded-full bg-success/60" />
+          </div>
+          <span className="text-xs text-muted-foreground ml-2">CFO Agent</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
+          <span className="text-[10px] text-muted-foreground font-medium">Live Demo</span>
+        </div>
+      </div>
+
+      {/* Chat area */}
+      <div className="p-5 min-h-[220px] flex flex-col justify-end gap-4">
+        {displayedPrompt && (
+          <div className="flex justify-end">
+            <div className="flex items-start gap-2 max-w-[85%]">
+              <div className="rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground leading-relaxed">
+                {displayedPrompt}
+                {phase === 'typing-prompt' && cursor}
+              </div>
+              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center mt-0.5">
+                <User className="h-3.5 w-3.5 text-primary" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {phase === 'thinking' && (
+          <div className="flex justify-start">
+            <div className="flex items-start gap-2 max-w-[85%]">
+              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-ai/20 flex items-center justify-center mt-0.5">
+                <Brain className="h-3.5 w-3.5 text-ai" />
+              </div>
+              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {(phase === 'typing-response' || phase === 'pausing') && displayedResponse && (
+          <div className="flex justify-start">
+            <div className="flex items-start gap-2 max-w-[85%]">
+              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-ai/20 flex items-center justify-center mt-0.5">
+                <Brain className="h-3.5 w-3.5 text-ai" />
+              </div>
+              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-foreground leading-relaxed">
+                {displayedResponse}
+                {phase === 'typing-response' && cursor}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Demo counter */}
+      <div className="px-5 pb-3 flex justify-center gap-1.5">
+        {DEMO_CONVERSATIONS.map((_, i) => (
+          <div
+            key={i}
+            className={`w-1.5 h-1.5 rounded-full transition-colors ${
+              i === currentDemo ? 'bg-primary' : 'bg-border'
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return chatCard;
+  }
+
   return (
     <section id="demo" className="py-20 lg:py-28 bg-muted/30">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -99,87 +181,7 @@ const LiveDemoSection = () => {
             Ask a question in plain English — get instant, data-backed answers.
           </p>
         </div>
-
-        <div className="max-w-2xl mx-auto">
-          <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
-            {/* Title bar */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/50">
-              <div className="flex items-center gap-2">
-                <div className="flex gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-destructive/60" />
-                  <div className="w-3 h-3 rounded-full bg-warning/60" />
-                  <div className="w-3 h-3 rounded-full bg-success/60" />
-                </div>
-                <span className="text-xs text-muted-foreground ml-2">CFO Agent</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                <span className="text-[10px] text-muted-foreground font-medium">Live Demo</span>
-              </div>
-            </div>
-
-            {/* Chat area */}
-            <div className="p-5 min-h-[220px] flex flex-col justify-end gap-4">
-              {/* User prompt */}
-              {displayedPrompt && (
-                <div className="flex justify-end">
-                  <div className="flex items-start gap-2 max-w-[85%]">
-                    <div className="rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground leading-relaxed">
-                      {displayedPrompt}
-                      {phase === 'typing-prompt' && cursor}
-                    </div>
-                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center mt-0.5">
-                      <User className="h-3.5 w-3.5 text-primary" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Thinking indicator */}
-              {phase === 'thinking' && (
-                <div className="flex justify-start">
-                  <div className="flex items-start gap-2 max-w-[85%]">
-                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-ai/20 flex items-center justify-center mt-0.5">
-                      <Brain className="h-3.5 w-3.5 text-ai" />
-                    </div>
-                    <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
-                      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
-                      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Agent response */}
-              {(phase === 'typing-response' || phase === 'pausing') && displayedResponse && (
-                <div className="flex justify-start">
-                  <div className="flex items-start gap-2 max-w-[85%]">
-                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-ai/20 flex items-center justify-center mt-0.5">
-                      <Brain className="h-3.5 w-3.5 text-ai" />
-                    </div>
-                    <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-foreground leading-relaxed">
-                      {displayedResponse}
-                      {phase === 'typing-response' && cursor}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Demo counter */}
-            <div className="px-5 pb-3 flex justify-center gap-1.5">
-              {DEMO_CONVERSATIONS.map((_, i) => (
-                <div
-                  key={i}
-                  className={`w-1.5 h-1.5 rounded-full transition-colors ${
-                    i === currentDemo ? 'bg-primary' : 'bg-border'
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
+        <div className="max-w-2xl mx-auto">{chatCard}</div>
       </div>
     </section>
   );
