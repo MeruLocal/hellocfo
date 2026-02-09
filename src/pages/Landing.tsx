@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
 import LiveDemoSection from '@/components/LiveDemoSection';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -135,7 +136,7 @@ const STATS = [
 ];
 
 const Landing = () => {
-  const navigate = useNavigate();
+  const { user, loading } = useAuth();
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   useEffect(() => {
@@ -186,14 +187,24 @@ const Landing = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild>
-              <Link to="/auth">Sign In</Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link to="/auth">
-                Get Started <ArrowRight className="ml-1 h-3.5 w-3.5" />
-              </Link>
-            </Button>
+            {!loading && user ? (
+              <Button size="sm" asChild>
+                <Link to="/dashboard">
+                  Go to Dashboard <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link to="/auth">Sign In</Link>
+                </Button>
+                <Button size="sm" asChild>
+                  <Link to="/auth">
+                    Get Started <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -232,8 +243,8 @@ const Landing = () => {
 
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" className="px-8 text-base" asChild>
-              <Link to="/auth">
-                Get Started Free <ArrowRight className="ml-2 h-4 w-4" />
+              <Link to={user ? '/dashboard' : '/auth'}>
+                {user ? 'Go to Dashboard' : 'Get Started Free'} <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button
@@ -385,8 +396,8 @@ const Landing = () => {
           </p>
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" className="px-10 text-base" asChild>
-              <Link to="/auth">
-                Start Using HelloCFO <ChevronRight className="ml-1 h-4 w-4" />
+              <Link to={user ? '/dashboard' : '/auth'}>
+                {user ? 'Go to Dashboard' : 'Start Using HelloCFO'} <ChevronRight className="ml-1 h-4 w-4" />
               </Link>
             </Button>
           </div>
