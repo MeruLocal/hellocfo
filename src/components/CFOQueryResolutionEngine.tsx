@@ -60,6 +60,8 @@ import {
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
+import { CasesLibraryView } from '@/components/CasesLibraryView';
+import { TEST_CASES } from '@/data/testCases';
 
 // Helper to convert PascalCase to spaced words
 const formatIntentName = (name: string): string => {
@@ -5670,6 +5672,7 @@ export default function CFOQueryResolutionEngine() {
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
+    { id: 'cases', label: 'Cases Library', icon: <ListOrdered size={18} />, count: TEST_CASES.length },
     { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
     ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
@@ -5866,6 +5869,7 @@ export default function CFOQueryResolutionEngine() {
         )}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
         {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
+        {activeTab === 'cases' && <CasesLibraryView />}
         {activeTab === 'api-console' && <ApiConsole />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
