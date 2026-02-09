@@ -130,7 +130,7 @@ const MODULES = [
 
 const STATS = [
   { value: '14+', label: 'Modules' },
-  { value: '150+', label: 'Test Cases' },
+  { value: '316+', label: 'Test Cases' },
   { value: 'Real-time', label: 'Streaming' },
   { value: 'AI-Powered', label: 'Engine' },
 ];

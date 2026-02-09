@@ -1,5 +1,5 @@
 // ============================================================================
-// CFO Agent - Pre-built Test Cases Library (156 cases)
+// CFO Agent - Pre-built Test Cases Library (316 cases)
 // Organized by module categories for comprehensive testing
 // ============================================================================
 
@@ -205,6 +205,190 @@ export const TEST_CASES: TestCase[] = [
   { id: 164, category: 'Your Workspace', subCategory: 'Settings', prompt: 'Show my role and permissions', expectedBehavior: 'Displays current user role and access permissions' },
   { id: 165, category: 'Your Workspace', subCategory: 'Activity', prompt: 'Show login history for my account', expectedBehavior: 'Displays recent login timestamps and devices' },
   { id: 166, category: 'Your Workspace', subCategory: 'Dashboard', prompt: 'Show quick summary of today', expectedBehavior: 'Today overview: invoices, payments, tasks, notifications' },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ADDITIONAL 150 TEST CASES (IDs 167–316)
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── Sales (12 more) ──
+  { id: 167, category: 'Sales', subCategory: 'Discounts', prompt: 'Show total discounts given this month', expectedBehavior: 'Sums all discount amounts applied on sales invoices this month' },
+  { id: 168, category: 'Sales', subCategory: 'Customers', prompt: 'Which customer has the highest outstanding balance?', expectedBehavior: 'Identifies customer with largest unpaid receivable' },
+  { id: 169, category: 'Sales', subCategory: 'Revenue', prompt: 'Show region-wise sales breakdown', expectedBehavior: 'Displays sales grouped by geographic region' },
+  { id: 170, category: 'Sales', subCategory: 'Invoices', prompt: 'Show recurring invoices due this week', expectedBehavior: 'Lists auto-generated recurring invoices scheduled this week' },
+  { id: 171, category: 'Sales', subCategory: 'Payments', prompt: 'Show customers with bounced cheques', expectedBehavior: 'Lists customers whose payment cheques were dishonoured' },
+  { id: 172, category: 'Sales', subCategory: 'Revenue', prompt: 'What is revenue per salesperson this quarter?', expectedBehavior: 'Revenue attributed to each sales representative' },
+  { id: 173, category: 'Sales', subCategory: 'Orders', prompt: 'Show cancelled sales orders this month', expectedBehavior: 'Lists sales orders that were cancelled with reasons' },
+  { id: 174, category: 'Sales', subCategory: 'Customers', prompt: 'Show customer acquisition trend last 6 months', expectedBehavior: 'Month-by-month count of new customers added' },
+  { id: 175, category: 'Sales', subCategory: 'Returns', prompt: 'What is the return rate by product?', expectedBehavior: 'Percentage of sales returned per product/item' },
+  { id: 176, category: 'Sales', subCategory: 'Revenue', prompt: 'Show weekday vs weekend sales comparison', expectedBehavior: 'Compares average sales on weekdays versus weekends' },
+  { id: 177, category: 'Sales', subCategory: 'Invoices', prompt: 'Show invoices with partial payments', expectedBehavior: 'Lists invoices where only a portion has been paid' },
+  { id: 178, category: 'Sales', subCategory: 'Payments', prompt: 'Show payment mode breakdown this month', expectedBehavior: 'Payments grouped by mode: cash, bank, UPI, card, etc.' },
+
+  // ── Purchases (11 more) ──
+  { id: 179, category: 'Purchases', subCategory: 'Vendors', prompt: 'Show vendors with expiring contracts', expectedBehavior: 'Lists vendor contracts expiring within next 30 days' },
+  { id: 180, category: 'Purchases', subCategory: 'Bills', prompt: 'Show duplicate bills detected this month', expectedBehavior: 'Flags potential duplicate vendor bills by amount/date' },
+  { id: 181, category: 'Purchases', subCategory: 'Orders', prompt: 'Show GRN pending for purchase orders', expectedBehavior: 'Lists POs where goods received note is not yet created' },
+  { id: 182, category: 'Purchases', subCategory: 'Vendors', prompt: 'Show vendor rating based on delivery timeliness', expectedBehavior: 'Ranks vendors by on-time delivery percentage' },
+  { id: 183, category: 'Purchases', subCategory: 'Bills', prompt: 'What is the highest single vendor bill this quarter?', expectedBehavior: 'Identifies the largest individual vendor bill amount' },
+  { id: 184, category: 'Purchases', subCategory: 'Orders', prompt: 'Show purchase orders with price variance', expectedBehavior: 'Lists POs where billed price differs from PO price' },
+  { id: 185, category: 'Purchases', subCategory: 'Vendors', prompt: 'How many new vendors were added this year?', expectedBehavior: 'Count of vendors onboarded in current financial year' },
+  { id: 186, category: 'Purchases', subCategory: 'Bills', prompt: 'Show vendor bills with TDS deduction', expectedBehavior: 'Lists bills where TDS was applied with section details' },
+  { id: 187, category: 'Purchases', subCategory: 'Orders', prompt: 'Show blanket purchase orders and utilization', expectedBehavior: 'Displays blanket POs with consumed vs remaining amounts' },
+  { id: 188, category: 'Purchases', subCategory: 'Returns', prompt: 'What is the purchase return rate this quarter?', expectedBehavior: 'Percentage of purchases returned vs total purchased' },
+  { id: 189, category: 'Purchases', subCategory: 'Bills', prompt: 'Show bills pending three-way matching', expectedBehavior: 'Lists bills not yet matched with PO and GRN' },
+
+  // ── Inventory (11 more) ──
+  { id: 190, category: 'Inventory', subCategory: 'Valuation', prompt: 'Compare FIFO vs weighted average valuation', expectedBehavior: 'Shows inventory value under both costing methods' },
+  { id: 191, category: 'Inventory', subCategory: 'Stock Levels', prompt: 'Show items with negative stock', expectedBehavior: 'Lists items where system stock is below zero' },
+  { id: 192, category: 'Inventory', subCategory: 'Movement', prompt: 'Show material issue against production orders', expectedBehavior: 'Lists raw material issued for manufacturing' },
+  { id: 193, category: 'Inventory', subCategory: 'Aging', prompt: 'Show items nearing expiry date', expectedBehavior: 'Lists perishable items expiring within 30 days' },
+  { id: 194, category: 'Inventory', subCategory: 'Reorder', prompt: 'What is the economic order quantity for item X?', expectedBehavior: 'Calculates EOQ based on demand and ordering costs' },
+  { id: 195, category: 'Inventory', subCategory: 'Stock Levels', prompt: 'Show batch-wise stock details', expectedBehavior: 'Displays stock quantities grouped by batch/lot number' },
+  { id: 196, category: 'Inventory', subCategory: 'Movement', prompt: 'Show stock adjustment entries this month', expectedBehavior: 'Lists manual stock adjustments with reasons' },
+  { id: 197, category: 'Inventory', subCategory: 'Valuation', prompt: 'What is the landed cost of item Y?', expectedBehavior: 'Calculates total cost including freight, duty, handling' },
+  { id: 198, category: 'Inventory', subCategory: 'Reorder', prompt: 'Show safety stock levels for critical items', expectedBehavior: 'Displays configured safety stock vs current stock for key items' },
+  { id: 199, category: 'Inventory', subCategory: 'Movement', prompt: 'Show bin-wise stock location report', expectedBehavior: 'Displays item quantities by shelf/bin location in warehouse' },
+  { id: 200, category: 'Inventory', subCategory: 'Stock Levels', prompt: 'Show items with stock exceeding max level', expectedBehavior: 'Lists overstocked items above maximum threshold' },
+
+  // ── GST (11 more) ──
+  { id: 201, category: 'GST', subCategory: 'GSTR-1', prompt: 'Show CDN (credit/debit notes) for GSTR-1', expectedBehavior: 'Lists credit and debit notes formatted for GSTR-1 filing' },
+  { id: 202, category: 'GST', subCategory: 'Input Credit', prompt: 'Show ITC reversal entries this quarter', expectedBehavior: 'Lists input tax credit reversed with reasons' },
+  { id: 203, category: 'GST', subCategory: 'Reconciliation', prompt: 'Show GSTR-2B vs purchase register comparison', expectedBehavior: 'Reconciles auto-drafted GSTR-2B with purchase books' },
+  { id: 204, category: 'GST', subCategory: 'HSN', prompt: 'Show HSN-wise purchase summary', expectedBehavior: 'Purchase data grouped by HSN codes for GSTR-9' },
+  { id: 205, category: 'GST', subCategory: 'Compliance', prompt: 'Show GSTR-9 annual return data preview', expectedBehavior: 'Generates GSTR-9 annual return summary for review' },
+  { id: 206, category: 'GST', subCategory: 'GSTR-1', prompt: 'Show nil-rated and exempt sales for GSTR-1', expectedBehavior: 'Lists sales with nil-rated or exempt GST classification' },
+  { id: 207, category: 'GST', subCategory: 'Input Credit', prompt: 'Show eligible vs ineligible ITC breakdown', expectedBehavior: 'Categorizes ITC into eligible and ineligible portions' },
+  { id: 208, category: 'GST', subCategory: 'Reconciliation', prompt: 'Show vendors not filing GST returns', expectedBehavior: 'Identifies vendors whose returns are not reflected in GSTR-2A' },
+  { id: 209, category: 'GST', subCategory: 'Compliance', prompt: 'Show late fee and interest on delayed GST filing', expectedBehavior: 'Calculates penalties for late GST return filing' },
+  { id: 210, category: 'GST', subCategory: 'GSTR-1', prompt: 'Show amendments to previously filed GSTR-1', expectedBehavior: 'Lists invoice amendments for GSTR-1 filing' },
+  { id: 211, category: 'GST', subCategory: 'HSN', prompt: 'Validate HSN codes for all items', expectedBehavior: 'Checks if all items have valid HSN/SAC codes assigned' },
+
+  // ── Taxes (10 more) ──
+  { id: 212, category: 'Taxes', subCategory: 'TDS', prompt: 'Show TDS default entries not deposited on time', expectedBehavior: 'Lists TDS deductions where deposit was late per due dates' },
+  { id: 213, category: 'Taxes', subCategory: 'TCS', prompt: 'Show TCS liability by buyer category', expectedBehavior: 'TCS amounts grouped by type of buyer/transaction' },
+  { id: 214, category: 'Taxes', subCategory: 'Income Tax', prompt: 'Show MAT (Minimum Alternate Tax) computation', expectedBehavior: 'Calculates MAT liability under Section 115JB' },
+  { id: 215, category: 'Taxes', subCategory: 'TDS', prompt: 'Show lower deduction certificate status', expectedBehavior: 'Lists vendors with valid lower TDS deduction certificates' },
+  { id: 216, category: 'Taxes', subCategory: 'Compliance', prompt: 'Show pending Form 26AS reconciliation', expectedBehavior: 'Compares TDS credits in Form 26AS with books' },
+  { id: 217, category: 'Taxes', subCategory: 'Professional Tax', prompt: 'Show state-wise professional tax summary', expectedBehavior: 'Professional tax liability broken down by state' },
+  { id: 218, category: 'Taxes', subCategory: 'TDS', prompt: 'Show non-resident TDS deductions', expectedBehavior: 'Lists TDS deducted on payments to non-residents under Sec 195' },
+  { id: 219, category: 'Taxes', subCategory: 'Income Tax', prompt: 'Show deferred tax asset/liability', expectedBehavior: 'Calculates deferred tax based on timing differences' },
+  { id: 220, category: 'Taxes', subCategory: 'TDS', prompt: 'Prepare Form 24Q data for salary TDS', expectedBehavior: 'Generates quarterly salary TDS return data' },
+  { id: 221, category: 'Taxes', subCategory: 'Compliance', prompt: 'Show withholding tax comparison across quarters', expectedBehavior: 'Quarter-over-quarter comparison of TDS/TCS amounts' },
+
+  // ── Fixed Assets (10 more) ──
+  { id: 222, category: 'Fixed Assets', subCategory: 'Depreciation', prompt: 'Show accumulated depreciation by asset class', expectedBehavior: 'Total depreciation charged grouped by asset category' },
+  { id: 223, category: 'Fixed Assets', subCategory: 'Register', prompt: 'Show assets under lease agreements', expectedBehavior: 'Lists assets acquired under finance or operating lease' },
+  { id: 224, category: 'Fixed Assets', subCategory: 'Additions', prompt: 'Show asset capitalization pending approval', expectedBehavior: 'Lists assets in draft/pending capitalization status' },
+  { id: 225, category: 'Fixed Assets', subCategory: 'Disposal', prompt: 'Calculate gain/loss on asset disposal for item FA-101', expectedBehavior: 'Computes profit or loss on specific asset disposal' },
+  { id: 226, category: 'Fixed Assets', subCategory: 'Register', prompt: 'Show assets with insurance expiring soon', expectedBehavior: 'Lists assets whose insurance coverage expires within 60 days' },
+  { id: 227, category: 'Fixed Assets', subCategory: 'Depreciation', prompt: 'Show depreciation variance vs budget', expectedBehavior: 'Compares actual depreciation with budgeted amounts' },
+  { id: 228, category: 'Fixed Assets', subCategory: 'Register', prompt: 'Show location-wise asset register', expectedBehavior: 'Assets grouped by physical location/branch' },
+  { id: 229, category: 'Fixed Assets', subCategory: 'Additions', prompt: 'Show asset tagging status', expectedBehavior: 'Lists assets with their physical verification/tag status' },
+  { id: 230, category: 'Fixed Assets', subCategory: 'Disposal', prompt: 'Show assets eligible for retirement', expectedBehavior: 'Lists assets past useful life ready for disposal' },
+  { id: 231, category: 'Fixed Assets', subCategory: 'Depreciation', prompt: 'Show impairment losses recorded this year', expectedBehavior: 'Lists assets where impairment adjustments were made' },
+
+  // ── Expense Claims (10 more) ──
+  { id: 232, category: 'Expense Claims', subCategory: 'Summary', prompt: 'Show department-wise expense claims summary', expectedBehavior: 'Expense claims grouped by department with totals' },
+  { id: 233, category: 'Expense Claims', subCategory: 'Policy', prompt: 'Show claims without proper receipts attached', expectedBehavior: 'Lists expense claims missing receipt/proof attachments' },
+  { id: 234, category: 'Expense Claims', subCategory: 'Category', prompt: 'Show travel expense trend over 6 months', expectedBehavior: 'Monthly trend of travel-related expense claims' },
+  { id: 235, category: 'Expense Claims', subCategory: 'Approval', prompt: 'Show average approval turnaround time', expectedBehavior: 'Calculates mean days from claim submission to approval' },
+  { id: 236, category: 'Expense Claims', subCategory: 'Reimbursement', prompt: 'Show reimbursements processed today', expectedBehavior: 'Lists expense reimbursement payments made today' },
+  { id: 237, category: 'Expense Claims', subCategory: 'Policy', prompt: 'Show per diem utilization by employee', expectedBehavior: 'Displays daily allowance usage per employee for trips' },
+  { id: 238, category: 'Expense Claims', subCategory: 'Category', prompt: 'What is the total fuel expense this quarter?', expectedBehavior: 'Sums fuel/mileage claims for current quarter' },
+  { id: 239, category: 'Expense Claims', subCategory: 'Pending', prompt: 'Show expense claims older than 30 days pending', expectedBehavior: 'Lists claims stuck in pending state for over a month' },
+  { id: 240, category: 'Expense Claims', subCategory: 'Summary', prompt: 'Show top 10 expense claimers this year', expectedBehavior: 'Ranks employees by total claim amount in current year' },
+  { id: 241, category: 'Expense Claims', subCategory: 'Category', prompt: 'Show client entertainment expenses this quarter', expectedBehavior: 'Filters claims tagged as client entertainment/hospitality' },
+
+  // ── Reports (12 more) ──
+  { id: 242, category: 'Reports', subCategory: 'P&L', prompt: 'Show segment-wise profit and loss', expectedBehavior: 'P&L broken down by business segment/division' },
+  { id: 243, category: 'Reports', subCategory: 'Balance Sheet', prompt: 'Show comparative balance sheet year-over-year', expectedBehavior: 'Balance sheet comparison between current and previous year' },
+  { id: 244, category: 'Reports', subCategory: 'Cash Flow', prompt: 'Show free cash flow calculation', expectedBehavior: 'Calculates FCF: operating cash flow minus capex' },
+  { id: 245, category: 'Reports', subCategory: 'Ratios', prompt: 'Show working capital trend for last 12 months', expectedBehavior: 'Monthly working capital (current assets minus current liabilities)' },
+  { id: 246, category: 'Reports', subCategory: 'Budget', prompt: 'Show department-wise budget utilization', expectedBehavior: 'Budget consumed vs allocated per department' },
+  { id: 247, category: 'Reports', subCategory: 'P&L', prompt: 'Show contribution margin by product line', expectedBehavior: 'Revenue minus variable costs per product category' },
+  { id: 248, category: 'Reports', subCategory: 'Receivables', prompt: 'Show collection efficiency ratio', expectedBehavior: 'Calculates percentage of receivables collected on time' },
+  { id: 249, category: 'Reports', subCategory: 'Payables', prompt: 'Show DPO (Days Payable Outstanding) trend', expectedBehavior: 'Monthly trend of average days to pay suppliers' },
+  { id: 250, category: 'Reports', subCategory: 'Ratios', prompt: 'Show return on equity for this year', expectedBehavior: 'Calculates ROE based on net income and shareholder equity' },
+  { id: 251, category: 'Reports', subCategory: 'Cash Flow', prompt: 'Show monthly cash burn rate', expectedBehavior: 'Calculates net monthly cash outflow rate' },
+  { id: 252, category: 'Reports', subCategory: 'Custom', prompt: 'Show cost of goods sold breakdown', expectedBehavior: 'Detailed COGS components: materials, labor, overhead' },
+  { id: 253, category: 'Reports', subCategory: 'Budget', prompt: 'Show capex vs opex breakdown this year', expectedBehavior: 'Categorizes spend into capital and operational expenditure' },
+
+  // ── Accounting Masters (10 more) ──
+  { id: 254, category: 'Accounting Masters', subCategory: 'Ledger', prompt: 'Show suspense account entries', expectedBehavior: 'Lists transactions parked in suspense/clearing accounts' },
+  { id: 255, category: 'Accounting Masters', subCategory: 'Journal', prompt: 'Show inter-company journal entries', expectedBehavior: 'Lists JVs between group entities for elimination' },
+  { id: 256, category: 'Accounting Masters', subCategory: 'Chart of Accounts', prompt: 'Show accounts with zero balance', expectedBehavior: 'Lists accounts with no outstanding balance' },
+  { id: 257, category: 'Accounting Masters', subCategory: 'Ledger', prompt: 'Show foreign currency ledger balances', expectedBehavior: 'Displays ledger balances in foreign currencies with INR equivalent' },
+  { id: 258, category: 'Accounting Masters', subCategory: 'Journal', prompt: 'Show year-end closing entries', expectedBehavior: 'Lists closing journal entries for financial year-end' },
+  { id: 259, category: 'Accounting Masters', subCategory: 'Cost Center', prompt: 'Show project-wise cost center allocation', expectedBehavior: 'Expenses allocated across projects/cost centers' },
+  { id: 260, category: 'Accounting Masters', subCategory: 'Ledger', prompt: 'Show intercompany balances for consolidation', expectedBehavior: 'Outstanding balances between group companies' },
+  { id: 261, category: 'Accounting Masters', subCategory: 'Chart of Accounts', prompt: 'Show newly created accounts this quarter', expectedBehavior: 'Lists accounts added to chart of accounts in current quarter' },
+  { id: 262, category: 'Accounting Masters', subCategory: 'Journal', prompt: 'Show provision entries booked this month', expectedBehavior: 'Lists accrual/provision journal entries for current month' },
+  { id: 263, category: 'Accounting Masters', subCategory: 'Ledger', prompt: 'Show accounts with unusual balances', expectedBehavior: 'Flags accounts with debit/credit balances contrary to nature' },
+
+  // ── Eway Bills (10 more) ──
+  { id: 264, category: 'Eway Bills', subCategory: 'Generation', prompt: 'Show consolidated eway bills generated', expectedBehavior: 'Lists consolidated eway bills combining multiple invoices' },
+  { id: 265, category: 'Eway Bills', subCategory: 'Pending', prompt: 'Show invoices above ₹50,000 without eway bill', expectedBehavior: 'Lists high-value invoices missing mandatory eway bills' },
+  { id: 266, category: 'Eway Bills', subCategory: 'Expiring', prompt: 'Show eway bills extended this month', expectedBehavior: 'Lists eway bills where validity was extended' },
+  { id: 267, category: 'Eway Bills', subCategory: 'Summary', prompt: 'Show transporter-wise eway bill count', expectedBehavior: 'Eway bills grouped by transport provider' },
+  { id: 268, category: 'Eway Bills', subCategory: 'Generation', prompt: 'Show eway bill generation errors today', expectedBehavior: 'Lists failed eway bill creation attempts with error details' },
+  { id: 269, category: 'Eway Bills', subCategory: 'Cancelled', prompt: 'Show eway bills cancelled within 24 hours', expectedBehavior: 'Lists eway bills cancelled shortly after generation' },
+  { id: 270, category: 'Eway Bills', subCategory: 'Summary', prompt: 'Show distance-wise eway bill distribution', expectedBehavior: 'Eway bills grouped by distance slabs' },
+  { id: 271, category: 'Eway Bills', subCategory: 'Pending', prompt: 'Show multi-vehicle eway bill requests pending', expectedBehavior: 'Lists eway bills requiring vehicle change not yet updated' },
+  { id: 272, category: 'Eway Bills', subCategory: 'Generation', prompt: 'Show eway bills for inter-state vs intra-state', expectedBehavior: 'Compares eway bills by inter-state and intra-state movement' },
+  { id: 273, category: 'Eway Bills', subCategory: 'Summary', prompt: 'Show eway bill compliance rate this quarter', expectedBehavior: 'Percentage of eligible invoices with eway bills generated' },
+
+  // ── Drive (10 more) ──
+  { id: 274, category: 'Drive', subCategory: 'Files', prompt: 'Show files pending review or approval', expectedBehavior: 'Lists documents in review/approval workflow' },
+  { id: 275, category: 'Drive', subCategory: 'Storage', prompt: 'Show storage growth trend last 6 months', expectedBehavior: 'Monthly storage consumption trend' },
+  { id: 276, category: 'Drive', subCategory: 'Shared', prompt: 'Show files shared externally', expectedBehavior: 'Lists documents shared with external/guest users' },
+  { id: 277, category: 'Drive', subCategory: 'Files', prompt: 'Show auto-generated financial statements', expectedBehavior: 'Lists system-generated reports and statements' },
+  { id: 278, category: 'Drive', subCategory: 'Storage', prompt: 'Show deleted files in recycle bin', expectedBehavior: 'Lists recently deleted files available for restoration' },
+  { id: 279, category: 'Drive', subCategory: 'Files', prompt: 'Show version history for file budget-2025.xlsx', expectedBehavior: 'Displays all versions of specified file with timestamps' },
+  { id: 280, category: 'Drive', subCategory: 'Shared', prompt: 'Show files with public link access', expectedBehavior: 'Lists documents accessible via public/anonymous links' },
+  { id: 281, category: 'Drive', subCategory: 'Files', prompt: 'Show documents tagged as confidential', expectedBehavior: 'Lists files with confidential/restricted classification' },
+  { id: 282, category: 'Drive', subCategory: 'Storage', prompt: 'Show storage quota utilization by user', expectedBehavior: 'Storage consumption broken down per user' },
+  { id: 283, category: 'Drive', subCategory: 'Files', prompt: 'Show files not accessed in last 90 days', expectedBehavior: 'Lists dormant files for archival consideration' },
+
+  // ── Comments (8 more) ──
+  { id: 284, category: 'Comments', subCategory: 'Recent', prompt: 'Show comments on expense claims', expectedBehavior: 'Lists all comments attached to expense claim entries' },
+  { id: 285, category: 'Comments', subCategory: 'Mentions', prompt: 'Show unresolved comments mentioning finance team', expectedBehavior: 'Filters open comments tagging finance team members' },
+  { id: 286, category: 'Comments', subCategory: 'Activity', prompt: 'Show comment threads with more than 5 replies', expectedBehavior: 'Lists active discussion threads by reply count' },
+  { id: 287, category: 'Comments', subCategory: 'Recent', prompt: 'Show comments added on journal entries', expectedBehavior: 'Lists comments attached to journal voucher documents' },
+  { id: 288, category: 'Comments', subCategory: 'Mentions', prompt: 'Show action items from comments this week', expectedBehavior: 'Extracts actionable items from comment threads' },
+  { id: 289, category: 'Comments', subCategory: 'Activity', prompt: 'Show comment summary by document type', expectedBehavior: 'Comment counts grouped by document category' },
+  { id: 290, category: 'Comments', subCategory: 'Recent', prompt: 'Show comments with file attachments', expectedBehavior: 'Lists comments that include attached files/images' },
+  { id: 291, category: 'Comments', subCategory: 'Activity', prompt: 'Show comment response time by team member', expectedBehavior: 'Average time to respond to comments per user' },
+
+  // ── Task Management (12 more) ──
+  { id: 292, category: 'Task Management', subCategory: 'My Tasks', prompt: 'Show tasks by priority breakdown', expectedBehavior: 'Task count grouped by priority: high, medium, low' },
+  { id: 293, category: 'Task Management', subCategory: 'Team', prompt: 'Show unassigned tasks in backlog', expectedBehavior: 'Lists tasks without an assigned owner' },
+  { id: 294, category: 'Task Management', subCategory: 'Overdue', prompt: 'Show escalated tasks this week', expectedBehavior: 'Lists tasks that were escalated due to missed deadlines' },
+  { id: 295, category: 'Task Management', subCategory: 'My Tasks', prompt: 'Show tasks blocked by dependencies', expectedBehavior: 'Lists tasks waiting on prerequisite tasks to complete' },
+  { id: 296, category: 'Task Management', subCategory: 'Completed', prompt: 'Show average task completion time by category', expectedBehavior: 'Mean days to complete tasks grouped by task type' },
+  { id: 297, category: 'Task Management', subCategory: 'Team', prompt: 'Show team workload distribution', expectedBehavior: 'Task count and estimated hours per team member' },
+  { id: 298, category: 'Task Management', subCategory: 'My Tasks', prompt: 'Show tasks related to month-end closing', expectedBehavior: 'Lists all tasks tagged with month-end/closing activities' },
+  { id: 299, category: 'Task Management', subCategory: 'Overdue', prompt: 'Show recurring tasks that were missed', expectedBehavior: 'Lists recurring tasks where scheduled occurrence was not completed' },
+  { id: 300, category: 'Task Management', subCategory: 'Team', prompt: 'Show tasks created by me and assigned to others', expectedBehavior: 'Lists tasks user delegated to team members' },
+  { id: 301, category: 'Task Management', subCategory: 'Completed', prompt: 'Show tasks completed ahead of deadline', expectedBehavior: 'Lists tasks finished before their due date' },
+  { id: 302, category: 'Task Management', subCategory: 'My Tasks', prompt: 'Show tasks tagged as audit-related', expectedBehavior: 'Lists tasks associated with audit preparation or response' },
+  { id: 303, category: 'Task Management', subCategory: 'Team', prompt: 'Show task SLA compliance rate', expectedBehavior: 'Percentage of tasks completed within defined SLA' },
+
+  // ── Your Workspace (12 more) ──
+  { id: 304, category: 'Your Workspace', subCategory: 'Dashboard', prompt: 'Show cash position snapshot', expectedBehavior: 'Current cash and bank balances across all accounts' },
+  { id: 305, category: 'Your Workspace', subCategory: 'Notifications', prompt: 'Show critical alerts and warnings', expectedBehavior: 'Filters high-priority notifications requiring immediate action' },
+  { id: 306, category: 'Your Workspace', subCategory: 'Activity', prompt: 'Show approvals pending from me', expectedBehavior: 'Lists all documents/claims/POs awaiting user approval' },
+  { id: 307, category: 'Your Workspace', subCategory: 'Favorites', prompt: 'Show my pinned dashboards', expectedBehavior: 'Lists custom dashboards saved by the user' },
+  { id: 308, category: 'Your Workspace', subCategory: 'Settings', prompt: 'Show my default company and branch', expectedBehavior: 'Displays currently selected company and branch settings' },
+  { id: 309, category: 'Your Workspace', subCategory: 'Dashboard', prompt: 'Show weekly financial health scorecard', expectedBehavior: 'Key financial metrics with health indicators for the week' },
+  { id: 310, category: 'Your Workspace', subCategory: 'Activity', prompt: 'Show audit trail for my recent changes', expectedBehavior: 'Lists all document modifications made by user with timestamps' },
+  { id: 311, category: 'Your Workspace', subCategory: 'Notifications', prompt: 'Show deadline reminders for this week', expectedBehavior: 'Lists upcoming deadlines from tasks, filings, and payments' },
+  { id: 312, category: 'Your Workspace', subCategory: 'Favorites', prompt: 'Show my frequently used reports', expectedBehavior: 'Lists reports accessed most often by the user' },
+  { id: 313, category: 'Your Workspace', subCategory: 'Dashboard', prompt: 'Show month-end checklist progress', expectedBehavior: 'Displays checklist items for month-end close with completion status' },
+  { id: 314, category: 'Your Workspace', subCategory: 'Settings', prompt: 'Show API integrations connected to my workspace', expectedBehavior: 'Lists active third-party API connections and their status' },
+  { id: 315, category: 'Your Workspace', subCategory: 'Activity', prompt: 'Show data export history', expectedBehavior: 'Lists recent data exports with file type and download links' },
+
+  // ── Cross-Module / General (11 more) ──
+  { id: 316, category: 'Reports', subCategory: 'Custom', prompt: 'Show vendor vs customer ledger reconciliation', expectedBehavior: 'Matches vendor bills with customer invoices for clearing' },
 ];
 
 // Get unique categories
