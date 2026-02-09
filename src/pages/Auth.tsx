@@ -26,7 +26,7 @@ export default function Auth() {
 
   useEffect(() => {
     if (user && !loading) {
-      navigate('/');
+      navigate('/dashboard');
     }
   }, [user, loading, navigate]);
 
@@ -58,7 +58,7 @@ export default function Auth() {
         variant: 'destructive',
       });
     } else {
-      navigate('/');
+      navigate('/dashboard');
     }
   };
 
