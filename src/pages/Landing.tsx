@@ -231,7 +231,7 @@ const Landing = () => {
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] max-w-4xl mx-auto">
             Your AI-Powered CFO,{' '}
-            <span className="bg-gradient-to-r from-primary to-ai bg-clip-text text-transparent">
+            <span className="text-primary">
               Always On Duty
             </span>
           </h1>
@@ -374,7 +374,7 @@ const Landing = () => {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             {STATS.map((stat) => (
               <div key={stat.label} className="text-center">
-                <div className="text-3xl sm:text-4xl font-extrabold bg-gradient-to-r from-primary to-ai bg-clip-text text-transparent">
+                <div className="text-3xl sm:text-4xl font-extrabold text-primary">
                   {stat.value}
                 </div>
                 <div className="mt-1 text-sm text-muted-foreground font-medium">{stat.label}</div>
