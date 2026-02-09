@@ -1,67 +1,60 @@
 
 
-# Landing Page for HelloCFO
+# Live Demo Showcase Section
 
 ## Overview
-Create a production-grade, conversion-focused landing page at `/landing` that showcases HelloCFO's key features with modern fintech aesthetics. The landing page will be publicly accessible (no auth required) and will redirect authenticated users or provide a "Go to Dashboard" option.
+Add an animated "Live Demo" section to the landing page that simulates a real conversation between a user and the CFO Agent. It will show a user typing a prompt, followed by the AI agent "typing" back a response -- cycling through multiple examples automatically. This creates a compelling, interactive showcase without needing a video.
 
-## Page Structure
+## What It Looks Like
 
-### Section 1 - Hero
-- Large headline: "Your AI-Powered CFO, Always On Duty"
-- Subheadline explaining the value proposition
-- CTA buttons: "Get Started" (links to /auth) and "See Features"
-- Animated gradient background with subtle grid pattern
-- Mock dashboard screenshot/illustration using CSS art (cards, charts)
+A chat-style UI mockup positioned between the "Features" and "How It Works" sections:
 
-### Section 2 - Key Features Grid (6 features)
-Each feature card with icon, title, and description:
-1. **AI Intent Engine** - AI auto-generates query intents with training phrases, entities, pipelines
-2. **Real-time CFO Agent** - Conversational AI that resolves financial queries in real-time with SSE streaming
-3. **Multi-Module Coverage** - 14+ modules: Sales, GST, Inventory, Purchases, Reports, Fixed Assets, etc.
-4. **Smart Data Pipeline** - Visual pipeline builder with MCP tool integration for data fetching and computation
-5. **Test Cases Library** - 150+ pre-built test cases with export to Markdown and CSV
-6. **API Console** - Built-in API testing console with live request/response inspection
+- Left side: A mock chat window showing a conversation
+- The user prompt types in character-by-character (typewriter effect)
+- After a brief "thinking" animation (bouncing dots), the agent response types in
+- After a pause, the conversation fades out and the next example begins
+- Cycles through 5 example prompt/response pairs continuously
 
-### Section 3 - How It Works (3-step flow)
-1. Configure intents and modules
-2. AI generates training phrases, entities, and pipelines
-3. Real-time agent resolves user queries
+### Example Conversations
 
-### Section 4 - Modules Showcase
-Animated scrolling row of module badges (Sales, Purchases, GST, Inventory, Reports, Accounting Masters, etc.) showing the breadth of coverage.
+1. **Prompt**: "What are my pending sales invoices?"  
+   **Response**: "You have 12 pending invoices totaling Rs 4,52,300. The oldest is from Acme Corp (45 days overdue, Rs 1,20,000). Want me to break it down by customer?"
 
-### Section 5 - Stats/Numbers
-Key metrics displayed in a horizontal row:
-- "14+ Modules"
-- "150+ Test Cases"
-- "Real-time Streaming"
-- "AI-Powered"
+2. **Prompt**: "Show GST liability for this month"  
+   **Response**: "Your GSTR-1 liability for Jan 2026: CGST Rs 84,200 | SGST Rs 84,200 | IGST Rs 1,42,500. Total: Rs 3,10,900. Filing deadline: Feb 11."
 
-### Section 6 - CTA Footer
-Final call-to-action with "Start Using HelloCFO" button and brief reassurance text.
+3. **Prompt**: "Compare this quarter revenue with last quarter"  
+   **Response**: "Q4 revenue: Rs 28.4L (up 18.2% from Q3's Rs 24.0L). Top growth: Electronics (+32%), Services (+14%). Biggest decline: Raw Materials (-8%)."
 
-### Navigation Bar
-- HelloCFO logo/text on the left
-- Feature links (smooth scroll anchors)
-- "Sign In" button on the right
+4. **Prompt**: "Show items below reorder level"  
+   **Response**: "7 items below reorder level: Steel Rod (Stock: 20, Min: 100), Copper Wire (Stock: 5, Min: 50), Bearing 6205 (Stock: 12, Min: 40)... Shall I create purchase orders?"
+
+5. **Prompt**: "What is my best selling item this year?"  
+   **Response**: "Your top seller is 'Premium Widget A' with 2,847 units sold (Rs 14.2L revenue). It accounts for 22% of total sales. Next best: 'Service Plan Gold' at 1,203 units."
 
 ## Technical Details
 
-### Files to Create
-1. **`src/pages/Landing.tsx`** - The full landing page component with all sections. Self-contained with inline section components. Uses existing UI primitives (Button, Card) and lucide icons. Includes smooth-scroll navigation and responsive design (mobile-first).
+### Changes to `src/pages/Landing.tsx`
 
-### Files to Modify
-1. **`src/App.tsx`** - Add `/landing` route
-2. **`src/pages/Index.tsx`** - Change unauthenticated redirect from `/auth` to `/landing`
+1. **Add demo data constant** (`DEMO_CONVERSATIONS`) -- array of 5 prompt/response pairs
 
-### Design Approach
-- Uses the existing design system (CSS variables for colors, Inter font, Tailwind classes)
-- Gradient accents using `--primary`, `--ai` color variables
-- Smooth scroll-linked animations using CSS only (no extra libraries)
-- Fully responsive: mobile, tablet, desktop
-- Dark-friendly since it uses CSS variable-based theming
+2. **Add a `LiveDemoSection` inline component** using `useState` and `useEffect`:
+   - State: `currentDemo` (index), `displayedPrompt` (partial string), `displayedResponse` (partial string), `phase` ('typing-prompt' | 'thinking' | 'typing-response' | 'pausing')
+   - Typewriter effect via `setInterval` adding one character at a time
+   - Phase transitions: type prompt (40ms/char) -> thinking dots (1.5s) -> type response (20ms/char) -> pause (3s) -> next demo
+   - Wraps around after the last conversation
 
-### No New Dependencies
-Everything built with existing Tailwind CSS, lucide-react icons, and shadcn/ui components.
+3. **UI structure**: 
+   - Section header with "See It In Action" badge
+   - A card styled like a chat window (with title bar dots like the hero mock)
+   - User messages aligned right with primary background
+   - Agent messages aligned left with muted background
+   - Blinking cursor at the end of the currently typing text
+   - Small "Live Demo" indicator with a pulsing green dot
 
+4. **Insert the new section** between the Features section and the How It Works section
+
+5. **Add "Demo" to the NAV_LINKS** array so users can scroll to it from the navbar
+
+### No new files or dependencies needed
+Everything is built inline in Landing.tsx using React state, `useEffect` timers, and existing Tailwind classes.
