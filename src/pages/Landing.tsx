@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import LiveDemoSection from '@/components/LiveDemoSection';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +36,7 @@ import {
 
 const NAV_LINKS = [
   { label: 'Features', href: '#features' },
+  { label: 'Demo', href: '#demo' },
   { label: 'How It Works', href: '#how-it-works' },
   { label: 'Modules', href: '#modules' },
 ];
@@ -331,6 +333,9 @@ const Landing = () => {
           </div>
         </div>
       </section>
+
+      {/* Live Demo */}
+      <LiveDemoSection />
 
       {/* How It Works */}
       <section id="how-it-works" className="py-20 lg:py-28 bg-muted/30">
