@@ -36,7 +36,7 @@ import {
 
 const NAV_LINKS = [
   { label: 'Features', href: '#features' },
-  { label: 'Demo', href: '#demo' },
+  
   { label: 'How It Works', href: '#how-it-works' },
   { label: 'Modules', href: '#modules' },
 ];
@@ -246,53 +246,9 @@ const Landing = () => {
             </Button>
           </div>
 
-          {/* Mock dashboard illustration */}
-          <div className="mt-16 max-w-4xl mx-auto">
-            <div className="relative rounded-xl border border-border bg-card shadow-lg overflow-hidden">
-              {/* Title bar */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/50">
-                <div className="flex gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-destructive/60" />
-                  <div className="w-3 h-3 rounded-full bg-warning/60" />
-                  <div className="w-3 h-3 rounded-full bg-success/60" />
-                </div>
-                <span className="text-xs text-muted-foreground ml-2">HelloCFO Dashboard</span>
-              </div>
-              {/* Content grid */}
-              <div className="p-6 grid grid-cols-3 gap-4">
-                {/* Sidebar mock */}
-                <div className="col-span-1 space-y-3">
-                  {['Intents', 'Modules', 'Pipeline', 'Agent', 'Cases'].map((item) => (
-                    <div
-                      key={item}
-                      className="h-8 rounded-md bg-muted flex items-center px-3 text-xs text-muted-foreground"
-                    >
-                      {item}
-                    </div>
-                  ))}
-                </div>
-                {/* Main content mock */}
-                <div className="col-span-2 space-y-4">
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="rounded-lg bg-primary/10 p-4 text-center">
-                      <div className="text-2xl font-bold text-primary">247</div>
-                      <div className="text-xs text-muted-foreground mt-1">Active Intents</div>
-                    </div>
-                    <div className="rounded-lg bg-success/10 p-4 text-center">
-                      <div className="text-2xl font-bold text-success">98.2%</div>
-                      <div className="text-xs text-muted-foreground mt-1">Accuracy</div>
-                    </div>
-                    <div className="rounded-lg bg-ai/10 p-4 text-center">
-                      <div className="text-2xl font-bold text-ai">1.2s</div>
-                      <div className="text-xs text-muted-foreground mt-1">Avg Response</div>
-                    </div>
-                  </div>
-                  <div className="h-32 rounded-lg bg-muted/50 border border-border flex items-center justify-center text-xs text-muted-foreground">
-                    Real-time query resolution stream
-                  </div>
-                </div>
-              </div>
-            </div>
+          {/* Live demo in hero */}
+          <div className="mt-16 max-w-2xl mx-auto">
+            <LiveDemoSection embedded />
           </div>
         </div>
       </section>
@@ -334,8 +290,6 @@ const Landing = () => {
         </div>
       </section>
 
-      {/* Live Demo */}
-      <LiveDemoSection />
 
       {/* How It Works */}
       <section id="how-it-works" className="py-20 lg:py-28 bg-muted/30">
