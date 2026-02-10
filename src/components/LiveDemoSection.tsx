@@ -135,11 +135,11 @@ const LiveDemoSection = ({ embedded = false }: { embedded?: boolean }) => {
             <img
               src={munimjiAvatar}
               alt="Munimji"
-              className="w-7 h-7 rounded-full object-cover flex-shrink-0 mt-0.5"
+              className="w-7 h-7 rounded-full object-cover flex-shrink-0"
             />
-            <div>
-              <span className="text-xs font-semibold text-foreground mb-1 block">Munimji</span>
-              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm text-foreground leading-relaxed max-w-[90%]">
+            <div className="max-w-[85%]">
+              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm text-foreground leading-relaxed">
+                <p className="text-xs font-semibold mb-1.5">Munimji</p>
                 <p>Namaste! 🙏</p>
                 <p className="mt-1">I'm your <strong>Munimji</strong> (CFO Advisory).</p>
                 <p className="mt-1">Ask me about <strong>cash flow</strong>, <strong>P&L</strong>, or <strong>revenue</strong>.</p>
@@ -171,11 +171,11 @@ const LiveDemoSection = ({ embedded = false }: { embedded?: boolean }) => {
             <img
               src={munimjiAvatar}
               alt="Munimji"
-              className="w-7 h-7 rounded-full object-cover flex-shrink-0 mt-0.5"
+              className="w-7 h-7 rounded-full object-cover flex-shrink-0"
             />
-            <div>
-              <span className="text-xs font-semibold text-foreground mb-1 block">Munimji</span>
-              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 flex items-center gap-1.5">
+            <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3">
+              <p className="text-xs font-semibold mb-1.5">Munimji</p>
+              <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:0ms]" />
                 <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:150ms]" />
                 <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:300ms]" />
@@ -190,11 +190,11 @@ const LiveDemoSection = ({ embedded = false }: { embedded?: boolean }) => {
             <img
               src={munimjiAvatar}
               alt="Munimji"
-              className="w-7 h-7 rounded-full object-cover flex-shrink-0 mt-0.5"
+              className="w-7 h-7 rounded-full object-cover flex-shrink-0"
             />
-            <div>
-              <span className="text-xs font-semibold text-foreground mb-1 block">Munimji</span>
-              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-foreground leading-relaxed max-w-[90%]">
+            <div className="max-w-[85%]">
+              <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-foreground leading-relaxed">
+                <p className="text-xs font-semibold mb-1.5">Munimji</p>
                 {renderBold(displayedResponse)}
                 {phase === 'typing-response' && cursor}
               </div>
