@@ -229,11 +229,8 @@ const Landing = () => {
             <Sparkles className="h-3 w-3" /> AI-Powered Financial Intelligence
           </Badge>
 
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] max-w-4xl mx-auto">
-            Your AI-Powered CFO,{' '}
-            <span className="text-primary">
-              Always On Duty
-            </span>
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] max-w-4xl mx-auto whitespace-nowrap">
+            Your AI-Powered CFO, <span className="text-primary">Always On Duty</span>
           </h1>
 
           <p className="mt-6 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
