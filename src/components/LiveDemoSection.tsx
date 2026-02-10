@@ -128,7 +128,7 @@ const LiveDemoSection = ({ embedded = false }: { embedded?: boolean }) => {
       </div>
 
       {/* Chat area */}
-      <div className="p-5 min-h-[260px] flex flex-col justify-end gap-4 bg-background">
+      <div className="p-5 min-h-[260px] max-h-[300px] flex flex-col justify-start gap-4 bg-background overflow-hidden">
         {/* Munimji greeting — always visible */}
         {phase === 'typing-prompt' && displayedPrompt.length === 0 && (
           <div className="flex items-start gap-2.5">
