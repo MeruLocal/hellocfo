@@ -210,7 +210,7 @@ const Landing = () => {
       </nav>
 
       {/* Hero */}
-      <section className="relative pt-32 pb-20 lg:pt-44 lg:pb-32">
+      <section className="relative pt-24 pb-16 lg:pt-28 lg:pb-20">
         {/* Background grid */}
         <div
           className="absolute inset-0 -z-10"
@@ -258,7 +258,7 @@ const Landing = () => {
           </div>
 
           {/* Live demo in hero */}
-          <div className="mt-16 max-w-2xl mx-auto">
+          <div className="mt-10 max-w-2xl mx-auto">
             <LiveDemoSection embedded />
           </div>
         </div>
