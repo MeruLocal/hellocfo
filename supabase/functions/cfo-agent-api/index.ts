@@ -3,9 +3,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   BOOKKEEPER_TOOLS,
   CFO_TOOLS,
-  buildAnthropicTools,
+  buildOpenAITools,
   resolveMetaToolToMcp,
-  type AnthropicTool,
+  type OpenAITool,
   type ToolGroup,
 } from "./tool-groups.ts";
 import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
@@ -186,37 +186,39 @@ class MCPClient {
   }
 }
 
-// Call Anthropic API with prompt caching support
-async function callAnthropic(
+// Call Azure OpenAI API
+async function callOpenAI(
   config: LLMConfig,
-  system: string | Array<{ type: string; text: string; cache_control?: { type: string } }>,
+  systemPrompt: string,
   messages: unknown[],
-  tools?: AnthropicTool[],
+  tools?: OpenAITool[],
   maxTokens?: number
 ): Promise<{
-  stop_reason: string;
-  content: { type: string; id?: string; name?: string; input?: Record<string, unknown>; text?: string }[];
-  usage?: { input_tokens?: number; output_tokens?: number };
+  finish_reason: string;
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+  };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }> {
-  const endpoint = config.provider === "azure-anthropic"
-    ? `${config.endpoint || "https://cursor-api-west-us-resource.openai.azure.com/anthropic"}/v1/messages`
-    : "https://api.anthropic.com/v1/messages";
+  const baseEndpoint = config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+  const endpoint = `${baseEndpoint.replace(/\/$/, "")}/chat/completions`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": config.api_key || "",
-    "anthropic-version": "2023-06-01",
+    "api-key": config.api_key || "",
   };
 
-  if (Array.isArray(system)) {
-    headers["anthropic-beta"] = "prompt-caching-2024-07-31";
-  }
+  const allMessages = [
+    { role: "developer", content: systemPrompt },
+    ...messages,
+  ];
 
   const body: Record<string, unknown> = {
     model: config.model,
     max_tokens: maxTokens || config.max_tokens || 4096,
-    system,
-    messages,
+    messages: allMessages,
   };
   if (tools && tools.length > 0) body.tools = tools;
 
@@ -224,10 +226,18 @@ async function callAnthropic(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Anthropic API error: ${res.status} - ${err.slice(0, 200)}`);
+    throw new Error(`OpenAI API error: ${res.status} - ${err.slice(0, 200)}`);
   }
 
-  return res.json();
+  const result = await res.json();
+  const choice = result.choices?.[0];
+  if (!choice) throw new Error("No choices returned from OpenAI");
+
+  return {
+    finish_reason: choice.finish_reason,
+    message: choice.message,
+    usage: result.usage,
+  };
 }
 
 serve(async (req) => {
@@ -448,16 +458,14 @@ serve(async (req) => {
         sendEvent('response_generating', { path: 'fast' });
 
         const dataContext = toolResults.filter(r => r.success).map(r => `[${r.tool}]: ${r.data}`).join('\n\n');
-        const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
-          { type: "text", text: SYSTEM_PROMPTS.fast_path, cache_control: { type: "ephemeral" } },
-        ];
+        const fastSystemPrompt = SYSTEM_PROMPTS.fast_path;
 
-        const response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, [
+        const response = await callOpenAI(llmConfig as LLMConfig, fastSystemPrompt, [
           ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
           { role: 'user', content: `Query: ${query}\n\nData:\n${dataContext}\n\n${responseConfig?.template ? `Format: ${responseConfig.template}` : ''}` }
         ], [], 2048);
 
-        const responseText = response.content.find(b => b.type === 'text')?.text || '';
+        const responseText = response.message.content || '';
 
         // Stream response
         const chunkSize = 50;
@@ -499,13 +507,13 @@ serve(async (req) => {
           sendEvent('tools_filtered', { category: 'general_chat', toolCount: 0 });
           sendEvent('response_generating', { path: 'llm', category: 'general_chat' });
 
-          const response = await callAnthropic(llmConfig as LLMConfig,
-            [{ type: "text", text: SYSTEM_PROMPTS.general_chat, cache_control: { type: "ephemeral" } }],
+          const response = await callOpenAI(llmConfig as LLMConfig,
+            SYSTEM_PROMPTS.general_chat,
             [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: query }],
             [], 512
           );
 
-          const responseText = response.content.find(b => b.type === 'text')?.text || '';
+          const responseText = response.message.content || '';
           const chunkSize = 50;
           for (let i = 0; i < responseText.length; i += chunkSize) {
             sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
@@ -523,42 +531,43 @@ serve(async (req) => {
           // Bookkeeper or CFO path with filtered tools
           const toolGroups: ToolGroup[] = effectiveCategory === 'bookkeeper' ? BOOKKEEPER_TOOLS : CFO_TOOLS;
           const allGroups = [...BOOKKEEPER_TOOLS, ...CFO_TOOLS];
-          const filteredTools = buildAnthropicTools(toolGroups, mcpToolNames, true);
+          const filteredTools = buildOpenAITools(toolGroups, mcpToolNames);
 
           sendEvent('tools_filtered', {
             category: effectiveCategory, toolCount: filteredTools.length,
-            totalMcpTools: mcpTools.length, tools: filteredTools.map(t => t.name),
+            totalMcpTools: mcpTools.length, tools: filteredTools.map(t => t.function.name),
           });
 
           const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-          const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
-            { type: "text", text: categoryPrompt, cache_control: { type: "ephemeral" } },
-            { type: "text", text: `Available tool groups: ${filteredTools.map(t => t.name).join(', ')}` },
-          ];
+          let systemPrompt = `${categoryPrompt}\n\nAvailable tool groups: ${filteredTools.map(t => t.function.name).join(', ')}`;
 
           const messages: unknown[] = [
             ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: query }
           ];
 
-          let response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+          let response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
           let iterations = 0;
           const mcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean }[] = [];
 
-          while (response.stop_reason === 'tool_use' && iterations < 10) {
+          while (response.finish_reason === 'tool_calls' && iterations < 10) {
             iterations++;
-            const toolUses = response.content.filter(b => b.type === 'tool_use') as { id: string; name: string; input: Record<string, unknown> }[];
-            if (toolUses.length === 0) break;
+            const toolCalls = response.message.tool_calls || [];
+            if (toolCalls.length === 0) break;
 
-            const toolResults: { type: string; tool_use_id: string; content: string; is_error?: boolean }[] = [];
+            // Add assistant message with tool calls
+            messages.push(response.message);
 
-            for (const toolUse of toolUses) {
-              const action = (toolUse.input as { action?: string })?.action;
-              const params = (toolUse.input as { parameters?: Record<string, unknown> })?.parameters || {};
-              const mcpToolName = action ? resolveMetaToolToMcp(toolUse.name, action, allGroups) : null;
+            for (const toolCall of toolCalls) {
+              let toolInput: Record<string, unknown> = {};
+              try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
+              
+              const action = toolInput.action as string | undefined;
+              const params = (toolInput.parameters as Record<string, unknown>) || {};
+              const mcpToolName = action ? resolveMetaToolToMcp(toolCall.function.name, action, allGroups) : null;
 
               if (mcpToolName && mcpClient) {
-                sendEvent('executing_tool', { tool: mcpToolName, group: toolUse.name });
+                sendEvent('executing_tool', { tool: mcpToolName, group: toolCall.function.name });
                 try {
                   const result = await mcpClient.callTool(mcpToolName, params);
                   const truncated = truncateResult(result);
@@ -566,33 +575,31 @@ serve(async (req) => {
                   let recordCount = 1;
                   try { const p = JSON.parse(result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
                   sendEvent('tool_result', { tool: mcpToolName, success: true, recordCount });
-                  toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: truncated });
+                  messages.push({ role: 'tool', tool_call_id: toolCall.id, content: truncated });
                 } catch (error) {
                   mcpResults.push({ tool: mcpToolName, error: String(error), success: false });
                   sendEvent('tool_result', { tool: mcpToolName, success: false, error: String(error) });
-                  toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: String(error) }), is_error: true });
+                  messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: String(error) }) });
                 }
               } else {
-                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: mcpClient ? `Unknown action: ${action}` : 'MCP not connected' }), is_error: true });
+                messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: mcpClient ? `Unknown action: ${action}` : 'MCP not connected' }) });
               }
             }
 
             const autoEnrichments = detectAutoEnrichments(mcpResults);
             if (autoEnrichments.length > 0) sendEvent('enrichments_applying', { enrichments: autoEnrichments });
 
-            messages.push({ role: 'assistant', content: response.content });
-            messages.push({ role: 'user', content: toolResults });
             sendEvent('response_generating', { iteration: iterations });
 
             const enrichmentContext = buildEnrichmentInstructions(autoEnrichments);
             if (enrichmentContext && iterations === 1) {
-              systemPrompt.push({ type: "text", text: enrichmentContext });
+              systemPrompt += `\n\n${enrichmentContext}`;
             }
 
-            response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+            response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
           }
 
-          const responseText = response.content.find(b => b.type === 'text')?.text || '';
+          const responseText = response.message.content || '';
           const chunkSize = 50;
           for (let i = 0; i < responseText.length; i += chunkSize) {
             sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });

@@ -3,9 +3,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   BOOKKEEPER_TOOLS,
   CFO_TOOLS,
-  buildAnthropicTools,
+  buildOpenAITools,
   resolveMetaToolToMcp,
-  type AnthropicTool,
+  type OpenAITool,
   type ToolGroup,
 } from "./tool-groups.ts";
 import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
@@ -203,53 +203,63 @@ class MCPClient {
   }
 }
 
-// Call Anthropic API with optional prompt caching
-async function callAnthropic(
+// Call Azure OpenAI API
+async function callOpenAI(
   config: LLMConfig,
-  system: string | Array<{ type: string; text: string; cache_control?: { type: string } }>,
+  systemPrompt: string,
   messages: unknown[],
-  tools: AnthropicTool[],
+  tools: OpenAITool[],
   reqId: string,
   maxTokens?: number
 ): Promise<{
-  stop_reason: string;
-  content: { type: string; id?: string; name?: string; input?: Record<string, unknown>; text?: string }[];
-  usage?: { input_tokens?: number; output_tokens?: number };
+  finish_reason: string;
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+  };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }> {
-  const endpoint =
-    config.provider === "azure-anthropic"
-      ? `${config.endpoint || "https://cursor-api-west-us-resource.openai.azure.com/anthropic"}/v1/messages`
-      : "https://api.anthropic.com/v1/messages";
+  // Build the endpoint URL for Azure OpenAI
+  const baseEndpoint = config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+  const endpoint = `${baseEndpoint.replace(/\/$/, "")}/chat/completions`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": config.api_key || "",
-    "anthropic-version": "2023-06-01",
+    "api-key": config.api_key || "",
   };
 
-  // Enable prompt caching if using array-format system prompt
-  if (Array.isArray(system)) {
-    headers["anthropic-beta"] = "prompt-caching-2024-07-31";
-  }
+  // Build messages with system prompt
+  const allMessages = [
+    { role: "developer", content: systemPrompt },
+    ...messages,
+  ];
 
   const body: Record<string, unknown> = {
     model: config.model,
     max_tokens: maxTokens || config.max_tokens || 4096,
-    system,
-    messages,
+    messages: allMessages,
   };
   if (tools.length > 0) body.tools = tools;
 
-  console.log(`[${reqId}] Calling Anthropic: ${config.model} (${tools.length} tools)`);
+  console.log(`[${reqId}] Calling OpenAI: ${config.model} (${tools.length} tools)`);
   const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
 
   if (!res.ok) {
     const err = await res.text();
-    console.error(`[${reqId}] Anthropic error: ${res.status} - ${err}`);
-    throw new Error(`Anthropic API error: ${res.status} - ${err.slice(0, 200)}`);
+    console.error(`[${reqId}] OpenAI error: ${res.status} - ${err}`);
+    throw new Error(`OpenAI API error: ${res.status} - ${err.slice(0, 200)}`);
   }
 
-  return res.json();
+  const result = await res.json();
+  const choice = result.choices?.[0];
+  if (!choice) throw new Error("No choices returned from OpenAI");
+
+  return {
+    finish_reason: choice.finish_reason,
+    message: choice.message,
+    usage: result.usage,
+  };
 }
 
 serve(async (req) => {
@@ -339,14 +349,12 @@ serve(async (req) => {
           const queryLower = query.toLowerCase();
           const intentNameLower = intent.name.toLowerCase();
 
-          // Exact phrase match
           for (const phrase of trainingPhrases) {
             const phraseLower = phrase.toLowerCase();
             if (queryLower === phraseLower) {
               bestIntent = { id: intent.id, name: intent.name, moduleId: intent.moduleId, description: intent.description, confidence: 0.95, resolutionFlow: intent.resolutionFlow };
               break;
             }
-            // High similarity (query contains the full phrase or vice versa)
             if (queryLower.includes(phraseLower) || phraseLower.includes(queryLower)) {
               const similarity = Math.min(queryLower.length, phraseLower.length) / Math.max(queryLower.length, phraseLower.length);
               const candidateConfidence = 0.7 + similarity * 0.25;
@@ -356,7 +364,6 @@ serve(async (req) => {
             }
           }
 
-          // Intent name match
           if (queryLower.includes(intentNameLower) || intentNameLower.includes(queryLower)) {
             const nameConfidence = 0.6;
             if (!bestIntent || nameConfidence > bestIntent.confidence) {
@@ -364,7 +371,7 @@ serve(async (req) => {
             }
           }
 
-          if (bestIntent?.confidence === 0.95) break; // Exact match found
+          if (bestIntent?.confidence === 0.95) break;
         }
 
         const CONFIDENCE_THRESHOLD = 0.85;
@@ -457,14 +464,10 @@ serve(async (req) => {
             { role: "user", content: `Query: ${query}\n\nData fetched:\n${dataContext}${enrichmentInstructions}\n\n${responseConfig?.template ? `Format hint: ${responseConfig.template}` : ""}` },
           ];
 
-          const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
-            { type: "text", text: SYSTEM_PROMPTS.fast_path, cache_control: { type: "ephemeral" } },
-            { type: "text", text: `Context: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}` },
-          ];
+          const fastSystemPrompt = `${SYSTEM_PROMPTS.fast_path}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}`;
 
-          const response = await callAnthropic(llmConfig, systemPrompt, fastPathMessages, [], reqId, 2048);
-          const textBlock = response.content.find((b) => b.type === "text") as { text?: string } | undefined;
-          const finalResponse = textBlock?.text || "";
+          const response = await callOpenAI(llmConfig, fastSystemPrompt, fastPathMessages, [], reqId, 2048);
+          const finalResponse = response.message.content || "";
 
           sendEvent("response_chunk", { text: finalResponse });
           sendEvent("complete", {
@@ -481,7 +484,7 @@ serve(async (req) => {
             dataSources: mcpResults.filter((r) => r.success).map((r) => r.tool),
             llmModel: `${llmConfig.provider}/${llmConfig.model}`,
             iterationCount: 1,
-            usage: response.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+            usage: response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
           });
 
         } else {
@@ -491,7 +494,7 @@ serve(async (req) => {
           const classification = classifyQuery(query);
 
           // Check cross-over from previous conversation
-          const lastCategory = conversationHistory.length > 0 ? "cfo" : undefined; // simplified
+          const lastCategory = conversationHistory.length > 0 ? "cfo" : undefined;
           const isCrossOver = lastCategory && detectCrossOver(query, lastCategory as QueryCategory);
           const effectiveCategory = isCrossOver ? "bookkeeper" : classification.category;
 
@@ -523,13 +526,9 @@ serve(async (req) => {
             sendEvent("response_generating", { path: "llm", category: "general_chat" });
 
             const chatMessages = [...conversationHistory, { role: "user", content: query }];
-            const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
-              { type: "text", text: SYSTEM_PROMPTS.general_chat, cache_control: { type: "ephemeral" } },
-            ];
 
-            const response = await callAnthropic(llmConfig, systemPrompt, chatMessages, [], reqId, 512);
-            const textBlock = response.content.find((b) => b.type === "text") as { text?: string } | undefined;
-            const finalResponse = textBlock?.text || "";
+            const response = await callOpenAI(llmConfig, SYSTEM_PROMPTS.general_chat, chatMessages, [], reqId, 512);
+            const finalResponse = response.message.content || "";
 
             sendEvent("response_chunk", { text: finalResponse });
             sendEvent("complete", {
@@ -538,55 +537,56 @@ serve(async (req) => {
               pipelineSteps: [], enrichments: [], responseFormat: "", response: finalResponse,
               mcpToolResults: [], dataSources: [],
               llmModel: `${llmConfig.provider}/${llmConfig.model}`, iterationCount: 1,
-              usage: response.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+              usage: response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
             });
 
           } else {
             // LAYER 2: Select tool group and build filtered tools
             const toolGroups: ToolGroup[] = effectiveCategory === "bookkeeper" ? BOOKKEEPER_TOOLS : CFO_TOOLS;
-            const allGroups = [...BOOKKEEPER_TOOLS, ...CFO_TOOLS]; // For cross-over resolution
-            const filteredTools = buildAnthropicTools(toolGroups, mcpToolNames, true);
+            const allGroups = [...BOOKKEEPER_TOOLS, ...CFO_TOOLS];
+            const filteredTools = buildOpenAITools(toolGroups, mcpToolNames);
 
             sendEvent("tools_filtered", {
               category: effectiveCategory,
               toolCount: filteredTools.length,
               totalMcpTools: mcpTools.length,
-              tools: filteredTools.map((t) => t.name),
+              tools: filteredTools.map((t) => t.function.name),
             });
 
             // Select model tier
             const modelSelection = selectModelTier(query, effectiveCategory);
             console.log(`[${reqId}] Model: ${modelSelection.tier} (${modelSelection.reason})`);
 
-            // Build category-specific system prompt with caching
+            // Build category-specific system prompt
             const categoryPrompt = effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-            const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
-              { type: "text", text: categoryPrompt, cache_control: { type: "ephemeral" } },
-              { type: "text", text: `Context: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tool groups: ${filteredTools.map((t) => t.name).join(", ")}` },
-            ];
+            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tool groups: ${filteredTools.map((t) => t.function.name).join(", ")}`;
 
             // Build messages
             const messages: unknown[] = [...conversationHistory, { role: "user", content: query }];
 
             // Call LLM with filtered tools
-            let response = await callAnthropic(llmConfig, systemPrompt, messages, filteredTools, reqId);
-            let inputTokens = response.usage?.input_tokens || 0;
-            let outputTokens = response.usage?.output_tokens || 0;
+            let response = await callOpenAI(llmConfig, systemPrompt, messages, filteredTools, reqId);
+            let inputTokens = response.usage?.prompt_tokens || 0;
+            let outputTokens = response.usage?.completion_tokens || 0;
             let iterations = 0;
             const mcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean }[] = [];
 
             // Handle tool call loop
-            while (response.stop_reason === "tool_use" && iterations < 10) {
+            while (response.finish_reason === "tool_calls" && iterations < 10) {
               iterations++;
-              const toolUses = response.content.filter((b) => b.type === "tool_use") as { id: string; name: string; input: Record<string, unknown> }[];
-              if (toolUses.length === 0) break;
+              const toolCalls = response.message.tool_calls || [];
+              if (toolCalls.length === 0) break;
 
-              const toolResults: { type: string; tool_use_id: string; content: string; is_error?: boolean }[] = [];
+              // Add assistant message with tool calls to conversation
+              messages.push(response.message);
 
-              for (const toolUse of toolUses) {
-                const groupName = toolUse.name;
-                const action = (toolUse.input as { action?: string })?.action;
-                const params = (toolUse.input as { parameters?: Record<string, unknown> })?.parameters || {};
+              for (const toolCall of toolCalls) {
+                const groupName = toolCall.function.name;
+                let toolInput: Record<string, unknown> = {};
+                try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
+                
+                const action = toolInput.action as string | undefined;
+                const params = (toolInput.parameters as Record<string, unknown>) || {};
 
                 // Resolve meta-tool to actual MCP tool
                 const mcpToolName = action ? resolveMetaToolToMcp(groupName, action, allGroups) : null;
@@ -603,20 +603,20 @@ serve(async (req) => {
                     try { const p = JSON.parse(mcpResult); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
                     sendEvent("tool_result", { tool: mcpToolName, group: groupName, success: true, recordCount });
 
-                    toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: truncated });
+                    // Add tool result message
+                    messages.push({ role: "tool", tool_call_id: toolCall.id, content: truncated });
                   } catch (error) {
                     mcpResults.push({ tool: mcpToolName, error: String(error), success: false });
                     sendEvent("tool_result", { tool: mcpToolName, group: groupName, success: false, error: String(error) });
-                    toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: String(error) }), is_error: true });
+                    messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: String(error) }) });
                   }
                 } else if (!mcpClient) {
-                  toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "MCP not connected" }), is_error: true });
+                  messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "MCP not connected" }) });
                 } else {
-                  toolResults.push({
-                    type: "tool_result",
-                    tool_use_id: toolUse.id,
+                  messages.push({
+                    role: "tool",
+                    tool_call_id: toolCall.id,
                     content: JSON.stringify({ error: `Unknown action: ${action} in group ${groupName}` }),
-                    is_error: true,
                   });
                 }
               }
@@ -627,27 +627,21 @@ serve(async (req) => {
                 sendEvent("enrichments_applying", { enrichments: autoEnrichments.map((e) => ({ type: e.type, description: e.description })) });
               }
 
-              // Continue conversation
-              messages.push({ role: "assistant", content: response.content });
-              messages.push({ role: "user", content: toolResults });
-
               sendEvent("response_generating", { iteration: iterations, mcpCallsCompleted: mcpResults.filter((r) => r.success).length });
 
               // Add enrichment instructions to help LLM format better
               const enrichmentContext = buildEnrichmentInstructions(autoEnrichments);
               if (enrichmentContext && iterations === 1) {
-                // Inject enrichment hints into the system prompt for the next call
-                systemPrompt.push({ type: "text", text: enrichmentContext });
+                systemPrompt += `\n\n${enrichmentContext}`;
               }
 
-              response = await callAnthropic(llmConfig, systemPrompt, messages, filteredTools, reqId);
-              inputTokens += response.usage?.input_tokens || 0;
-              outputTokens += response.usage?.output_tokens || 0;
+              response = await callOpenAI(llmConfig, systemPrompt, messages, filteredTools, reqId);
+              inputTokens += response.usage?.prompt_tokens || 0;
+              outputTokens += response.usage?.completion_tokens || 0;
             }
 
             // Get final response
-            const textBlock = response.content.find((b) => b.type === "text") as { text?: string } | undefined;
-            const finalResponse = textBlock?.text || "";
+            const finalResponse = response.message.content || "";
 
             sendEvent("response_chunk", { text: finalResponse });
 
@@ -678,7 +672,7 @@ serve(async (req) => {
 
         // Cleanup
         if (mcpClient) mcpClient.close();
-        console.log(`[${reqId}] Done in ${((Date.now() - (Date.now() - 1)) / 1000).toFixed(2)}s`);
+        console.log(`[${reqId}] Done in ${((Date.now() - startTime) / 1000).toFixed(2)}s`);
         controller.close();
 
       } catch (error) {
