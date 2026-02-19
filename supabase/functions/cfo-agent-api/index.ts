@@ -1,5 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  BOOKKEEPER_TOOLS,
+  CFO_TOOLS,
+  buildAnthropicTools,
+  resolveMetaToolToMcp,
+  type AnthropicTool,
+  type ToolGroup,
+} from "./tool-groups.ts";
+import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
+import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
+import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,21 +22,6 @@ interface SSEEvent {
   type: string;
   data: unknown;
   timestamp: string;
-}
-
-interface Intent {
-  id: string;
-  name: string;
-  description: string;
-  module_id: string;
-  training_phrases: string[];
-  entities: Record<string, unknown>[];
-  resolution_flow: {
-    dataPipeline?: { tool: string; description: string; purpose?: string }[];
-    enrichments?: { type: string; description: string }[];
-    responseConfig?: { template: string; format: string };
-  };
-  is_active: boolean;
 }
 
 interface ChatMessage {
@@ -43,20 +39,30 @@ interface LLMConfig {
   temperature: number;
 }
 
-interface AnthropicTool {
+interface Intent {
+  id: string;
   name: string;
   description: string;
-  input_schema: Record<string, unknown>;
+  module_id: string;
+  training_phrases: string[];
+  entities: Record<string, unknown>[];
+  resolution_flow: {
+    dataPipeline?: { tool: string; mcpTool?: string; description: string; purpose?: string; nodeType?: string }[];
+    enrichments?: { type: string; description: string }[];
+    responseConfig?: { template: string; format: string };
+  };
+  is_active: boolean;
 }
 
-// Truncate large results to prevent token overflow
+const MAX_TOOL_RESULT_CHARS = 50000;
+
 function truncateResult(result: unknown, maxLength = 8000): string {
   const str = typeof result === 'string' ? result : JSON.stringify(result);
   if (str.length <= maxLength) return str;
   return str.substring(0, maxLength) + `... [truncated, ${str.length - maxLength} chars omitted]`;
 }
 
-// MCP Client for HelloBooks integration (matching test-with-mcp implementation)
+// MCP Client (same as realtime-cfo-agent)
 class MCPClient {
   private baseUrl: string;
   private headers: Record<string, string>;
@@ -71,31 +77,24 @@ class MCPClient {
   }
 
   async connect(): Promise<void> {
-    console.log('[MCP] Connecting to:', `${this.baseUrl}/sse`);
-    
     const res = await fetch(`${this.baseUrl}/sse`, { headers: this.headers });
     if (!res.ok) {
       const errorText = await res.text();
       throw new Error(`HTTP ${res.status}: ${errorText}`);
     }
-
     this.sseReader = res.body!.getReader();
     const decoder = new TextDecoder();
-
     while (true) {
       const { value, done } = await this.sseReader.read();
       if (done) break;
       this.buffer += decoder.decode(value, { stream: true });
-
       for (const line of this.buffer.split("\n")) {
         if (line.startsWith("data: /")) {
           this.sessionUrl = `${this.baseUrl}${line.slice(6).trim()}`;
-          console.log('[MCP] Got session URL:', this.sessionUrl);
           this.listenSSE(decoder);
           return;
         } else if (line.startsWith("data: http")) {
           this.sessionUrl = line.slice(6).trim();
-          console.log('[MCP] Got full session URL:', this.sessionUrl);
           this.listenSSE(decoder);
           return;
         }
@@ -109,46 +108,29 @@ class MCPClient {
     (async () => {
       while (true) {
         const { value, done } = await this.sseReader!.read();
-        if (done) {
-          console.log('[MCP] SSE stream ended');
-          break;
-        }
+        if (done) break;
         this.buffer += decoder.decode(value, { stream: true });
-
         const normalized = this.buffer.replace(/\r\n/g, "\n");
         const messages = normalized.split("\n\n");
         this.buffer = messages.pop() || "";
-
         for (const msg of messages) {
           const lines = msg.split("\n");
           let eventType = "";
           let data = "";
-          
           for (const line of lines) {
-            if (line.startsWith("event:")) {
-              eventType = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              data = line.slice(5).trim();
-            }
+            if (line.startsWith("event:")) eventType = line.slice(6).trim();
+            else if (line.startsWith("data:")) data = line.slice(5).trim();
           }
-
           if (eventType === "message" && data) {
             try {
               const result = JSON.parse(data);
-              console.log('[MCP] Received message id=', result.id);
-              
               const pending = this.pendingRequests.get(result.id);
               if (pending) {
                 this.pendingRequests.delete(result.id);
-                if (result.error) {
-                  pending.reject(new Error(result.error.message || JSON.stringify(result.error)));
-                } else {
-                  pending.resolve(result.result);
-                }
+                if (result.error) pending.reject(new Error(result.error.message || JSON.stringify(result.error)));
+                else pending.resolve(result.result);
               }
-            } catch (e) {
-              console.log('[MCP] Failed to parse SSE data');
-            }
+            } catch { /* ignore */ }
           }
         }
       }
@@ -157,7 +139,6 @@ class MCPClient {
 
   private async request(method: string, params?: unknown): Promise<unknown> {
     const id = Date.now() + Math.floor(Math.random() * 1000);
-    
     const promise = new Promise<unknown>((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
       setTimeout(() => {
@@ -167,167 +148,123 @@ class MCPClient {
         }
       }, 30000);
     });
-
-    console.log(`[MCP] Sending ${method} (id=${id})`);
-
     await fetch(this.sessionUrl!, {
       method: "POST",
       headers: { ...this.headers, "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
     });
-
     return promise;
   }
 
   async initialize(): Promise<void> {
-    console.log('[MCP] Initializing...');
-    
     await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "cfo-agent-api", version: "1.0" },
+      clientInfo: { name: "cfo-agent-api", version: "3.0" },
     });
-
     await fetch(this.sessionUrl!, {
       method: "POST",
       headers: { ...this.headers, "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
     });
-
-    console.log('[MCP] Initialized');
   }
 
   async listTools(): Promise<{ name: string; description: string; inputSchema: unknown }[]> {
     const result = await this.request("tools/list") as { tools: { name: string; description: string; inputSchema: unknown }[] };
-    console.log(`[MCP] Got ${result.tools?.length || 0} tools`);
     return result.tools || [];
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    console.log(`[MCP] Calling tool: ${name}`, args);
-    
-    const result = await this.request("tools/call", { name, arguments: args }) as { 
-      content: Array<{ type: string; text?: string }> 
+    const result = await this.request("tools/call", { name, arguments: args }) as {
+      content: Array<{ type: string; text?: string }>;
     };
-    
-    const textContent = result.content?.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(result);
-    console.log(`[MCP] Tool ${name} returned ${textContent.length} chars`);
-    
-    return textContent;
+    return result.content?.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(result);
   }
 
   close(): void {
     this.sseReader?.cancel();
-    console.log('[MCP] Closed');
   }
 }
 
-// Call Anthropic API (matching realtime-cfo-agent implementation)
+// Call Anthropic API with prompt caching support
 async function callAnthropic(
   config: LLMConfig,
-  system: string,
+  system: string | Array<{ type: string; text: string; cache_control?: { type: string } }>,
   messages: unknown[],
-  tools?: AnthropicTool[]
-): Promise<{ content: string; toolCalls?: { name: string; arguments: Record<string, unknown> }[] }> {
+  tools?: AnthropicTool[],
+  maxTokens?: number
+): Promise<{
+  stop_reason: string;
+  content: { type: string; id?: string; name?: string; input?: Record<string, unknown>; text?: string }[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+}> {
   const endpoint = config.provider === "azure-anthropic"
     ? `${config.endpoint || "https://cursor-api-west-us-resource.openai.azure.com/anthropic"}/v1/messages`
     : "https://api.anthropic.com/v1/messages";
 
-  console.log(`[Anthropic] Calling: ${config.model} via ${config.provider}`);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": config.api_key || "",
+    "anthropic-version": "2023-06-01",
+  };
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": config.api_key || "",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: config.model,
-      max_tokens: config.max_tokens || 4096,
-      system,
-      messages,
-      tools: tools && tools.length > 0 ? tools : undefined,
-    }),
-  });
+  if (Array.isArray(system)) {
+    headers["anthropic-beta"] = "prompt-caching-2024-07-31";
+  }
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    max_tokens: maxTokens || config.max_tokens || 4096,
+    system,
+    messages,
+  };
+  if (tools && tools.length > 0) body.tools = tools;
+
+  const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
 
   if (!res.ok) {
     const err = await res.text();
-    console.error(`[Anthropic] Error: ${res.status} - ${err}`);
     throw new Error(`Anthropic API error: ${res.status} - ${err.slice(0, 200)}`);
   }
 
-  const result = await res.json();
-  
-  // Extract text content and tool uses from Anthropic response
-  let textContent = '';
-  const toolCalls: { name: string; arguments: Record<string, unknown> }[] = [];
-  
-  for (const block of result.content || []) {
-    if (block.type === 'text') {
-      textContent += block.text;
-    } else if (block.type === 'tool_use') {
-      toolCalls.push({
-        name: block.name,
-        arguments: block.input || {}
-      });
-    }
-  }
-
-  return { 
-    content: textContent, 
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined 
-  };
+  return res.json();
 }
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Only allow POST
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-      status: 405,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
-  // Validate Authorization header
+  // Validate Authorization
   const authHeader = req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return new Response(JSON.stringify({ error: 'Unauthorized', code: 'MISSING_AUTH' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
   const token = authHeader.replace('Bearer ', '').trim();
-  console.log(`[Auth] Token received, length: ${token.length}, prefix: ${token.substring(0, 20)}...`);
-
-  // Initialize Supabase client
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // Verify user token
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) {
-    console.error('[Auth] Invalid token:', authError?.message);
     return new Response(JSON.stringify({ error: 'Invalid token', code: 'INVALID_TOKEN' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
-  console.log('[Auth] User authenticated:', user.id);
-
-  // Parse request body
-  let body: { 
-    query: string; 
-    conversationId?: string; 
-    conversationHistory?: ChatMessage[]; 
+  let body: {
+    query: string;
+    conversationId?: string;
+    conversationHistory?: ChatMessage[];
     stream?: boolean;
     entityId?: string;
     orgId?: string;
@@ -336,49 +273,33 @@ serve(async (req) => {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
   const { query, conversationId, conversationHistory = [], stream = true, entityId, orgId } = body;
-  
-  // Get MCP auth from H-Authorization header (fallback to env)
   const hAuthHeader = req.headers.get('H-Authorization');
   const mcpAuthFromHeader = hAuthHeader?.startsWith('Bearer ') ? hAuthHeader.replace('Bearer ', '').trim() : null;
 
   if (!query || typeof query !== 'string') {
     return new Response(JSON.stringify({ error: 'Query is required' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
-  // Get LLM config from database (same as realtime-cfo-agent)
+  // Get LLM config
   const { data: llmConfig, error: llmError } = await supabase
-    .from("llm_configs")
-    .select("*")
-    .eq("is_default", true)
-    .single();
-  
+    .from("llm_configs").select("*").eq("is_default", true).single();
+
   if (llmError || !llmConfig?.api_key) {
-    console.error('[LLM] Config error:', llmError?.message);
-    return new Response(JSON.stringify({ error: 'LLM not configured. Please set up your LLM configuration.' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    return new Response(JSON.stringify({ error: 'LLM not configured' }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
-  console.log(`[LLM] Using config: ${llmConfig.provider}/${llmConfig.model}`);
-
-  // Get MCP credentials - prefer request params, fallback to env
   const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
   const mcpEntityId = entityId || Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
   const mcpOrgId = orgId || Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
-  const mcpBaseUrl = 'https://mcp.hellobooks.ai';
-  
-  console.log(`[MCP] Using credentials from: ${mcpAuthFromHeader ? 'request header' : 'env'}, entityId from: ${entityId ? 'body' : 'env'}, orgId from: ${orgId ? 'body' : 'env'}`);
-
   const startTime = Date.now();
 
   // Setup SSE stream
@@ -386,30 +307,18 @@ serve(async (req) => {
   let streamController: ReadableStreamDefaultController<Uint8Array>;
 
   const responseStream = new ReadableStream({
-    start(controller) {
-      streamController = controller;
-    },
-    cancel() {
-      console.log('[SSE] Client disconnected');
-    }
+    start(controller) { streamController = controller; },
+    cancel() { console.log('[SSE] Client disconnected'); }
   });
 
   const sendEvent = (type: string, data: unknown) => {
     const event: SSEEvent = { type, data, timestamp: new Date().toISOString() };
     const message = `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
-    try {
-      streamController.enqueue(encoder.encode(message));
-    } catch (e) {
-      console.error('[SSE] Failed to send event:', e);
-    }
+    try { streamController.enqueue(encoder.encode(message)); } catch { /* ignore */ }
   };
 
   const closeStream = () => {
-    try {
-      streamController.close();
-    } catch (e) {
-      console.error('[SSE] Failed to close stream:', e);
-    }
+    try { streamController.close(); } catch { /* ignore */ }
   };
 
   // Process in background
@@ -417,328 +326,296 @@ serve(async (req) => {
     let mcpClient: MCPClient | null = null;
 
     try {
-      // Send connected event
-      sendEvent('connected', {
-        sessionId: conversationId || crypto.randomUUID(),
-        userId: user.id,
-        message: 'Connected to CFO Agent API'
-      });
-
-      // Fetch active intents from database
+      sendEvent('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id });
       sendEvent('understanding_started', { message: 'Analyzing your query...' });
 
+      // Fetch intents
       const { data: intents, error: intentsError } = await supabase
-        .from('intents')
-        .select('*')
-        .eq('is_active', true);
+        .from('intents').select('*').eq('is_active', true);
+      if (intentsError) throw new Error(`Failed to fetch intents: ${intentsError.message}`);
 
-      if (intentsError) {
-        throw new Error(`Failed to fetch intents: ${intentsError.message}`);
-      }
-
-      console.log(`[Intents] Loaded ${intents?.length || 0} active intents`);
-
-      // Connect to MCP if configured
+      // Connect to MCP
       let mcpTools: { name: string; description: string; inputSchema: unknown }[] = [];
       if (mcpAuthToken && mcpEntityId && mcpOrgId) {
         try {
-          console.log('[MCP] Credentials found, connecting...');
-          mcpClient = new MCPClient(mcpBaseUrl, {
+          mcpClient = new MCPClient('https://mcp.hellobooks.ai', {
             'Authorization': `Bearer ${mcpAuthToken}`,
             'X-Entity-Id': mcpEntityId,
             'X-Org-Id': mcpOrgId,
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
           });
-
-          // Retry because MCP can occasionally return 503
           const maxAttempts = 3;
           for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
               await mcpClient.connect();
               await mcpClient.initialize();
               mcpTools = await mcpClient.listTools();
-              console.log(`[MCP] Loaded ${mcpTools.length} tools`);
-              sendEvent('mcp_connected', { toolCount: mcpTools.length });
               break;
             } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
-              console.error(`[MCP] Attempt ${attempt}/${maxAttempts} failed:`, msg);
               if (attempt === maxAttempts) throw e;
               await new Promise((r) => setTimeout(r, 300 * attempt));
             }
           }
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error('[MCP] Connection failed:', e);
           try { mcpClient?.close(); } catch { /* ignore */ }
           mcpClient = null;
           mcpTools = [];
-          sendEvent('error', { message: `MCP connection failed: ${msg}`, recoverable: true });
+          sendEvent('error', { message: `MCP connection failed: ${e instanceof Error ? e.message : String(e)}`, recoverable: true });
         }
-      } else {
-        console.log('[MCP] Credentials not configured - missing:', {
-          hasAuthToken: !!mcpAuthToken,
-          hasEntityId: !!mcpEntityId,
-          hasOrgId: !!mcpOrgId
+      }
+
+      const mcpToolNames = new Set(mcpTools.map(t => t.name));
+
+      // ============================
+      // LAYER 1: Intent matching against DB
+      // ============================
+      sendEvent('route_started', { query, intentCount: intents?.length || 0, mcpToolCount: mcpTools.length });
+
+      let bestIntent: { id: string; name: string; description: string; confidence: number; resolution_flow?: Intent['resolution_flow'] } | null = null;
+
+      for (const intent of (intents as Intent[]) || []) {
+        const queryLower = query.toLowerCase();
+        const trainingPhrases = intent.training_phrases || [];
+
+        for (const phrase of trainingPhrases) {
+          const phraseLower = (typeof phrase === 'string' ? phrase : '').toLowerCase();
+          if (!phraseLower) continue;
+
+          if (queryLower === phraseLower) {
+            bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: 0.95, resolution_flow: intent.resolution_flow };
+            break;
+          }
+          if (queryLower.includes(phraseLower) || phraseLower.includes(queryLower)) {
+            const similarity = Math.min(queryLower.length, phraseLower.length) / Math.max(queryLower.length, phraseLower.length);
+            const candidateConfidence = 0.7 + similarity * 0.25;
+            if (!bestIntent || candidateConfidence > bestIntent.confidence) {
+              bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: candidateConfidence, resolution_flow: intent.resolution_flow };
+            }
+          }
+        }
+
+        if (bestIntent?.confidence === 0.95) break;
+      }
+
+      const CONFIDENCE_THRESHOLD = 0.85;
+      const useFastPath = bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD;
+
+      if (useFastPath && bestIntent) {
+        // ========== FAST PATH ==========
+        sendEvent('route_classified', { path: 'fast', intent: { name: bestIntent.name, confidence: bestIntent.confidence } });
+        sendEvent('intent_detected', { intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence, description: bestIntent.description }, reasoning: `Matched with ${(bestIntent.confidence * 100).toFixed(0)}% confidence` });
+
+        const resolutionFlow = bestIntent.resolution_flow || {};
+        const pipeline = resolutionFlow.dataPipeline || [];
+        const enrichments = resolutionFlow.enrichments || [];
+        const responseConfig = resolutionFlow.responseConfig;
+
+        if (pipeline.length > 0) sendEvent('pipeline_planned', { steps: pipeline.map(s => ({ tool: s.mcpTool || s.tool, description: s.description })) });
+        if (enrichments.length > 0) sendEvent('enrichments_planned', { enrichments });
+
+        // Execute pipeline
+        const toolResults: { tool: string; success: boolean; data?: string; error?: string }[] = [];
+        if (mcpClient && pipeline.length > 0) {
+          sendEvent('pipeline_executing', { stepCount: pipeline.length });
+          for (const step of pipeline) {
+            if (step.nodeType && step.nodeType !== 'api_call') continue;
+            const toolName = step.mcpTool || step.tool;
+            if (!toolName) continue;
+            sendEvent('executing_tool', { tool: toolName });
+            try {
+              const mcpTool = mcpTools.find(t => t.name === toolName || t.name.toLowerCase().includes(toolName.toLowerCase()));
+              if (mcpTool) {
+                const result = await mcpClient.callTool(mcpTool.name, {});
+                const truncated = truncateResult(result);
+                let recordCount = 1;
+                try { const p = JSON.parse(result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
+                toolResults.push({ tool: toolName, success: true, data: truncated });
+                sendEvent('tool_result', { tool: toolName, success: true, recordCount });
+              } else {
+                toolResults.push({ tool: toolName, success: false, error: 'Tool not found' });
+                sendEvent('tool_result', { tool: toolName, success: false, error: 'Tool not available' });
+              }
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : 'Unknown error';
+              toolResults.push({ tool: toolName, success: false, error: msg });
+              sendEvent('tool_result', { tool: toolName, success: false, error: msg });
+            }
+          }
+        }
+
+        // Format with cheapest LLM
+        sendEvent('response_generating', { path: 'fast' });
+
+        const dataContext = toolResults.filter(r => r.success).map(r => `[${r.tool}]: ${r.data}`).join('\n\n');
+        const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
+          { type: "text", text: SYSTEM_PROMPTS.fast_path, cache_control: { type: "ephemeral" } },
+        ];
+
+        const response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, [
+          ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
+          { role: 'user', content: `Query: ${query}\n\nData:\n${dataContext}\n\n${responseConfig?.template ? `Format: ${responseConfig.template}` : ''}` }
+        ], [], 2048);
+
+        const responseText = response.content.find(b => b.type === 'text')?.text || '';
+
+        // Stream response
+        const chunkSize = 50;
+        for (let i = 0; i < responseText.length; i += chunkSize) {
+          sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
+          await new Promise(r => setTimeout(r, 20));
+        }
+
+        sendEvent('complete', {
+          success: true, query, path: 'fast',
+          matchedIntent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
+          extractedEntities: {}, reasoning: `Fast path: ${(bestIntent.confidence * 100).toFixed(0)}% confidence`,
+          pipelineSteps: pipeline, enrichments,
+          toolResults: toolResults.map(r => ({ tool: r.tool, success: r.success, error: r.error })),
+          response: responseText,
+          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
         });
-      }
 
-      // Build intent matching prompt
-      sendEvent('intent_detecting', { message: 'Matching against available intents...' });
+      } else {
+        // ========== LLM PATH ==========
+        const classification = classifyQuery(query);
+        const effectiveCategory = classification.category;
 
-      const intentList = (intents as Intent[]).map(i => ({
-        id: i.id,
-        name: i.name,
-        description: i.description,
-        trainingPhrases: i.training_phrases?.slice(0, 5) || [],
-        entities: i.entities?.map((e: Record<string, unknown>) => e.name) || []
-      }));
+        sendEvent('route_classified', {
+          path: 'llm', category: effectiveCategory, confidence: classification.confidence,
+          subCategory: classification.subCategory, matchedKeywords: classification.matchedKeywords,
+          intentAttempted: bestIntent ? { name: bestIntent.name, confidence: bestIntent.confidence } : null,
+        });
 
-      // Anthropic tool format
-      const matchIntentTool: AnthropicTool = {
-        name: 'match_intent',
-        description: 'Match the user query to the best matching intent',
-        input_schema: {
-          type: 'object',
-          properties: {
-            intentId: { type: 'string', description: 'The ID of the matched intent' },
-            intentName: { type: 'string', description: 'Name of the matched intent' },
-            confidence: { type: 'number', description: 'Confidence score 0-1' },
-            reasoning: { type: 'string', description: 'Why this intent was matched' },
-            extractedEntities: {
-              type: 'object',
-              description: 'Entities extracted from the query',
-              additionalProperties: true
-            }
-          },
-          required: ['intentId', 'intentName', 'confidence', 'reasoning']
+        if (bestIntent) {
+          sendEvent('intent_detected', {
+            intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
+            reasoning: `Low confidence (${(bestIntent.confidence * 100).toFixed(0)}%) — using LLM path`,
+            lowConfidence: true,
+          });
         }
-      };
 
-      const intentMatchPrompt = `You are a CFO Agent that helps analyze financial queries.
-Your task is to match the user's query to the most appropriate intent.
+        if (effectiveCategory === 'general_chat') {
+          sendEvent('tools_filtered', { category: 'general_chat', toolCount: 0 });
+          sendEvent('response_generating', { path: 'llm', category: 'general_chat' });
 
-Available intents:
-${JSON.stringify(intentList, null, 2)}
+          const response = await callAnthropic(llmConfig as LLMConfig,
+            [{ type: "text", text: SYSTEM_PROMPTS.general_chat, cache_control: { type: "ephemeral" } }],
+            [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: query }],
+            [], 512
+          );
 
-Analyze the query and use the match_intent tool to return:
-1. The best matching intent (by ID and name)
-2. Your confidence level (0-1)
-3. Your reasoning for the match
-4. Any entities you can extract from the query (like numbers, dates, names)
-
-If no intent matches well (confidence < 0.3), still return the closest match but with low confidence.`;
-
-      const matchResult = await callAnthropic(
-        llmConfig as LLMConfig,
-        intentMatchPrompt,
-        [{ role: 'user', content: query }],
-        [matchIntentTool]
-      );
-
-      let matchedIntent: Intent | null = null;
-      let extractedEntities: Record<string, unknown> = {};
-      let matchReasoning = '';
-      let confidence = 0;
-
-      if (matchResult.toolCalls?.[0]?.name === 'match_intent') {
-        const args = matchResult.toolCalls[0].arguments;
-        const intentId = args.intentId as string;
-        matchedIntent = (intents as Intent[]).find(i => i.id === intentId) || null;
-        extractedEntities = (args.extractedEntities as Record<string, unknown>) || {};
-        matchReasoning = args.reasoning as string;
-        confidence = args.confidence as number;
-      }
-
-      // Send intent detected event
-      sendEvent('intent_detected', {
-        intent: matchedIntent ? {
-          id: matchedIntent.id,
-          name: matchedIntent.name,
-          description: matchedIntent.description,
-          confidence
-        } : null,
-        reasoning: matchReasoning
-      });
-
-      // Send entities extracted event
-      sendEvent('entities_extracted', { entities: extractedEntities });
-
-      // Get resolution flow from matched intent
-      const resolutionFlow = matchedIntent?.resolution_flow || {};
-      const dataPipeline = resolutionFlow.dataPipeline || [];
-      const enrichments = resolutionFlow.enrichments || [];
-      const responseConfig = resolutionFlow.responseConfig;
-
-      // Send pipeline planned event
-      sendEvent('pipeline_planned', {
-        steps: dataPipeline.map((step: any) => ({
-          tool: step.mcpTool || step.tool || null,
-          description: step.description,
-          purpose: step.purpose || 'Fetch data'
-        }))
-      });
-
-      // Send enrichments planned event
-      sendEvent('enrichments_planned', {
-        enrichments: enrichments.map(e => ({
-          type: e.type,
-          description: e.description
-        }))
-      });
-
-      // Execute MCP tools if available
-      const toolResults: { tool: string; success: boolean; data?: unknown; error?: string }[] = [];
-
-      if (mcpClient && mcpTools.length > 0 && dataPipeline.length > 0) {
-        for (const step of dataPipeline as any[]) {
-          // Only execute api_call nodes; computation nodes are handled by the LLM response stage.
-          if (step.nodeType && step.nodeType !== 'api_call') continue;
-
-          const toolName: string | undefined = step.mcpTool || step.tool;
-          if (!toolName) {
-            continue;
+          const responseText = response.content.find(b => b.type === 'text')?.text || '';
+          const chunkSize = 50;
+          for (let i = 0; i < responseText.length; i += chunkSize) {
+            sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
+            await new Promise(r => setTimeout(r, 20));
           }
 
-          sendEvent('executing_tool', { tool: toolName, status: 'running' });
+          sendEvent('complete', {
+            success: true, query, path: 'llm', category: 'general_chat',
+            matchedIntent: null, extractedEntities: {}, reasoning: 'General conversation',
+            pipelineSteps: [], enrichments: [], response: responseText,
+            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          });
 
-          try {
-            // Find matching MCP tool
-            const mcpTool = mcpTools.find(t =>
-              t.name === toolName ||
-              t.name.toLowerCase().includes(toolName.toLowerCase())
-            );
+        } else {
+          // Bookkeeper or CFO path with filtered tools
+          const toolGroups: ToolGroup[] = effectiveCategory === 'bookkeeper' ? BOOKKEEPER_TOOLS : CFO_TOOLS;
+          const allGroups = [...BOOKKEEPER_TOOLS, ...CFO_TOOLS];
+          const filteredTools = buildAnthropicTools(toolGroups, mcpToolNames, true);
 
-            if (mcpTool) {
-              const result = await mcpClient.callTool(mcpTool.name, extractedEntities);
-              const truncatedResult = truncateResult(result);
+          sendEvent('tools_filtered', {
+            category: effectiveCategory, toolCount: filteredTools.length,
+            totalMcpTools: mcpTools.length, tools: filteredTools.map(t => t.name),
+          });
 
-              // Try to count records if result is JSON array
-              let recordCount = 1;
-              try {
-                const parsed = JSON.parse(result);
-                if (Array.isArray(parsed)) recordCount = parsed.length;
-              } catch { /* ignore parse errors */ }
+          const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
+          const systemPrompt: Array<{ type: string; text: string; cache_control?: { type: string } }> = [
+            { type: "text", text: categoryPrompt, cache_control: { type: "ephemeral" } },
+            { type: "text", text: `Available tool groups: ${filteredTools.map(t => t.name).join(', ')}` },
+          ];
 
-              toolResults.push({
-                tool: toolName,
-                success: true,
-                data: truncatedResult
-              });
+          const messages: unknown[] = [
+            ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: query }
+          ];
 
-              sendEvent('tool_result', {
-                tool: toolName,
-                success: true,
-                recordCount
-              });
-            } else {
-              toolResults.push({
-                tool: toolName,
-                success: false,
-                error: 'Tool not found in MCP'
-              });
+          let response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+          let iterations = 0;
+          const mcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean }[] = [];
 
-              sendEvent('tool_result', {
-                tool: toolName,
-                success: false,
-                error: 'Tool not available'
-              });
+          while (response.stop_reason === 'tool_use' && iterations < 10) {
+            iterations++;
+            const toolUses = response.content.filter(b => b.type === 'tool_use') as { id: string; name: string; input: Record<string, unknown> }[];
+            if (toolUses.length === 0) break;
+
+            const toolResults: { type: string; tool_use_id: string; content: string; is_error?: boolean }[] = [];
+
+            for (const toolUse of toolUses) {
+              const action = (toolUse.input as { action?: string })?.action;
+              const params = (toolUse.input as { parameters?: Record<string, unknown> })?.parameters || {};
+              const mcpToolName = action ? resolveMetaToolToMcp(toolUse.name, action, allGroups) : null;
+
+              if (mcpToolName && mcpClient) {
+                sendEvent('executing_tool', { tool: mcpToolName, group: toolUse.name });
+                try {
+                  const result = await mcpClient.callTool(mcpToolName, params);
+                  const truncated = truncateResult(result);
+                  mcpResults.push({ tool: mcpToolName, input: params, result: truncated, success: true });
+                  let recordCount = 1;
+                  try { const p = JSON.parse(result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
+                  sendEvent('tool_result', { tool: mcpToolName, success: true, recordCount });
+                  toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: truncated });
+                } catch (error) {
+                  mcpResults.push({ tool: mcpToolName, error: String(error), success: false });
+                  sendEvent('tool_result', { tool: mcpToolName, success: false, error: String(error) });
+                  toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: String(error) }), is_error: true });
+                }
+              } else {
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: mcpClient ? `Unknown action: ${action}` : 'MCP not connected' }), is_error: true });
+              }
             }
-          } catch (e) {
-            const errorMsg = e instanceof Error ? e.message : 'Unknown error';
-            toolResults.push({
-              tool: toolName,
-              success: false,
-              error: errorMsg
-            });
 
-            sendEvent('tool_result', {
-              tool: toolName,
-              success: false,
-              error: errorMsg
-            });
+            const autoEnrichments = detectAutoEnrichments(mcpResults);
+            if (autoEnrichments.length > 0) sendEvent('enrichments_applying', { enrichments: autoEnrichments });
+
+            messages.push({ role: 'assistant', content: response.content });
+            messages.push({ role: 'user', content: toolResults });
+            sendEvent('response_generating', { iteration: iterations });
+
+            const enrichmentContext = buildEnrichmentInstructions(autoEnrichments);
+            if (enrichmentContext && iterations === 1) {
+              systemPrompt.push({ type: "text", text: enrichmentContext });
+            }
+
+            response = await callAnthropic(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
           }
+
+          const responseText = response.content.find(b => b.type === 'text')?.text || '';
+          const chunkSize = 50;
+          for (let i = 0; i < responseText.length; i += chunkSize) {
+            sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
+            await new Promise(r => setTimeout(r, 20));
+          }
+
+          const finalEnrichments = detectAutoEnrichments(mcpResults);
+          sendEvent('complete', {
+            success: true, query, path: 'llm', category: effectiveCategory,
+            matchedIntent: bestIntent ? { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence } : null,
+            extractedEntities: {},
+            reasoning: bestIntent ? `Low confidence (${(bestIntent.confidence * 100).toFixed(0)}%), used ${effectiveCategory} tools` : `Classified as ${effectiveCategory}`,
+            pipelineSteps: mcpResults.map(r => ({ tool: r.tool, description: r.success ? 'Completed' : `Error: ${r.error}` })),
+            enrichments: finalEnrichments, toolResults: mcpResults.map(r => ({ tool: r.tool, success: r.success, error: r.error })),
+            response: responseText,
+            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          });
         }
       }
-
-      // Generate final response
-      sendEvent('response_generating', { message: 'Generating response...' });
-
-      const responsePrompt = `You are a CFO Agent providing financial insights.
-
-User Query: "${query}"
-
-Matched Intent: ${matchedIntent?.name || 'None'} (${(confidence * 100).toFixed(0)}% confidence)
-
-Data Retrieved:
-${toolResults.map(r => `- ${r.tool}: ${r.success ? r.data : `Error: ${r.error}`}`).join('\n')}
-
-CRITICAL INSTRUCTIONS:
-1. When the user asks for "all customers", "list customers", or similar - you MUST display the ACTUAL customer records from the retrieved data, not just summary statistics.
-2. Format each customer record clearly with all available fields (name, ID, contact info, balance, status, etc.)
-3. If the data contains customer records, list them in a clear table or bullet format.
-4. Include summary statistics AFTER listing the actual data, not as a replacement.
-5. Do NOT generate fake/placeholder data - only use the actual data retrieved.
-6. If no data was retrieved or there was an error, explain what happened.
-
-Response Format Guidelines:
-- For list queries: Show the actual records first, then optionally add summary stats
-- For aggregate queries: Show calculations and totals
-- For specific lookups: Show the matching record(s) in detail
-- Use markdown formatting for clarity (tables, bullets, headers)
-
-${responseConfig?.template ? `Response Template Hint: ${responseConfig.template}` : ''}`;
-
-      const finalMessages: ChatMessage[] = [
-        ...conversationHistory,
-        { role: 'user', content: query }
-      ];
-
-      const response = await callAnthropic(
-        llmConfig as LLMConfig,
-        responsePrompt,
-        [...conversationHistory.map((m: ChatMessage) => ({ role: m.role, content: m.content })), { role: 'user', content: query }]
-      );
-
-      // Stream response in chunks
-      const responseText = response.content;
-      const chunkSize = 50;
-      for (let i = 0; i < responseText.length; i += chunkSize) {
-        const chunk = responseText.slice(i, i + chunkSize);
-        sendEvent('response_chunk', { text: chunk });
-        await new Promise(r => setTimeout(r, 20)); // Small delay for streaming effect
-      }
-
-      // Send complete event
-      const executionTime = ((Date.now() - startTime) / 1000).toFixed(2);
-      sendEvent('complete', {
-        success: true,
-        query,
-        matchedIntent: matchedIntent ? {
-          id: matchedIntent.id,
-          name: matchedIntent.name,
-          confidence
-        } : null,
-        extractedEntities,
-        reasoning: matchReasoning,
-        pipelineSteps: dataPipeline,
-        enrichments,
-        toolResults: toolResults.map(r => ({
-          tool: r.tool,
-          success: r.success,
-          error: r.error
-        })),
-        response: responseText,
-        executionTime: `${executionTime}s`
-      });
 
     } catch (error) {
       console.error('[Error]', error);
-      sendEvent('error', {
-        message: error instanceof Error ? error.message : 'An unexpected error occurred',
-        code: 'PROCESSING_ERROR'
-      });
+      sendEvent('error', { message: error instanceof Error ? error.message : 'An unexpected error occurred', code: 'PROCESSING_ERROR' });
     } finally {
       mcpClient?.close();
       closeStream();
@@ -746,11 +623,6 @@ ${responseConfig?.template ? `Response Template Hint: ${responseConfig.template}
   })();
 
   return new Response(responseStream, {
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
-    }
+    headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
   });
 });

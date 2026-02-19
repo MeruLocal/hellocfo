@@ -23,7 +23,9 @@ import {
   MatchedIntent,
   PipelineStep,
   EnrichmentPlan,
-  ToolResult
+  ToolResult,
+  RouteClassification,
+  ToolsFilteredInfo
 } from './types';
 import type { Intent, BusinessContext, CountryConfig, LLMConfig } from '@/hooks/useCFOData';
 import type { MCPTool } from '@/hooks/useMCPTools';
@@ -72,8 +74,28 @@ export function RealtimeCFOAgent({
         break;
 
       case 'understanding_started':
-        setCurrentPhase('detecting');
+        setCurrentPhase('routing');
         setCurrentUnderstanding({});
+        break;
+
+      case 'route_started':
+        setCurrentPhase('routing');
+        break;
+
+      case 'route_classified':
+        setCurrentPhase('detecting');
+        setCurrentUnderstanding(prev => ({
+          ...prev,
+          route: data as unknown as RouteClassification,
+        }));
+        break;
+
+      case 'tools_filtered':
+        setCurrentPhase('tools');
+        setCurrentUnderstanding(prev => ({
+          ...prev,
+          toolsFiltered: data as unknown as ToolsFilteredInfo,
+        }));
         break;
 
       case 'intent_detecting':
@@ -105,12 +127,24 @@ export function RealtimeCFOAgent({
         }));
         break;
 
+      case 'pipeline_executing':
+        setCurrentPhase('executing');
+        break;
+
       case 'enrichments_planned':
         setCurrentPhase('enrichments');
         setCurrentUnderstanding(prev => ({
           ...prev,
           enrichments: data.enrichments as EnrichmentPlan[],
           responseFormat: data.responseFormat as string
+        }));
+        break;
+
+      case 'enrichments_applying':
+        setCurrentPhase('enrichments');
+        setCurrentUnderstanding(prev => ({
+          ...prev,
+          enrichments: data.enrichments as EnrichmentPlan[],
         }));
         break;
 
@@ -129,12 +163,18 @@ export function RealtimeCFOAgent({
         }));
         break;
 
+      case 'mode_switch':
+        setCurrentUnderstanding(prev => ({
+          ...prev,
+          route: prev.route ? { ...prev.route, crossOver: true } : undefined,
+        }));
+        break;
+
       case 'response_generating':
         setCurrentPhase('response');
         break;
 
       case 'response_chunk':
-        // Update the streaming message with content
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage && lastMessage.role === 'agent' && lastMessage.isStreaming) {
@@ -157,7 +197,6 @@ export function RealtimeCFOAgent({
         setCurrentUnderstanding(prev => ({ ...prev, isComplete: true }));
         setCurrentPhase('');
         
-        // Finalize the agent message
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage && lastMessage.role === 'agent') {
@@ -179,7 +218,8 @@ export function RealtimeCFOAgent({
                     success: r.success,
                     error: r.error
                   })),
-                  isComplete: true
+                  isComplete: true,
+                  route: { path: completeData.path || 'llm', category: completeData.category },
                 },
                 usage: completeData.usage,
                 executionTime,

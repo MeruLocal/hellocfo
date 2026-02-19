@@ -8,7 +8,10 @@ import {
   Check, 
   AlertCircle,
   Zap,
-  FileText
+  FileText,
+  Route,
+  Filter,
+  ArrowRightLeft
 } from 'lucide-react';
 import { AgentUnderstanding, ToolResult } from './types';
 import { cn } from '@/lib/utils';
@@ -19,23 +22,88 @@ interface AgentThinkingPanelProps {
   currentPhase: string;
 }
 
+// Route badge component
+function RouteBadge({ understanding }: { understanding: AgentUnderstanding }) {
+  const route = understanding.route;
+  if (!route) return null;
+
+  const isFast = route.path === 'fast';
+  const category = route.category;
+
+  return (
+    <div className={cn(
+      "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium",
+      isFast 
+        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" 
+        : category === 'bookkeeper'
+        ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+        : category === 'general_chat'
+        ? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+        : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+    )}>
+      {isFast ? <Zap size={12} /> : <Brain size={12} />}
+      <span>
+        {isFast 
+          ? `Fast Path` 
+          : category === 'bookkeeper' 
+          ? 'Bookkeeper Mode' 
+          : category === 'general_chat' 
+          ? 'Chat Mode'
+          : 'CFO Mode'}
+      </span>
+      {route.intent && (
+        <span className="opacity-70">• {route.intent.name} ({Math.round(route.intent.confidence * 100)}%)</span>
+      )}
+      {route.intentAttempted && !isFast && (
+        <span className="opacity-70">• ~{route.intentAttempted.name} ({Math.round(route.intentAttempted.confidence * 100)}%)</span>
+      )}
+    </div>
+  );
+}
+
+// Tools filtered badge
+function ToolsBadge({ understanding }: { understanding: AgentUnderstanding }) {
+  const info = understanding.toolsFiltered;
+  if (!info) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Filter size={10} />
+      <span>{info.toolCount} tools</span>
+      {info.totalMcpTools && (
+        <span className="opacity-60">/ {info.totalMcpTools} available</span>
+      )}
+    </div>
+  );
+}
+
 export function AgentThinkingPanel({ 
   understanding, 
   isProcessing, 
   currentPhase 
 }: AgentThinkingPanelProps) {
-  const phases = [
-    { id: 'detecting', label: 'Understanding Query', icon: Brain },
-    { id: 'intent', label: 'Intent Detection', icon: Check },
-    { id: 'entities', label: 'Entity Extraction', icon: Variable },
-    { id: 'pipeline', label: 'Data Pipeline', icon: GitBranch },
-    { id: 'enrichments', label: 'Enrichments', icon: Sparkles },
-    { id: 'executing', label: 'Fetching Data', icon: Zap },
-    { id: 'response', label: 'Generating Response', icon: FileText },
-  ];
+  const isFastPath = understanding.route?.path === 'fast';
+  const category = understanding.route?.category;
+
+  const phases = isFastPath
+    ? [
+        { id: 'routing', label: 'Routing', icon: Route },
+        { id: 'intent', label: 'Intent Matched', icon: Check },
+        { id: 'pipeline', label: 'Data Pipeline', icon: GitBranch },
+        { id: 'enrichments', label: 'Enrichments', icon: Sparkles },
+        { id: 'response', label: 'Formatting', icon: FileText },
+      ]
+    : [
+        { id: 'routing', label: 'Routing', icon: Route },
+        { id: 'detecting', label: 'Classification', icon: Brain },
+        { id: 'tools', label: 'Tool Selection', icon: Filter },
+        { id: 'executing', label: 'Fetching Data', icon: Zap },
+        { id: 'enrichments', label: 'Enrichments', icon: Sparkles },
+        { id: 'response', label: 'Generating', icon: FileText },
+      ];
 
   const getPhaseStatus = (phaseId: string): 'pending' | 'active' | 'complete' => {
-    const phaseOrder = ['detecting', 'intent', 'entities', 'pipeline', 'enrichments', 'executing', 'response'];
+    const phaseOrder = phases.map(p => p.id);
     const currentIndex = phaseOrder.indexOf(currentPhase);
     const phaseIndex = phaseOrder.indexOf(phaseId);
     
@@ -45,19 +113,35 @@ export function AgentThinkingPanel({
     return 'pending';
   };
 
+  // Color scheme based on route
+  const accentColor = isFastPath
+    ? 'amber'
+    : category === 'bookkeeper'
+    ? 'blue'
+    : category === 'general_chat'
+    ? 'gray'
+    : 'purple';
+
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
-      {/* Phase Progress */}
+      {/* Header with route badge */}
       <div className="p-4 border-b border-border bg-muted/30">
-        <div className="flex items-center gap-2 mb-3">
-          {isProcessing ? (
-            <Loader2 size={16} className="animate-spin text-primary" />
-          ) : (
-            <Brain size={16} className="text-primary" />
-          )}
-          <span className="font-medium text-sm">Agent Understanding</span>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            {isProcessing ? (
+              <Loader2 size={16} className="animate-spin text-primary" />
+            ) : (
+              <Brain size={16} className="text-primary" />
+            )}
+            <span className="font-medium text-sm">Agent Understanding</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <ToolsBadge understanding={understanding} />
+            <RouteBadge understanding={understanding} />
+          </div>
         </div>
         
+        {/* Phase Progress */}
         <div className="flex gap-1">
           {phases.map((phase) => {
             const status = getPhaseStatus(phase.id);
@@ -91,6 +175,14 @@ export function AgentThinkingPanel({
 
       {/* Understanding Details */}
       <div className="p-4 space-y-4">
+        {/* Cross-over indicator */}
+        {understanding.route?.crossOver && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-orange-50 dark:bg-orange-900/20 rounded-lg text-sm text-orange-700 dark:text-orange-400">
+            <ArrowRightLeft size={14} />
+            <span>Mode switch: CFO → Bookkeeper (action detected)</span>
+          </div>
+        )}
+
         {/* Intent */}
         {understanding.intent && (
           <div className="space-y-2">
