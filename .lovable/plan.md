@@ -2,7 +2,7 @@
 
 # Hybrid 3-Layer Architecture for CFO Agent
 
-## Status: ✅ Phase 1 + Phase 2 IMPLEMENTED
+## Status: ✅ Phase 1 + Phase 2 + Phase 3 IMPLEMENTED
 
 ## Summary
 
@@ -37,7 +37,25 @@ Transform the current single-path CFO agent into a hybrid system with two paths:
 - `tool_registry`, `response_cache`, `unified_conversations`, `feedback_log` tables
 - General chat bypass (0 tools)
 
-## Next: Phase 3 — RL Feedback Loop
-- Log all interactions to `feedback_log` with tool selection strategy
-- Adaptive confidence thresholds based on `intent_routing_stats`
-- LLM path pattern learning from `llm_path_patterns`
+## Phase 3: RL Feedback Loop ✅
+
+### Server-side Feedback Logging
+- Every interaction logged to `feedback_log` with: route_path, intent_matched, intent_confidence, model_used, tools_loaded, tools_used, tool_selection_strategy, response_time_ms, token_cost
+- Non-blocking — errors caught silently, never block response
+- Scoped by entity_id and user_id
+
+### User Feedback UI
+- Thumbs up/down buttons on every agent message (MessageBubble.tsx)
+- Calls `submit-feedback` edge function to write explicit_feedback + feedback_score
+- Disabled after submission, visual state change on click
+
+### Files Created
+- `supabase/functions/realtime-cfo-agent/feedback-logger.ts`
+- `supabase/functions/cfo-agent-api/feedback-logger.ts`
+- `supabase/functions/submit-feedback/index.ts`
+
+### Files Modified
+- `supabase/functions/realtime-cfo-agent/index.ts` — tracking vars + logFeedback at cleanup
+- `supabase/functions/cfo-agent-api/index.ts` — tracking vars + logFeedback in finally
+- `src/components/cfo-agent/MessageBubble.tsx` — thumbs up/down feedback UI
+- `supabase/config.toml` — added submit-feedback function config

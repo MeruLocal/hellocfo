@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { User, Bot, ChevronDown, ChevronUp, Clock, Coins } from 'lucide-react';
+import { User, Bot, ChevronDown, ChevronUp, Clock, Coins, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { ChatMessage } from './types';
 import { AgentThinkingPanel } from './AgentThinkingPanel';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -12,8 +13,25 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const [showUnderstanding, setShowUnderstanding] = useState(
     message.role === 'agent' && message.understanding?.intent !== undefined
   );
+  const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   
   const isUser = message.role === 'user';
+
+  const submitFeedback = async (type: 'positive' | 'negative') => {
+    if (feedbackSubmitting || feedback) return;
+    setFeedbackSubmitting(true);
+    try {
+      await supabase.functions.invoke('submit-feedback', {
+        body: { messageId: message.id, feedback: type },
+      });
+      setFeedback(type);
+    } catch {
+      // Silent fail
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  };
 
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
@@ -80,6 +98,38 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <Coins size={10} />
               {message.usage.total_tokens}
             </span>
+          )}
+
+          {/* Feedback buttons */}
+          {!isUser && message.understanding?.isComplete && !message.isStreaming && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => submitFeedback('positive')}
+                disabled={!!feedback || feedbackSubmitting}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  feedback === 'positive'
+                    ? "text-green-600 dark:text-green-400"
+                    : "hover:text-foreground"
+                )}
+                title="Helpful"
+              >
+                <ThumbsUp size={12} />
+              </button>
+              <button
+                onClick={() => submitFeedback('negative')}
+                disabled={!!feedback || feedbackSubmitting}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  feedback === 'negative'
+                    ? "text-red-600 dark:text-red-400"
+                    : "hover:text-foreground"
+                )}
+                title="Not helpful"
+              >
+                <ThumbsDown size={12} />
+              </button>
+            </div>
           )}
 
           {!isUser && message.understanding && (

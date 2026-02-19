@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.generate-batch-intents]
 verify_jwt = false
+
+[functions.submit-feedback]
+verify_jwt = false
