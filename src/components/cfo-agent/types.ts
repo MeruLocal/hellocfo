@@ -3,13 +3,19 @@
 export type SSEEventType = 
   | 'connected'
   | 'understanding_started'
+  | 'route_started'
+  | 'route_classified'
+  | 'tools_filtered'
   | 'intent_detecting'
   | 'intent_detected'
   | 'entities_extracted'
   | 'pipeline_planned'
+  | 'pipeline_executing'
   | 'enrichments_planned'
+  | 'enrichments_applying'
   | 'executing_tool'
   | 'tool_result'
+  | 'mode_switch'
   | 'response_generating'
   | 'response_chunk'
   | 'complete'
@@ -47,6 +53,30 @@ export interface ToolResult {
   error?: string;
 }
 
+// Hybrid routing types
+export type RoutePath = 'fast' | 'llm';
+export type RouteCategory = 'bookkeeper' | 'cfo' | 'general_chat';
+
+export interface RouteClassification {
+  path: RoutePath;
+  category?: RouteCategory;
+  confidence?: number;
+  subCategory?: string;
+  matchedKeywords?: string[];
+  crossOver?: boolean;
+  intentAttempted?: { name: string; confidence: number } | null;
+  reason?: string;
+  intent?: { name: string; confidence: number; description?: string };
+}
+
+export interface ToolsFilteredInfo {
+  category: RouteCategory;
+  toolCount: number;
+  totalMcpTools?: number;
+  tools?: string[];
+  reason?: string;
+}
+
 export interface AgentUnderstanding {
   intent?: MatchedIntent | null;
   reasoning?: string;
@@ -56,6 +86,9 @@ export interface AgentUnderstanding {
   responseFormat?: string;
   toolResults?: ToolResult[];
   isComplete?: boolean;
+  // Hybrid routing state
+  route?: RouteClassification;
+  toolsFiltered?: ToolsFilteredInfo;
 }
 
 export interface ChatMessage {
@@ -76,6 +109,8 @@ export interface ChatMessage {
 
 export interface CompleteEventData {
   query: string;
+  path?: RoutePath;
+  category?: RouteCategory;
   matchedIntent: MatchedIntent | null;
   extractedEntities: Record<string, unknown>;
   reasoning: string;
