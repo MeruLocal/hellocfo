@@ -719,11 +719,65 @@ serve(async (req) => {
       console.error('[Error]', error);
       sendEvent('error', { message: error instanceof Error ? error.message : 'An unexpected error occurred', code: 'PROCESSING_ERROR' });
     } finally {
+      // Persist conversation to unified_conversations
+      const effectiveConversationId = conversationId || apiMessageId;
+      try {
+        const userMsg = {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: query,
+          timestamp: new Date().toISOString(),
+        };
+        const agentMsg = {
+          id: apiMessageId,
+          role: "agent",
+          content: feedbackResponse || "",
+          timestamp: new Date().toISOString(),
+          metadata: {
+            route: feedbackPath,
+            intent: feedbackIntent ? { name: feedbackIntent, confidence: feedbackIntentConfidence } : null,
+            toolsUsed: feedbackToolsUsed,
+            toolsLoaded: feedbackToolsLoaded,
+            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+            llmModel: feedbackModel,
+          },
+        };
+
+        const { data: existing } = await supabase
+          .from("unified_conversations")
+          .select("id, messages, message_count")
+          .eq("conversation_id", effectiveConversationId)
+          .single();
+
+        if (existing) {
+          const existingMessages = (existing.messages as unknown[]) || [];
+          await supabase
+            .from("unified_conversations")
+            .update({
+              messages: [...existingMessages, userMsg, agentMsg],
+              message_count: (existing.message_count || 0) + 2,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id);
+        } else {
+          await supabase.from("unified_conversations").insert({
+            conversation_id: effectiveConversationId,
+            entity_id: effectiveEntityId,
+            user_id: user.id,
+            summary: query.slice(0, 100),
+            messages: [userMsg, agentMsg],
+            message_count: 2,
+          });
+        }
+      } catch (convError) {
+        console.error('[Error] Failed to persist conversation:', convError);
+      }
+
       // Non-blocking feedback log
       const responseTimeMs = Date.now() - startTime;
       await logFeedback(supabase, {
         message_id: apiMessageId,
-        conversation_id: conversationId || apiMessageId,
+        conversation_id: effectiveConversationId,
         entity_id: effectiveEntityId,
         user_id: user.id,
         user_message: query,

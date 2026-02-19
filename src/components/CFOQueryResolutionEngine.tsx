@@ -50,13 +50,16 @@ import {
   type ModelUsage
 } from '@/hooks/useCFOData';
 import { useMCPTools, type MCPTool } from '@/hooks/useMCPTools';
+import { useToolAnalytics } from '@/hooks/useToolAnalytics';
+import { IntentUsageTab } from '@/components/cfo-agent/IntentUsageTab';
+import { MCPToolUsageBadge } from '@/components/cfo-agent/MCPToolUsageBadge';
 import {
   Plus, Edit, Trash2, X, Check, Download, Upload, Wand2, Database, Sparkles,
   Loader2, Brain, GitBranch, Layers, Box, Play, Save, Settings, Search,
   MessageSquare, FlaskConical, ChevronDown, ChevronRight, ChevronUp, Copy, Code,
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
-  ListOrdered, Variable, FileText, Users, LogOut, Terminal
+  ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
@@ -2257,6 +2260,7 @@ function IntentDetailScreen({
   const [editingIntent, setEditingIntent] = useState<Intent>(initialIntent);
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const { getIntentAnalytics, isLoading: isAnalyticsLoading } = useToolAnalytics();
 
   useEffect(() => {
     setEditingIntent(initialIntent);
@@ -2300,6 +2304,7 @@ function IntentDetailScreen({
     { id: 'pipeline', label: 'Data Pipeline', icon: <Database size={16} /> },
     { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={16} /> },
     { id: 'response', label: 'Response', icon: <Code size={16} /> },
+    { id: 'usage', label: 'Usage', icon: <BarChart3 size={16} /> },
     { id: 'test', label: 'Test', icon: <TestTube size={16} /> }
   ];
 
@@ -2488,6 +2493,14 @@ function IntentDetailScreen({
             />
           )}
           
+          {activeTab === 'usage' && (
+            <IntentUsageTab
+              intentName={editingIntent.name}
+              analytics={getIntentAnalytics(editingIntent.name)}
+              isLoading={isAnalyticsLoading}
+            />
+          )}
+
           {activeTab === 'test' && (
             <TestTab
               intent={editingIntent}
@@ -2831,6 +2844,7 @@ function MCPToolsView({
   onRefresh: () => void;
 }) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
+  const { getToolAnalytics } = useToolAnalytics();
 
   return (
     <div className="p-6">
@@ -2896,6 +2910,7 @@ function MCPToolsView({
                 >
                   <div className="font-medium">@{tool.id}</div>
                   <div className="text-xs text-gray-500 truncate">{tool.description}</div>
+                  <MCPToolUsageBadge toolName={tool.id} analytics={getToolAnalytics(tool.id)} />
                 </button>
               ))
             )}

@@ -286,7 +286,7 @@ serve(async (req) => {
       };
 
       try {
-        const { query, intents, businessContext, conversationHistory = [] } = await req.json();
+        const { query, intents, businessContext, conversationHistory = [], conversationId: incomingConversationId } = await req.json();
         if (!query) {
           sendEvent("error", { message: "Query required" });
           controller.close();
@@ -750,12 +750,68 @@ serve(async (req) => {
         // Cleanup + feedback logging
         if (mcpClient) mcpClient.close();
         const responseTimeMs = Date.now() - startTime;
+        const effectiveConversationId = incomingConversationId || reqId;
         console.log(`[${reqId}] Done in ${(responseTimeMs / 1000).toFixed(2)}s`);
+
+        // Persist conversation to unified_conversations
+        try {
+          const userMsg = {
+            id: crypto.randomUUID(),
+            role: "user",
+            content: query,
+            timestamp: new Date().toISOString(),
+          };
+          const agentMsg = {
+            id: messageId,
+            role: "agent",
+            content: feedbackResponse || "",
+            timestamp: new Date().toISOString(),
+            metadata: {
+              route: feedbackPath,
+              intent: feedbackIntent ? { name: feedbackIntent, confidence: feedbackIntentConfidence } : null,
+              toolsUsed: feedbackToolsUsed,
+              toolsLoaded: feedbackToolsLoaded,
+              executionTime: `${(responseTimeMs / 1000).toFixed(2)}s`,
+              usage: { input_tokens: feedbackTokenCost || 0 },
+              llmModel: feedbackModel,
+            },
+          };
+
+          // Try to fetch existing conversation
+          const { data: existing } = await supabase
+            .from("unified_conversations")
+            .select("id, messages, message_count")
+            .eq("conversation_id", effectiveConversationId)
+            .single();
+
+          if (existing) {
+            const existingMessages = (existing.messages as unknown[]) || [];
+            await supabase
+              .from("unified_conversations")
+              .update({
+                messages: [...existingMessages, userMsg, agentMsg],
+                message_count: (existing.message_count || 0) + 2,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", existing.id);
+          } else {
+            await supabase.from("unified_conversations").insert({
+              conversation_id: effectiveConversationId,
+              entity_id: entityId,
+              user_id: "realtime-user",
+              summary: query.slice(0, 100),
+              messages: [userMsg, agentMsg],
+              message_count: 2,
+            });
+          }
+        } catch (convError) {
+          console.error(`[${reqId}] Failed to persist conversation:`, convError);
+        }
 
         // Non-blocking feedback log
         await logFeedback(supabase, {
           message_id: messageId,
-          conversation_id: reqId,
+          conversation_id: effectiveConversationId,
           entity_id: entityId,
           user_id: "realtime-user",
           user_message: query,
