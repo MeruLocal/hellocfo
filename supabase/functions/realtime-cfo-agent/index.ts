@@ -8,6 +8,14 @@ import {
 import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
+import {
+  generateCacheKey,
+  checkCache,
+  writeCache,
+  determineTTL,
+  invalidateCacheForEntity,
+  hasWriteOperations,
+} from "./response-cache.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -291,9 +299,13 @@ serve(async (req) => {
         sendEvent("understanding_started", { query });
 
         // ============================
-        // STEP 1: Get LLM config
+        // STEP 1: Get LLM config + entity context
         // ============================
         const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+        // Entity isolation — entityId scopes ALL data access
+        const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
+
         const { data: llmConfig, error: llmError } = await supabase
           .from("llm_configs")
           .select("*")
@@ -303,10 +315,30 @@ serve(async (req) => {
         if (llmError || !llmConfig?.api_key) throw new Error("LLM not configured");
 
         // ============================
+        // STEP 1.5: CACHE CHECK — skip MCP+LLM if cached
+        // ============================
+        const { cacheKey, queryHash } = generateCacheKey(query, entityId, "realtime");
+        const cachedResponse = await checkCache(supabase, entityId, cacheKey, reqId);
+
+        if (cachedResponse) {
+          console.log(`[${reqId}] Serving from cache`);
+          sendEvent("route_classified", { path: "cached", reason: "Response served from cache" });
+          sendEvent("response_chunk", { text: cachedResponse.content });
+          sendEvent("complete", {
+            query, path: "cached", matchedIntent: null, extractedEntities: {},
+            reasoning: "Served from response cache", pipelineSteps: [], enrichments: [],
+            responseFormat: "", response: cachedResponse.content, mcpToolResults: [], dataSources: [],
+            llmModel: "cache", iterationCount: 0,
+            usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+          });
+          controller.close();
+          return;
+        }
+
+        // ============================
         // STEP 2: Connect to MCP
         // ============================
         const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-        const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
         const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
 
         let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
@@ -484,7 +516,14 @@ serve(async (req) => {
             usage: response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
           });
 
-        } else {
+          // Cache write — fast path (skip if write ops were used)
+          const fastToolsUsed = mcpResults.map(r => r.tool);
+          if (!hasWriteOperations(fastToolsUsed)) {
+            const ttl = determineTTL("fast", "fast", fastToolsUsed);
+            await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "fast", ttl, reqId);
+          } else {
+            await invalidateCacheForEntity(supabase, entityId, fastToolsUsed, reqId);
+          }
           // ========== LLM PATH ==========
 
           // LAYER 1: Classify via keywords
@@ -537,7 +576,9 @@ serve(async (req) => {
               usage: response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
             });
 
-          } else {
+            // Cache write — general chat (long TTL)
+            const chatTTL = determineTTL("llm", "general_chat", []);
+            await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
             const toolSelection = selectToolsForQuery(query, effectiveCategory);
             const filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
@@ -652,6 +693,15 @@ serve(async (req) => {
               iterationCount: iterations,
               usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
             });
+
+            // Cache write — LLM path (skip if write ops)
+            const llmToolsUsed = mcpResults.map(r => r.tool);
+            if (!hasWriteOperations(llmToolsUsed)) {
+              const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
+              await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, effectiveCategory, ttl, reqId);
+            } else {
+              await invalidateCacheForEntity(supabase, entityId, llmToolsUsed, reqId);
+            }
           }
         }
 

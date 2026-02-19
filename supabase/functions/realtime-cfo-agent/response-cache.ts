@@ -1,0 +1,212 @@
+// Response Cache Layer — Phase 2
+// Provides aggressive caching with entity isolation and TTL-based invalidation
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+export interface CacheEntry {
+  id: string;
+  cache_key: string;
+  entity_id: string;
+  query_hash: string;
+  query_text: string;
+  content: string;
+  path: string;
+  ttl_seconds: number;
+  created_at: string;
+}
+
+// TTL configuration per query type (seconds)
+const TTL_CONFIG: Record<string, number> = {
+  // Reports — data changes infrequently, cache aggressively
+  aging_report: 600,       // 10 min
+  financial_summary: 600,
+  // Read queries — moderate TTL
+  list_invoices: 300,      // 5 min
+  list_bills: 300,
+  list_payments: 300,
+  list_customers: 300,
+  list_vendors: 300,
+  list_transactions: 300,
+  // Single record lookups
+  get_by_id: 120,          // 2 min
+  // General chat — long cache, responses are static
+  general_chat: 1800,      // 30 min
+  // Default
+  default: 300,
+};
+
+/**
+ * Generate a stable cache key from the query + entity context.
+ * Normalizes the query to improve hit rate.
+ */
+export function generateCacheKey(
+  query: string,
+  entityId: string,
+  path: string,
+): { cacheKey: string; queryHash: string } {
+  // Normalize: lowercase, trim, collapse whitespace
+  const normalized = query.toLowerCase().trim().replace(/\s+/g, " ");
+  // Simple hash — good enough for cache keys
+  const queryHash = simpleHash(normalized);
+  const cacheKey = `${entityId}:${path}:${queryHash}`;
+  return { cacheKey, queryHash };
+}
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const chr = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * Determine TTL based on query classification and tools used.
+ */
+export function determineTTL(
+  path: string,
+  category: string,
+  toolsUsed: string[],
+): number {
+  if (category === "general_chat") return TTL_CONFIG.general_chat;
+  
+  // Check for specific tool patterns
+  for (const tool of toolsUsed) {
+    if (tool.includes("aged") || tool.includes("aging") || tool.includes("report")) {
+      return TTL_CONFIG.aging_report;
+    }
+    if (tool.includes("get_all") || tool.includes("get_bills") || tool.includes("get_all_invoices")) {
+      return TTL_CONFIG.list_invoices;
+    }
+    if (tool.includes("_by_id")) {
+      return TTL_CONFIG.get_by_id;
+    }
+  }
+  
+  return TTL_CONFIG.default;
+}
+
+/**
+ * Check cache for a matching entry. Returns null if miss or expired.
+ */
+export async function checkCache(
+  supabase: ReturnType<typeof createClient>,
+  entityId: string,
+  cacheKey: string,
+  reqId: string,
+): Promise<CacheEntry | null> {
+  try {
+    const { data, error } = await supabase
+      .from("response_cache")
+      .select("*")
+      .eq("cache_key", cacheKey)
+      .eq("entity_id", entityId)
+      .single();
+
+    if (error || !data) return null;
+
+    // Check TTL expiry
+    const createdAt = new Date(data.created_at).getTime();
+    const ttlMs = (data.ttl_seconds || 300) * 1000;
+    const now = Date.now();
+
+    if (now - createdAt > ttlMs) {
+      console.log(`[${reqId}] Cache expired for key: ${cacheKey}`);
+      // Clean up expired entry
+      await supabase.from("response_cache").delete().eq("id", data.id);
+      return null;
+    }
+
+    console.log(`[${reqId}] Cache HIT for key: ${cacheKey} (age: ${((now - createdAt) / 1000).toFixed(0)}s, ttl: ${data.ttl_seconds}s)`);
+    return data as CacheEntry;
+  } catch (e) {
+    console.error(`[${reqId}] Cache check error:`, e);
+    return null;
+  }
+}
+
+/**
+ * Write a response to cache. Uses upsert to handle concurrent writes.
+ */
+export async function writeCache(
+  supabase: ReturnType<typeof createClient>,
+  entityId: string,
+  cacheKey: string,
+  queryHash: string,
+  queryText: string,
+  content: string,
+  path: string,
+  ttlSeconds: number,
+  reqId: string,
+): Promise<void> {
+  try {
+    // Don't cache very short responses (likely errors)
+    if (content.length < 20) return;
+    // Don't cache very long responses (too expensive to store/retrieve)
+    if (content.length > 50000) return;
+
+    await supabase
+      .from("response_cache")
+      .upsert({
+        cache_key: cacheKey,
+        entity_id: entityId,
+        query_hash: queryHash,
+        query_text: queryText,
+        content,
+        path,
+        ttl_seconds: ttlSeconds,
+        created_at: new Date().toISOString(),
+      }, { onConflict: "cache_key" });
+
+    console.log(`[${reqId}] Cache WRITE: key=${cacheKey}, ttl=${ttlSeconds}s, size=${content.length}`);
+  } catch (e) {
+    console.error(`[${reqId}] Cache write error:`, e);
+    // Non-fatal — don't throw
+  }
+}
+
+/**
+ * Invalidate cache entries for an entity when write operations occur.
+ * Call this when tools like update_invoice, create_customer etc. are used.
+ */
+export async function invalidateCacheForEntity(
+  supabase: ReturnType<typeof createClient>,
+  entityId: string,
+  toolsUsed: string[],
+  reqId: string,
+): Promise<number> {
+  // If any write tool was used, invalidate related caches
+  const isWriteOp = toolsUsed.some(t =>
+    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_")
+  );
+
+  if (!isWriteOp) return 0;
+
+  try {
+    const { data, error } = await supabase
+      .from("response_cache")
+      .delete()
+      .eq("entity_id", entityId)
+      .select("id");
+
+    const count = data?.length || 0;
+    if (count > 0) {
+      console.log(`[${reqId}] Cache INVALIDATED: ${count} entries for entity ${entityId} (write ops: ${toolsUsed.filter(t => t.startsWith("update_") || t.startsWith("create_")).join(", ")})`);
+    }
+    return count;
+  } catch (e) {
+    console.error(`[${reqId}] Cache invalidation error:`, e);
+    return 0;
+  }
+}
+
+/**
+ * Check if a set of tools includes any write operations.
+ */
+export function hasWriteOperations(toolsUsed: string[]): boolean {
+  return toolsUsed.some(t =>
+    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_")
+  );
+}

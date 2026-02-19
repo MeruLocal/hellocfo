@@ -28,12 +28,15 @@ function RouteBadge({ understanding }: { understanding: AgentUnderstanding }) {
   if (!route) return null;
 
   const isFast = route.path === 'fast';
+  const isCached = route.path === 'cached';
   const category = route.category;
 
   return (
     <div className={cn(
       "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium",
-      isFast 
+      isCached
+        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+        : isFast 
         ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" 
         : category === 'bookkeeper'
         ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
@@ -41,13 +44,15 @@ function RouteBadge({ understanding }: { understanding: AgentUnderstanding }) {
         ? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
         : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
     )}>
-      {isFast ? <Zap size={12} /> : <Brain size={12} />}
+      {isCached ? <Zap size={12} /> : isFast ? <Zap size={12} /> : <Brain size={12} />}
       <span>
-        {isFast 
+        {isCached
+          ? 'Cached'
+          : isFast 
           ? `Fast Path` 
           : category === 'bookkeeper' 
           ? 'Bookkeeper Mode' 
-          : category === 'general_chat' 
+          : category === 'general_chat'
           ? 'Chat Mode'
           : 'CFO Mode'}
       </span>
