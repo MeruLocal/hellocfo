@@ -8,6 +8,14 @@ import {
 import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
+import {
+  generateCacheKey,
+  checkCache,
+  writeCache,
+  determineTTL,
+  invalidateCacheForEntity,
+  hasWriteOperations,
+} from "./response-cache.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -307,7 +315,50 @@ serve(async (req) => {
   const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
   const mcpEntityId = entityId || Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
   const mcpOrgId = orgId || Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
+  const effectiveEntityId = mcpEntityId || "default";
   const startTime = Date.now();
+
+  // ============================
+  // CACHE CHECK — skip everything if cached
+  // ============================
+  const { cacheKey, queryHash } = generateCacheKey(query, effectiveEntityId, "api");
+  const cachedResponse = await checkCache(supabase, effectiveEntityId, cacheKey, "api");
+
+  if (cachedResponse) {
+    // Return cached response immediately (no SSE needed)
+    if (!stream) {
+      return new Response(JSON.stringify({
+        success: true, query, path: "cached", response: cachedResponse.content,
+        matchedIntent: null, reasoning: "Served from cache",
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // SSE cached response
+    const encoder = new TextEncoder();
+    const cacheStream = new ReadableStream({
+      start(controller) {
+        const send = (type: string, data: unknown) => {
+          const event: SSEEvent = { type, data, timestamp: new Date().toISOString() };
+          controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
+        };
+        send('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id });
+        send('route_classified', { path: 'cached', reason: 'Response served from cache' });
+        send('response_chunk', { text: cachedResponse.content });
+        send('complete', {
+          success: true, query, path: 'cached', response: cachedResponse.content,
+          matchedIntent: null, reasoning: 'Served from cache',
+          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+        });
+        controller.close();
+      }
+    });
+    return new Response(cacheStream, {
+      headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
+    });
+  }
 
   // Setup SSE stream
   const encoder = new TextEncoder();
@@ -481,6 +532,15 @@ serve(async (req) => {
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
         });
 
+        // Cache write — fast path
+        const fastToolsUsed = toolResults.map(r => r.tool);
+        if (!hasWriteOperations(fastToolsUsed)) {
+          const ttl = determineTTL("fast", "fast", fastToolsUsed);
+          await writeCache(supabase, effectiveEntityId, cacheKey, queryHash, query, responseText, "fast", ttl, "api");
+        } else {
+          await invalidateCacheForEntity(supabase, effectiveEntityId, fastToolsUsed, "api");
+        }
+
       } else {
         // ========== LLM PATH ==========
         const classification = classifyQuery(query);
@@ -523,6 +583,10 @@ serve(async (req) => {
             pipelineSteps: [], enrichments: [], response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
           });
+
+          // Cache write — general chat
+          const chatTTL = determineTTL("llm", "general_chat", []);
+          await writeCache(supabase, effectiveEntityId, cacheKey, queryHash, query, responseText, "general_chat", chatTTL, "api");
 
         } else {
           // Bookkeeper or CFO path with filtered tools
@@ -611,6 +675,15 @@ serve(async (req) => {
             response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
           });
+
+          // Cache write — LLM path
+          const llmToolsUsed = mcpResults.map(r => r.tool);
+          if (!hasWriteOperations(llmToolsUsed)) {
+            const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
+            await writeCache(supabase, effectiveEntityId, cacheKey, queryHash, query, responseText, effectiveCategory, ttl, "api");
+          } else {
+            await invalidateCacheForEntity(supabase, effectiveEntityId, llmToolsUsed, "api");
+          }
         }
       }
 

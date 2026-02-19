@@ -54,7 +54,7 @@ export interface ToolResult {
 }
 
 // Hybrid routing types
-export type RoutePath = 'fast' | 'llm';
+export type RoutePath = 'fast' | 'llm' | 'cached';
 export type RouteCategory = 'bookkeeper' | 'cfo' | 'general_chat';
 
 export interface RouteClassification {
