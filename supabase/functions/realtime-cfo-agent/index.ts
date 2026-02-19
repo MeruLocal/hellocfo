@@ -16,6 +16,7 @@ import {
   invalidateCacheForEntity,
   hasWriteOperations,
 } from "./response-cache.ts";
+import { logFeedback } from "./feedback-logger.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -293,9 +294,21 @@ serve(async (req) => {
         }
 
         const startTime = Date.now();
+        const messageId = reqId;
         console.log(`[${reqId}] Query: ${query}`);
 
-        sendEvent("connected", { requestId: reqId });
+        // Tracking vars for feedback logging
+        let feedbackPath = "unknown";
+        let feedbackIntent: string | null = null;
+        let feedbackIntentConfidence: number | null = null;
+        let feedbackModel: string | null = null;
+        let feedbackToolsLoaded: string[] = [];
+        let feedbackToolsUsed: string[] = [];
+        let feedbackStrategy: string | null = null;
+        let feedbackResponse: string | null = null;
+        let feedbackTokenCost: number | null = null;
+
+        sendEvent("connected", { requestId: reqId, messageId });
         sendEvent("understanding_started", { query });
 
         // ============================
@@ -516,6 +529,15 @@ serve(async (req) => {
             usage: response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
           });
 
+          // Track for feedback
+          feedbackPath = "fast";
+          feedbackIntent = bestIntent.name;
+          feedbackIntentConfidence = bestIntent.confidence;
+          feedbackModel = `${llmConfig.provider}/${llmConfig.model}`;
+          feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
+          feedbackStrategy = "fast_path_intent";
+          feedbackResponse = finalResponse;
+          feedbackTokenCost = response.usage?.total_tokens || null;
           // Cache write — fast path (skip if write ops were used)
           const fastToolsUsed = mcpResults.map(r => r.tool);
           if (!hasWriteOperations(fastToolsUsed)) {
@@ -579,6 +601,15 @@ serve(async (req) => {
             // Cache write — general chat (long TTL)
             const chatTTL = determineTTL("llm", "general_chat", []);
             await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
+
+            // Track for feedback
+            feedbackPath = "general_chat";
+            feedbackModel = `${llmConfig.provider}/${llmConfig.model}`;
+            feedbackStrategy = "general_chat_bypass";
+            feedbackResponse = finalResponse;
+            feedbackTokenCost = response.usage?.total_tokens || null;
+
+          } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
             const toolSelection = selectToolsForQuery(query, effectiveCategory);
             const filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
@@ -694,6 +725,17 @@ serve(async (req) => {
               usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
             });
 
+            // Track for feedback
+            feedbackPath = "llm";
+            feedbackIntent = bestIntent?.name || null;
+            feedbackIntentConfidence = bestIntent?.confidence || null;
+            feedbackModel = `${llmConfig.provider}/${llmConfig.model}`;
+            feedbackToolsLoaded = filteredTools.map(t => t.function.name);
+            feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
+            feedbackStrategy = toolSelection.strategy;
+            feedbackResponse = finalResponse;
+            feedbackTokenCost = inputTokens + outputTokens;
+
             // Cache write — LLM path (skip if write ops)
             const llmToolsUsed = mcpResults.map(r => r.tool);
             if (!hasWriteOperations(llmToolsUsed)) {
@@ -705,9 +747,31 @@ serve(async (req) => {
           }
         }
 
-        // Cleanup
+        // Cleanup + feedback logging
         if (mcpClient) mcpClient.close();
-        console.log(`[${reqId}] Done in ${((Date.now() - startTime) / 1000).toFixed(2)}s`);
+        const responseTimeMs = Date.now() - startTime;
+        console.log(`[${reqId}] Done in ${(responseTimeMs / 1000).toFixed(2)}s`);
+
+        // Non-blocking feedback log
+        await logFeedback(supabase, {
+          message_id: messageId,
+          conversation_id: reqId,
+          entity_id: entityId,
+          user_id: "realtime-user",
+          user_message: query,
+          assistant_response: feedbackResponse,
+          route_path: feedbackPath,
+          intent_matched: feedbackIntent,
+          intent_confidence: feedbackIntentConfidence,
+          model_used: feedbackModel,
+          tools_loaded: feedbackToolsLoaded,
+          tools_used: feedbackToolsUsed,
+          tool_selection_strategy: feedbackStrategy,
+          response_time_ms: responseTimeMs,
+          token_cost: feedbackTokenCost,
+          implicit_signals: { source: "realtime" },
+        }, reqId);
+
         controller.close();
 
       } catch (error) {

@@ -16,6 +16,7 @@ import {
   invalidateCacheForEntity,
   hasWriteOperations,
 } from "./response-cache.ts";
+import { logFeedback } from "./feedback-logger.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -383,8 +384,19 @@ serve(async (req) => {
   (async () => {
     let mcpClient: MCPClient | null = null;
 
+    const apiMessageId = crypto.randomUUID().slice(0, 8);
+    let feedbackPath = "unknown";
+    let feedbackIntent: string | null = null;
+    let feedbackIntentConfidence: number | null = null;
+    let feedbackModel: string | null = null;
+    let feedbackToolsLoaded: string[] = [];
+    let feedbackToolsUsed: string[] = [];
+    let feedbackStrategy: string | null = null;
+    let feedbackResponse: string | null = null;
+    let feedbackTokenCost: number | null = null;
+
     try {
-      sendEvent('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id });
+      sendEvent('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id, messageId: apiMessageId });
       sendEvent('understanding_started', { message: 'Analyzing your query...' });
 
       // Fetch intents
@@ -588,6 +600,12 @@ serve(async (req) => {
           const chatTTL = determineTTL("llm", "general_chat", []);
           await writeCache(supabase, effectiveEntityId, cacheKey, queryHash, query, responseText, "general_chat", chatTTL, "api");
 
+          // Track for feedback
+          feedbackPath = "general_chat";
+          feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
+          feedbackStrategy = "general_chat_bypass";
+          feedbackResponse = responseText;
+
         } else {
           // Bookkeeper or CFO path with filtered tools
           const toolSelection = selectToolsForQuery(query, effectiveCategory);
@@ -684,6 +702,16 @@ serve(async (req) => {
           } else {
             await invalidateCacheForEntity(supabase, effectiveEntityId, llmToolsUsed, "api");
           }
+
+          // Track for feedback
+          feedbackPath = "llm";
+          feedbackIntent = bestIntent?.name || null;
+          feedbackIntentConfidence = bestIntent?.confidence || null;
+          feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
+          feedbackToolsLoaded = filteredTools.map(t => t.function.name);
+          feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
+          feedbackStrategy = toolSelection.strategy;
+          feedbackResponse = responseText;
         }
       }
 
@@ -691,6 +719,27 @@ serve(async (req) => {
       console.error('[Error]', error);
       sendEvent('error', { message: error instanceof Error ? error.message : 'An unexpected error occurred', code: 'PROCESSING_ERROR' });
     } finally {
+      // Non-blocking feedback log
+      const responseTimeMs = Date.now() - startTime;
+      await logFeedback(supabase, {
+        message_id: apiMessageId,
+        conversation_id: conversationId || apiMessageId,
+        entity_id: effectiveEntityId,
+        user_id: user.id,
+        user_message: query,
+        assistant_response: feedbackResponse,
+        route_path: feedbackPath,
+        intent_matched: feedbackIntent,
+        intent_confidence: feedbackIntentConfidence,
+        model_used: feedbackModel,
+        tools_loaded: feedbackToolsLoaded,
+        tools_used: feedbackToolsUsed,
+        tool_selection_strategy: feedbackStrategy,
+        response_time_ms: responseTimeMs,
+        token_cost: feedbackTokenCost,
+        implicit_signals: { source: "api" },
+      }, "api");
+
       mcpClient?.close();
       closeStream();
     }
