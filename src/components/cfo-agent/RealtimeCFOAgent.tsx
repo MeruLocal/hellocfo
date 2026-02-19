@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MessageBubble } from './MessageBubble';
 import { AgentThinkingPanel } from './AgentThinkingPanel';
+import { ConversationSidebar } from './ConversationSidebar';
 import { 
   ChatMessage, 
   SSEEvent, 
@@ -50,10 +51,16 @@ export function RealtimeCFOAgent({
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentUnderstanding, setCurrentUnderstanding] = useState<AgentUnderstanding>({});
   const [currentPhase, setCurrentPhase] = useState('');
+  const [conversationId, setConversationId] = useState<string>(crypto.randomUUID());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Entity ID for conversation scoping
+  const entityId = 'default'; // Could be made configurable
+  const userId = 'realtime-user'; // Could use auth user ID
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -292,6 +299,7 @@ export function RealtimeCFOAgent({
         },
         body: JSON.stringify({
           query: userMessage.content,
+          conversationId,
           intents: intents.filter(i => i.isActive).map(i => ({
             id: i.id,
             name: i.name,
@@ -385,13 +393,66 @@ export function RealtimeCFOAgent({
     setMessages([]);
     setCurrentUnderstanding({});
     setCurrentPhase('');
+    setConversationId(crypto.randomUUID());
+  };
+
+  const handleSelectConversation = async (selectedConvId: string) => {
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const res = await fetch(
+        `${supabaseUrl}/functions/v1/get-conversations?conversationId=${encodeURIComponent(selectedConvId)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const loadedMessages: ChatMessage[] = ((data.messages || []) as Array<{
+          id: string;
+          role: string;
+          content: string;
+          timestamp: string;
+          metadata?: Record<string, unknown>;
+        }>).map((m) => ({
+          id: m.id || crypto.randomUUID(),
+          role: m.role === 'user' ? 'user' as const : 'agent' as const,
+          content: m.content,
+          timestamp: new Date(m.timestamp),
+          isStreaming: false,
+        }));
+        setMessages(loadedMessages);
+        setConversationId(selectedConvId);
+        setCurrentUnderstanding({});
+        setCurrentPhase('');
+      }
+    } catch (e) {
+      console.error('Failed to load conversation:', e);
+    }
+  };
+
+  const handleNewChat = () => {
+    clearChat();
   };
 
   const activeIntents = intents.filter(i => i.isActive);
   const countryConfig = countryConfigs.find(c => c.code === businessContext.country);
 
   return (
-    <div className="h-[calc(100vh-200px)] flex flex-col">
+    <div className="h-[calc(100vh-200px)] flex">
+      {/* Conversation History Sidebar */}
+      <ConversationSidebar
+        userId={userId}
+        entityId={entityId}
+        activeConversationId={conversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewChat={handleNewChat}
+        isCollapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
+
+      <div className="flex-1 flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border">
         <div className="flex items-center gap-3">
@@ -516,6 +577,7 @@ export function RealtimeCFOAgent({
             )}
           </Button>
         </div>
+      </div>
       </div>
     </div>
   );
