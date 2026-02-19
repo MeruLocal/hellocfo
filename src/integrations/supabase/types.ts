@@ -212,6 +212,75 @@ export type Database = {
         }
         Relationships: []
       }
+      feedback_log: {
+        Row: {
+          assistant_response: string | null
+          conversation_id: string
+          created_at: string
+          entity_id: string
+          explicit_feedback: string | null
+          feedback_score: number | null
+          id: string
+          implicit_signals: Json | null
+          intent_confidence: number | null
+          intent_matched: string | null
+          message_id: string
+          model_used: string | null
+          response_time_ms: number | null
+          route_path: string
+          token_cost: number | null
+          tool_selection_strategy: string | null
+          tools_loaded: string[] | null
+          tools_used: string[] | null
+          user_id: string
+          user_message: string
+        }
+        Insert: {
+          assistant_response?: string | null
+          conversation_id: string
+          created_at?: string
+          entity_id: string
+          explicit_feedback?: string | null
+          feedback_score?: number | null
+          id?: string
+          implicit_signals?: Json | null
+          intent_confidence?: number | null
+          intent_matched?: string | null
+          message_id: string
+          model_used?: string | null
+          response_time_ms?: number | null
+          route_path: string
+          token_cost?: number | null
+          tool_selection_strategy?: string | null
+          tools_loaded?: string[] | null
+          tools_used?: string[] | null
+          user_id: string
+          user_message: string
+        }
+        Update: {
+          assistant_response?: string | null
+          conversation_id?: string
+          created_at?: string
+          entity_id?: string
+          explicit_feedback?: string | null
+          feedback_score?: number | null
+          id?: string
+          implicit_signals?: Json | null
+          intent_confidence?: number | null
+          intent_matched?: string | null
+          message_id?: string
+          model_used?: string | null
+          response_time_ms?: number | null
+          route_path?: string
+          token_cost?: number | null
+          tool_selection_strategy?: string | null
+          tools_loaded?: string[] | null
+          tools_used?: string[] | null
+          user_id?: string
+          user_message?: string
+        }
+        Relationships: []
+      }
       intents: {
         Row: {
           ai_confidence: number | null
@@ -482,6 +551,42 @@ export type Database = {
         }
         Relationships: []
       }
+      response_cache: {
+        Row: {
+          cache_key: string
+          content: string
+          created_at: string
+          entity_id: string
+          id: string
+          path: string | null
+          query_hash: string
+          query_text: string | null
+          ttl_seconds: number | null
+        }
+        Insert: {
+          cache_key: string
+          content: string
+          created_at?: string
+          entity_id: string
+          id?: string
+          path?: string | null
+          query_hash: string
+          query_text?: string | null
+          ttl_seconds?: number | null
+        }
+        Update: {
+          cache_key?: string
+          content?: string
+          created_at?: string
+          entity_id?: string
+          id?: string
+          path?: string | null
+          query_hash?: string
+          query_text?: string | null
+          ttl_seconds?: number | null
+        }
+        Relationships: []
+      }
       response_types: {
         Row: {
           created_at: string
@@ -509,6 +614,96 @@ export type Database = {
           name?: string
           sort_order?: number
           updated_at?: string
+        }
+        Relationships: []
+      }
+      tool_registry: {
+        Row: {
+          avg_feedback_score: number | null
+          created_at: string
+          description: string | null
+          display_name: string
+          id: string
+          is_active: boolean | null
+          is_write: boolean | null
+          keywords: string[]
+          module: string
+          schema: Json | null
+          sub_module: string | null
+          token_cost: number | null
+          tool_name: string
+          updated_at: string
+          usage_count: number | null
+        }
+        Insert: {
+          avg_feedback_score?: number | null
+          created_at?: string
+          description?: string | null
+          display_name: string
+          id?: string
+          is_active?: boolean | null
+          is_write?: boolean | null
+          keywords?: string[]
+          module: string
+          schema?: Json | null
+          sub_module?: string | null
+          token_cost?: number | null
+          tool_name: string
+          updated_at?: string
+          usage_count?: number | null
+        }
+        Update: {
+          avg_feedback_score?: number | null
+          created_at?: string
+          description?: string | null
+          display_name?: string
+          id?: string
+          is_active?: boolean | null
+          is_write?: boolean | null
+          keywords?: string[]
+          module?: string
+          schema?: Json | null
+          sub_module?: string | null
+          token_cost?: number | null
+          tool_name?: string
+          updated_at?: string
+          usage_count?: number | null
+        }
+        Relationships: []
+      }
+      unified_conversations: {
+        Row: {
+          conversation_id: string
+          created_at: string
+          entity_id: string
+          id: string
+          message_count: number | null
+          messages: Json
+          summary: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string
+          entity_id: string
+          id?: string
+          message_count?: number | null
+          messages?: Json
+          summary?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string
+          entity_id?: string
+          id?: string
+          message_count?: number | null
+          messages?: Json
+          summary?: string | null
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }

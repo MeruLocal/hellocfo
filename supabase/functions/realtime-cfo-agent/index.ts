@@ -1,12 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  BOOKKEEPER_TOOLS,
-  CFO_TOOLS,
-  buildOpenAITools,
-  resolveMetaToolToMcp,
+  selectToolsForQuery,
+  buildOpenAIToolsFromMcp,
   type OpenAITool,
-  type ToolGroup,
 } from "./tool-groups.ts";
 import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
@@ -332,7 +329,7 @@ serve(async (req) => {
           }
         }
 
-        const mcpToolNames = new Set(mcpTools.map((t) => t.name));
+        // mcpToolNames no longer needed — we pass real MCP tool definitions directly
 
         // ============================
         // STEP 3: LAYER 1 — Intent matching against DB (free)
@@ -541,16 +538,17 @@ serve(async (req) => {
             });
 
           } else {
-            // LAYER 2: Select tool group and build filtered tools
-            const toolGroups: ToolGroup[] = effectiveCategory === "bookkeeper" ? BOOKKEEPER_TOOLS : CFO_TOOLS;
-            const allGroups = [...BOOKKEEPER_TOOLS, ...CFO_TOOLS];
-            const filteredTools = buildOpenAITools(toolGroups, mcpToolNames);
+            // LAYER 2: Select relevant tools via keyword matching against real MCP tools
+            const toolSelection = selectToolsForQuery(query, effectiveCategory);
+            const filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
             sendEvent("tools_filtered", {
               category: effectiveCategory,
               toolCount: filteredTools.length,
               totalMcpTools: mcpTools.length,
               tools: filteredTools.map((t) => t.function.name),
+              strategy: toolSelection.strategy,
+              groupsSelected: toolSelection.matchedCategories,
             });
 
             // Select model tier
@@ -559,7 +557,7 @@ serve(async (req) => {
 
             // Build category-specific system prompt
             const categoryPrompt = effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tool groups: ${filteredTools.map((t) => t.function.name).join(", ")}`;
+            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}`;
 
             // Build messages
             const messages: unknown[] = [...conversationHistory, { role: "user", content: query }];
@@ -581,43 +579,30 @@ serve(async (req) => {
               messages.push(response.message);
 
               for (const toolCall of toolCalls) {
-                const groupName = toolCall.function.name;
+                const toolName = toolCall.function.name;
                 let toolInput: Record<string, unknown> = {};
                 try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
-                
-                const action = toolInput.action as string | undefined;
-                const params = (toolInput.parameters as Record<string, unknown>) || {};
 
-                // Resolve meta-tool to actual MCP tool
-                const mcpToolName = action ? resolveMetaToolToMcp(groupName, action, allGroups) : null;
-
-                if (mcpToolName && mcpClient) {
-                  sendEvent("executing_tool", { tool: mcpToolName, group: groupName, description: `${groupName} → ${action}` });
+                if (mcpClient) {
+                  sendEvent("executing_tool", { tool: toolName, description: toolName });
 
                   try {
-                    const mcpResult = await mcpClient.callTool(mcpToolName, params);
+                    const mcpResult = await mcpClient.callTool(toolName, toolInput);
                     const truncated = truncateResult(mcpResult);
-                    mcpResults.push({ tool: mcpToolName, input: params, result: truncated, success: true });
+                    mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
 
                     let recordCount = 1;
                     try { const p = JSON.parse(mcpResult); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
-                    sendEvent("tool_result", { tool: mcpToolName, group: groupName, success: true, recordCount });
+                    sendEvent("tool_result", { tool: toolName, success: true, recordCount });
 
-                    // Add tool result message
                     messages.push({ role: "tool", tool_call_id: toolCall.id, content: truncated });
                   } catch (error) {
-                    mcpResults.push({ tool: mcpToolName, error: String(error), success: false });
-                    sendEvent("tool_result", { tool: mcpToolName, group: groupName, success: false, error: String(error) });
+                    mcpResults.push({ tool: toolName, error: String(error), success: false });
+                    sendEvent("tool_result", { tool: toolName, success: false, error: String(error) });
                     messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: String(error) }) });
                   }
-                } else if (!mcpClient) {
-                  messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "MCP not connected" }) });
                 } else {
-                  messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    content: JSON.stringify({ error: `Unknown action: ${action} in group ${groupName}` }),
-                  });
+                  messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "MCP not connected" }) });
                 }
               }
 
