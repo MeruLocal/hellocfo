@@ -237,7 +237,7 @@ async function callOpenAI(
 
   const body: Record<string, unknown> = {
     model: config.model,
-    max_tokens: maxTokens || config.max_tokens || 4096,
+    max_completion_tokens: maxTokens || config.max_tokens || 4096,
     messages: allMessages,
   };
   if (tools.length > 0) body.tools = tools;
