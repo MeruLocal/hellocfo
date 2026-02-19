@@ -381,26 +381,27 @@ export const CFO_TOOLS: ToolGroup[] = [
 ];
 
 // ============================================================
-// Helper: Build Anthropic-format tools from a tool group
+// Helper: Build OpenAI-format tools from a tool group
 // ============================================================
 
-export interface AnthropicTool {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  cache_control?: { type: string };
+export interface OpenAITool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 /**
- * Converts a ToolGroup[] into Anthropic tool definitions.
+ * Converts a ToolGroup[] into OpenAI function-calling tool definitions.
  * Each group becomes a single tool with an "action" enum parameter.
  */
-export function buildAnthropicTools(
+export function buildOpenAITools(
   groups: ToolGroup[],
   availableMcpToolNames: Set<string>,
-  addCacheControl = false
-): AnthropicTool[] {
-  const tools: AnthropicTool[] = groups
+): OpenAITool[] {
+  const tools: OpenAITool[] = groups
     .map((group) => {
       // Only include actions whose MCP tools actually exist on the server
       const validActions = group.actions.filter((a) =>
@@ -412,34 +413,32 @@ export function buildAnthropicTools(
         .map((a) => `- ${a.mcpTool}: ${a.description}`)
         .join("\n");
 
-      const tool: AnthropicTool = {
-        name: group.name,
-        description: `${group.description}\n\nAvailable actions:\n${actionDescriptions}`,
-        input_schema: {
-          type: "object",
-          properties: {
-            action: {
-              type: "string",
-              enum: validActions.map((a) => a.mcpTool),
-              description: "Which specific action to perform",
+      const tool: OpenAITool = {
+        type: "function",
+        function: {
+          name: group.name,
+          description: `${group.description}\n\nAvailable actions:\n${actionDescriptions}`,
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                enum: validActions.map((a) => a.mcpTool),
+                description: "Which specific action to perform",
+              },
+              parameters: {
+                type: "object",
+                description: "Parameters for the action (varies by action)",
+                additionalProperties: true,
+              },
             },
-            parameters: {
-              type: "object",
-              description: "Parameters for the action (varies by action)",
-              additionalProperties: true,
-            },
+            required: ["action"],
           },
-          required: ["action"],
         },
       };
       return tool;
     })
-    .filter(Boolean) as AnthropicTool[];
-
-  // Add cache_control to the last tool for Anthropic prompt caching
-  if (addCacheControl && tools.length > 0) {
-    tools[tools.length - 1].cache_control = { type: "ephemeral" };
-  }
+    .filter(Boolean) as OpenAITool[];
 
   return tools;
 }
