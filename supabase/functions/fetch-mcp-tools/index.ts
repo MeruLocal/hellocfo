@@ -128,6 +128,7 @@ serve(async (req) => {
             ...mcpHeaders,
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
+            "ngrok-skip-browser-warning": "true",  // bypass ngrok interstitial page
           },
         });
 
@@ -218,6 +219,7 @@ serve(async (req) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true",
           ...mcpHeaders,
         },
         body: JSON.stringify(body),
