@@ -126,10 +126,17 @@ serve(async (req) => {
           break; // Success, exit retry loop
         }
 
-        // Handle 503 with retry
-        if (sseResponse.status === 503 && attempt < MAX_RETRIES) {
-          const retryDelay = attempt * 1000; // 1s, 2s, 3s
-          console.log(`[${reqId}] MCP server unavailable (503), retrying in ${retryDelay}ms...`);
+        // Never retry on 401/403 (auth errors)
+        if (sseResponse.status === 401 || sseResponse.status === 403) {
+          lastError = await sseResponse.text();
+          console.error(`[${reqId}] Auth error ${sseResponse.status}: ${lastError}`);
+          break;
+        }
+
+        // Handle 503/504 with retry
+        if ((sseResponse.status === 503 || sseResponse.status === 504) && attempt < MAX_RETRIES) {
+          const retryDelay = attempt * 1000;
+          console.log(`[${reqId}] MCP server unavailable (${sseResponse.status}), retrying in ${retryDelay}ms...`);
           await new Promise(resolve => setTimeout(resolve, retryDelay));
           continue;
         }
@@ -147,14 +154,29 @@ serve(async (req) => {
     }
 
     if (!sseResponse || !sseResponse.ok) {
+      const status = sseResponse?.status || 0;
+      const isAuthError = status === 401 || status === 403;
+      
+      let errorDetails: string;
+      try {
+        const parsed = JSON.parse(lastError);
+        errorDetails = parsed.detail || parsed.error || lastError;
+      } catch {
+        errorDetails = lastError || "Unknown error";
+      }
+
       return new Response(
         JSON.stringify({ 
-          error: "MCP server temporarily unavailable", 
-          details: "The HelloBooks MCP server is currently down for maintenance. Please try again in a few minutes.",
-          status: sseResponse?.status || 0,
-          tools: [] // Return empty tools so UI can still function
+          error: isAuthError 
+            ? "MCP authentication failed" 
+            : "MCP server temporarily unavailable",
+          details: isAuthError
+            ? `Authentication rejected by MCP server: ${errorDetails}. Please check your H-Authorization token, Entity ID, and Org ID.`
+            : "The MCP server is currently unavailable. Please try again in a few minutes.",
+          status,
+          tools: []
         }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: isAuthError ? 401 : 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
