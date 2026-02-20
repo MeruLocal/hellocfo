@@ -506,6 +506,7 @@ serve(async (req) => {
                 }
                 console.log(`[api] Fast path calling tool: ${mcpTool.name} with args:`, JSON.stringify(toolArgs));
                 const result = await mcpClient.callTool(mcpTool.name, toolArgs);
+                console.log(`[api] Tool raw result for ${mcpTool.name}:`, result.slice(0, 500));
                 const truncated = truncateResult(result);
                 let recordCount = 1;
                 try { const p = JSON.parse(result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
