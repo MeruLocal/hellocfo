@@ -37,7 +37,12 @@ export function useMCPTools() {
       const body: Record<string, string> = {};
 
       if (credentials) {
-        headers['H-Authorization'] = `Bearer ${credentials.authToken}`;
+        // Strip any existing "Bearer " prefix before adding our own
+        let token = credentials.authToken.trim();
+        while (token.toLowerCase().startsWith("bearer ")) {
+          token = token.substring(7).trim();
+        }
+        headers['H-Authorization'] = `Bearer ${token}`;
         body['entityId'] = credentials.entityId;
         body['orgId'] = credentials.orgId;
       }
