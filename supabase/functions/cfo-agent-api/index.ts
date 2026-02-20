@@ -409,7 +409,7 @@ serve(async (req) => {
       console.log(`[api] MCP credentials check — auth:${!!mcpAuthToken}, entityId:${!!mcpEntityId}, orgId:${!!mcpOrgId}`);
       if (mcpAuthToken && mcpEntityId && mcpOrgId) {
         try {
-          mcpClient = new MCPClient('https://mcp.hellobooks.ai', {
+          mcpClient = new MCPClient('https://6af2-110-225-253-88.ngrok-free.app', {
             'Authorization': `Bearer ${mcpAuthToken}`,
             'X-Entity-Id': mcpEntityId,
             'X-Org-Id': mcpOrgId,

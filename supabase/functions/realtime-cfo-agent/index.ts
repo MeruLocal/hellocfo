@@ -358,7 +358,7 @@ serve(async (req) => {
 
         if (authToken && entityId && orgId) {
           try {
-            mcpClient = new MCPClient("https://mcp.hellobooks.ai", {
+            mcpClient = new MCPClient("https://6af2-110-225-253-88.ngrok-free.app", {
               Authorization: `Bearer ${authToken}`,
               "X-Entity-Id": entityId,
               "X-Org-Id": orgId,
