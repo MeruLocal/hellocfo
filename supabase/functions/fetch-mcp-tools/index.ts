@@ -125,7 +125,8 @@ serve(async (req) => {
         const sseUrl = new URL(`${mcpBaseUrl}/`);
         sseUrl.searchParams.set("entityid", entityId);
         sseUrl.searchParams.set("orgid", orgId);
-        console.log(`[${reqId}] SSE URL (MCP_BASE_URL was: ${mcpBaseUrl}): ${sseUrl.toString()}`);
+        console.log(`[${reqId}] SSE URL: ${sseUrl.toString().replace(/entityid=[^&]+/, 'entityid=***').replace(/orgid=[^&]+/, 'orgid=***')}`);
+        console.log(`[${reqId}] MCP_BASE_URL secret value starts with: ${mcpBaseUrl.substring(0, 30)}...`);
         
         sseResponse = await fetch(sseUrl.toString(), {
           method: "GET",
