@@ -42,6 +42,37 @@ async function readWithTimeout(
   return Promise.race([reader.read(), timeoutPromise]);
 }
 
+// Small helper: reads a single SSE response stream and extracts the first tools array found
+async function readSSEStreamForTools(reqId: string, response: Response): Promise<unknown[] | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 8000;
+
+  while (Date.now() < deadline) {
+    const result = await readWithTimeout(reader, 3000);
+    if (!result || result.done) break;
+    buffer += decoder.decode(result.value, { stream: true });
+    const { events, remaining } = parseSSEBuffer(buffer);
+    buffer = remaining;
+    for (const ev of events) {
+      if (ev.type === 'message') {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d.result?.tools) {
+            console.log(`[${reqId}] tools/list SSE: got ${d.result.tools.length} tools`);
+            reader.cancel();
+            return d.result.tools;
+          }
+        } catch { /* continue */ }
+      }
+    }
+  }
+  reader.cancel();
+  return null;
+}
+
 // --- Approach 1: Streamable HTTP (new MCP spec 2025) ---
 // POST initialize directly, server responds with SSE or JSON
 async function tryStreamableHTTP(
@@ -98,26 +129,110 @@ async function tryStreamableHTTP(
       const ct = initResp.headers.get('content-type') || '';
 
       if (ct.includes('text/event-stream')) {
-        // Server responded with SSE — read events from this stream
-        console.log(`[${reqId}] Got SSE response from POST, reading events...`);
-        const tools = await readSSEForTools(reqId, initResp, authToken, url, entityId, orgId, 10000);
+        // Server responded with SSE — read init result from this stream, then request tools
+        console.log(`[${reqId}] Got SSE response from POST initialize, reading init result...`);
+        
+        const reader = initResp.body?.getReader();
+        if (!reader) continue;
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const deadline = Date.now() + 10000;
+        let tools: unknown[] | null = null;
+
+        while (Date.now() < deadline) {
+          const result = await readWithTimeout(reader, 3000);
+          if (!result || result.done) break;
+          const chunk = decoder.decode(result.value, { stream: true });
+          if (buffer.length === 0) console.log(`[${reqId}] Init SSE chunk: ${chunk.substring(0, 300)}`);
+          buffer += chunk;
+
+          const { events, remaining } = parseSSEBuffer(buffer);
+          buffer = remaining;
+
+          for (const event of events) {
+            console.log(`[${reqId}] Init SSE event type=${event.type}: ${event.data.substring(0, 200)}`);
+            if (event.type === 'message') {
+              try {
+                const data = JSON.parse(event.data);
+
+                // Already have tools in init response (unlikely but handle it)
+                if (data.result?.tools) {
+                  tools = data.result.tools;
+                  break;
+                }
+
+                // Got init result (id=1) — send notifications/initialized then tools/list
+                if (data.result && data.id === 1) {
+                  // FIX 3: Send notifications/initialized per MCP spec (fire-and-forget)
+                  try {
+                    await fetch(url, {
+                      method: "POST",
+                      headers: baseHeaders,
+                      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
+                    });
+                    console.log(`[${reqId}] Sent notifications/initialized`);
+                  } catch { /* ignore */ }
+
+                  // FIX 1+2: tools/list response is ALSO SSE — read it as a stream
+                  const toolsResp = await fetch(url, {
+                    method: "POST",
+                    headers: baseHeaders,
+                    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+                  });
+                  console.log(`[${reqId}] tools/list response: status=${toolsResp.status}, content-type=${toolsResp.headers.get('content-type')}`);
+
+                  if (toolsResp.ok && toolsResp.body) {
+                    const toolsFromSSE = await readSSEStreamForTools(reqId, toolsResp);
+                    if (toolsFromSSE) {
+                      tools = toolsFromSSE;
+                      break;
+                    }
+                  }
+                }
+              } catch { /* continue */ }
+            }
+          }
+          if (tools) break;
+        }
+
+        reader.cancel();
         if (tools !== null) return tools;
+
       } else {
-        // JSON response
+        // JSON response to initialize
         const data = await initResp.json();
         console.log(`[${reqId}] JSON init response: ${JSON.stringify(data).substring(0, 200)}`);
         if (data.result) {
-          // Send initialized + tools/list
+          // FIX 3: Send notifications/initialized
+          try {
+            await fetch(url, {
+              method: "POST",
+              headers: baseHeaders,
+              body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
+            });
+          } catch { /* ignore */ }
+
+          // FIX 1+2: Read tools/list as SSE stream
           const toolsResp = await fetch(url, {
             method: "POST",
             headers: baseHeaders,
             body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
           });
-          if (toolsResp.ok) {
-            const toolsData = await toolsResp.json();
-            if (toolsData.result?.tools) {
-              console.log(`[${reqId}] Got ${toolsData.result.tools.length} tools via JSON`);
-              return toolsData.result.tools;
+          console.log(`[${reqId}] tools/list response: status=${toolsResp.status}, content-type=${toolsResp.headers.get('content-type')}`);
+          if (toolsResp.ok && toolsResp.body) {
+            const ct2 = toolsResp.headers.get('content-type') || '';
+            if (ct2.includes('text/event-stream')) {
+              const toolsFromSSE = await readSSEStreamForTools(reqId, toolsResp);
+              if (toolsFromSSE) {
+                console.log(`[${reqId}] Got ${toolsFromSSE.length} tools via SSE tools/list`);
+                return toolsFromSSE;
+              }
+            } else {
+              const toolsData = await toolsResp.json();
+              if (toolsData.result?.tools) {
+                console.log(`[${reqId}] Got ${toolsData.result.tools.length} tools via JSON`);
+                return toolsData.result.tools;
+              }
             }
           }
         }
@@ -195,72 +310,6 @@ async function tryClassicSSE(
   if (!reader) return null;
 
   const tools = await readSSEForToolsWithHandshake(reqId, reader, mcpBaseUrl, authToken, entityId, orgId, sendRequest, 25000);
-  reader.cancel();
-  return tools;
-}
-
-// Read SSE stream from a POST response (Streamable HTTP)
-async function readSSEForTools(
-  reqId: string,
-  response: Response,
-  authToken: string,
-  baseUrl: string,
-  entityId: string,
-  orgId: string,
-  timeoutMs: number
-): Promise<unknown[] | null> {
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let tools: unknown[] | null = null;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const result = await readWithTimeout(reader, 3000);
-    if (result === null) continue;
-    if (result.done) break;
-
-    const chunk = decoder.decode(result.value, { stream: true });
-    if (buffer.length === 0) console.log(`[${reqId}] SSE chunk: ${chunk.substring(0, 300)}`);
-    buffer += chunk;
-
-    const { events, remaining } = parseSSEBuffer(buffer);
-    buffer = remaining;
-
-    for (const event of events) {
-      console.log(`[${reqId}] SSE event type=${event.type}: ${event.data.substring(0, 200)}`);
-      if (event.type === 'message') {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.result?.tools) {
-            tools = data.result.tools;
-            break;
-          }
-          if (data.result && data.id === 1) {
-            // Got init response, now ask for tools
-            const toolsResp = await fetch(baseUrl, {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${authToken}`,
-                "Content-Type": "application/json",
-                "ngrok-skip-browser-warning": "true",
-                "User-Agent": "MCP-Client/1.0",
-              },
-              body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
-            });
-            if (toolsResp.ok) {
-              const td = await toolsResp.json();
-              if (td.result?.tools) { tools = td.result.tools; break; }
-            }
-          }
-        } catch { /* continue */ }
-      }
-    }
-    if (tools) break;
-  }
-
   reader.cancel();
   return tools;
 }
