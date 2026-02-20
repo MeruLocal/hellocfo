@@ -137,7 +137,7 @@ async function callOpenAI(
   const endpoint = `${(config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/").replace(/\/$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
     model: config.model,
-    max_completion_tokens: config.max_tokens || 4096,
+    max_completion_tokens: config.max_tokens || 8192,
     messages: [{ role: "developer", content: systemPrompt }, ...messages],
   };
   if (tools.length > 0) body.tools = tools;
@@ -383,8 +383,12 @@ Chat ID: ${chatDisplayId}`;
 
         // ── Select & build tools ──
         const selectedToolNames = selectTools(userMessage);
-        const openAITools = mcpTools
-          .filter(t => selectedToolNames.includes(t.name))
+        let filteredMcpTools = mcpTools.filter(t => selectedToolNames.includes(t.name));
+        // Fallback: if keyword filtering yields no matches but MCP has tools, use all tools
+        if (filteredMcpTools.length === 0 && mcpTools.length > 0) {
+          filteredMcpTools = mcpTools;
+        }
+        const openAITools = filteredMcpTools
           .map(t => ({ type: "function" as const, function: { name: t.name, description: t.description, parameters: (t.inputSchema as Record<string, unknown>) || { type: "object", properties: {} } } }));
 
         send("thinking", { phase: "planning", message: `Selected ${openAITools.length} tools for your query`, toolCount: openAITools.length });
