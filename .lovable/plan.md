@@ -1,82 +1,107 @@
 
-## Problem Diagnosis
+## Root Cause: `tools/list` Response is SSE, Not JSON
 
-The edge function logs clearly show the root cause:
+The logs confirm the MCP server (HelloBooks v2.14.2) uses the **Streamable HTTP** transport where EVERY response — including `tools/list` — is returned as `text/event-stream`, not plain JSON.
 
-```
-SSE URL (MCP_BASE_URL was: https://6af2-110-225-253-88.ngrok-free.app): 
-https://6af2-110-225-253-88.ngrok-free.app/?entityid=...&orgid=...
-```
-
-Even though `MCP_BASE_URL` was supposedly updated, the function is still connecting to the old expired ngrok URL. This means either:
-1. The secret update did not take effect before the function was last deployed, OR
-2. The code has an old hardcoded fallback that overrides the secret
-
-There is a **second critical problem**: looking at the user's provided MCP spec structure:
-```
-URL: base_url/?entityid=<entity_id>&orgid=<org_id>
-Headers: { "Authorization": "Bearer <token>" }
+Current broken flow:
+```text
+[OK]  POST / → 200 text/event-stream (initialize)
+[OK]  Read SSE stream → get initialize result (id=1)
+[OK]  POST / with tools/list
+[BUG] toolsResp.json() called → FAILS silently (it's SSE, not JSON!)
+[---] tools = null → falls back to Classic SSE
+[---] Classic SSE times out in waiting_endpoint (server doesn't emit endpoint event)
+[503] Error returned
 ```
 
-The current code sends **extra headers** (`X-Entity-Id`, `X-Org-Id`) that are NOT in the spec. These may be confusing or conflicting with the MCP server's expected format.
-
-Additionally, the SSE connection to MCP uses `base_url/?...` (the root path with query params), meaning the server's response `endpoint` event will contain a relative path like `/messages?session_id=xyz` - our code handles that, but only if the connection is actually established.
-
-## Fix Plan
-
-### 1. Remove the hardcoded old ngrok fallback URL
-The code at line 118 has:
-```typescript
-const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app").replace(/\/+$/, "");
+Fixed flow:
+```text
+[OK]  POST / → 200 text/event-stream (initialize)
+[OK]  Read SSE stream → get initialize result (id=1)
+[OK]  POST / with tools/list → returns SSE stream
+[FIX] Read SSE stream from tools/list response → parse message event
+[OK]  Extract data.result.tools
+[200] Return tools list
 ```
-The fallback `"https://6af2-110-225-253-88.ngrok-free.app"` is the expired ngrok URL. Replace it with an empty string / clear error so we know when the secret is missing.
-
-### 2. Remove extra headers not in the MCP spec
-The current code adds `X-Entity-Id` and `X-Org-Id` as headers, but the spec only requires:
-```
-Authorization: Bearer <token>
-```
-Remove these extra headers from `mcpHeaders` — they may be causing issues.
-
-### 3. Add raw SSE data logging
-The function reads bytes but we never log what raw content was received. Add logging of the first chunk of bytes so we can see if the server is returning HTML, empty data, or actual SSE events.
-
-### 4. Also fix the same old-URL fallback at line 261
-```typescript
-const base = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
-```
-This is used when resolving relative `endpoint` event paths. Must be updated.
 
 ## Files to Change
 
 **`supabase/functions/fetch-mcp-tools/index.ts`**
 
-- Line 101-105: Remove `X-Entity-Id` and `X-Org-Id` from `mcpHeaders` — only keep `Authorization: Bearer <token>`
-- Line 118: Replace old ngrok fallback with `""` and add a guard to fail fast with a clear error if `MCP_BASE_URL` is not set
-- Line 261: Replace old ngrok fallback with correct `MCP_BASE_URL` env var (no hardcoded fallback)
-- After line 250 (buffer decode): Add `console.log` of raw first chunk to diagnose what the server actually sends
+### Fix 1: `readSSEForTools` (lines 241-257) — the core bug
 
-## Technical Flow (After Fix)
+Replace the broken `.json()` call with a function that reads the `tools/list` SSE response stream properly:
 
-```text
-Client (Edge Function)                    MCP Server
-       |                                      |
-       |-- GET base_url/?entityid=X&orgid=Y ->|
-       |   Headers: Authorization: Bearer T   |
-       |                                      |
-       |<-- 200 OK (text/event-stream) -------|
-       |<-- event: endpoint                   |
-       |    data: /messages?session_id=abc    |
-       |                                      |
-       |-- POST base_url/messages?session_id=abc + entityid + orgid
-       |   Body: { jsonrpc initialize }       |
-       |                                      |
-       |<-- event: message                    |
-       |    data: { id:1, result: {...} }     |
-       |                                      |
-       |-- POST notifications/initialized     |
-       |-- POST tools/list                    |
-       |                                      |
-       |<-- event: message                    |
-       |    data: { id:2, result:{tools:[]} } |
+```typescript
+if (data.result && data.id === 1) {
+  // Got init response — send notifications/initialized then tools/list
+  // tools/list response is ALSO SSE, not JSON — must read it as a stream
+  const toolsResp = await fetch(baseUrl, {
+    method: "POST",
+    headers: { ... },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+  });
+  if (toolsResp.ok && toolsResp.body) {
+    // Read the SSE stream from this second POST
+    const toolsFromSSE = await readSSEStreamForTools(reqId, toolsResp);
+    if (toolsFromSSE) { tools = toolsFromSSE; break; }
+  }
+}
 ```
+
+### Fix 2: Add `readSSEStreamForTools` helper
+
+A small focused helper that reads a single SSE stream and returns the first `tools` array it finds:
+
+```typescript
+async function readSSEStreamForTools(reqId: string, response: Response): Promise<unknown[] | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 8000; // 8s max for tools response
+
+  while (Date.now() < deadline) {
+    const result = await readWithTimeout(reader, 3000);
+    if (!result || result.done) break;
+    buffer += decoder.decode(result.value, { stream: true });
+    const { events, remaining } = parseSSEBuffer(buffer);
+    buffer = remaining;
+    for (const ev of events) {
+      if (ev.type === 'message') {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d.result?.tools) {
+            console.log(`[${reqId}] tools/list SSE: got ${d.result.tools.length} tools`);
+            reader.cancel();
+            return d.result.tools;
+          }
+        } catch { /* continue */ }
+      }
+    }
+  }
+  reader.cancel();
+  return null;
+}
+```
+
+### Fix 3: Also send `notifications/initialized` between init and tools/list
+
+Per MCP spec, after receiving the `initialize` result, the client MUST send `notifications/initialized` before calling `tools/list`. Add this step (fire-and-forget, no need to read its response):
+
+```typescript
+// After getting init result, notify server then request tools
+await fetch(baseUrl, {
+  method: "POST",
+  headers: { ... },
+  body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
+});
+// Now request tools
+const toolsResp = await fetch(baseUrl, { ... tools/list ... });
+```
+
+## Technical Summary
+
+The fix is entirely within `readSSEForTools` and adds one small helper function. No new files, no secrets changes, no schema changes needed. The edge function will be redeployed automatically.
+
+The Classic SSE path (GET-based) can remain as a fallback, though the Streamable HTTP path (POST-based) already works with HelloBooks v2.14.2 — it just needs the response read correctly as SSE.
