@@ -17,6 +17,7 @@ import {
   hasWriteOperations,
 } from "./response-cache.ts";
 import { logFeedback } from "./feedback-logger.ts";
+import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -68,129 +69,7 @@ function truncateResult(result: unknown, maxLength = 8000): string {
   return str.substring(0, maxLength) + `... [truncated, ${str.length - maxLength} chars omitted]`;
 }
 
-// MCP Client (same as realtime-cfo-agent)
-class MCPClient {
-  private baseUrl: string;
-  private headers: Record<string, string>;
-  private sessionUrl: string | null = null;
-  private sseReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  private pendingRequests = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-  private buffer = "";
-
-  constructor(baseUrl: string, headers: Record<string, string>) {
-    this.baseUrl = baseUrl;
-    this.headers = headers;
-  }
-
-  async connect(): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/sse`, { headers: this.headers });
-    if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errorText}`);
-    }
-    this.sseReader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { value, done } = await this.sseReader.read();
-      if (done) break;
-      this.buffer += decoder.decode(value, { stream: true });
-      for (const line of this.buffer.split("\n")) {
-        if (line.startsWith("data: /")) {
-          this.sessionUrl = `${this.baseUrl}${line.slice(6).trim()}`;
-          this.listenSSE(decoder);
-          return;
-        } else if (line.startsWith("data: http")) {
-          this.sessionUrl = line.slice(6).trim();
-          this.listenSSE(decoder);
-          return;
-        }
-      }
-      this.buffer = "";
-    }
-    throw new Error("Failed to get session URL from SSE");
-  }
-
-  private listenSSE(decoder: TextDecoder): void {
-    (async () => {
-      while (true) {
-        const { value, done } = await this.sseReader!.read();
-        if (done) break;
-        this.buffer += decoder.decode(value, { stream: true });
-        const normalized = this.buffer.replace(/\r\n/g, "\n");
-        const messages = normalized.split("\n\n");
-        this.buffer = messages.pop() || "";
-        for (const msg of messages) {
-          const lines = msg.split("\n");
-          let eventType = "";
-          let data = "";
-          for (const line of lines) {
-            if (line.startsWith("event:")) eventType = line.slice(6).trim();
-            else if (line.startsWith("data:")) data = line.slice(5).trim();
-          }
-          if (eventType === "message" && data) {
-            try {
-              const result = JSON.parse(data);
-              const pending = this.pendingRequests.get(result.id);
-              if (pending) {
-                this.pendingRequests.delete(result.id);
-                if (result.error) pending.reject(new Error(result.error.message || JSON.stringify(result.error)));
-                else pending.resolve(result.result);
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      }
-    })();
-  }
-
-  private async request(method: string, params?: unknown): Promise<unknown> {
-    const id = Date.now() + Math.floor(Math.random() * 1000);
-    const promise = new Promise<unknown>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error(`Request timeout for ${method}`));
-        }
-      }, 30000);
-    });
-    await fetch(this.sessionUrl!, {
-      method: "POST",
-      headers: { ...this.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
-    });
-    return promise;
-  }
-
-  async initialize(): Promise<void> {
-    await this.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "cfo-agent-api", version: "3.0" },
-    });
-    await fetch(this.sessionUrl!, {
-      method: "POST",
-      headers: { ...this.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-    });
-  }
-
-  async listTools(): Promise<{ name: string; description: string; inputSchema: unknown }[]> {
-    const result = await this.request("tools/list") as { tools: { name: string; description: string; inputSchema: unknown }[] };
-    return result.tools || [];
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    const result = await this.request("tools/call", { name, arguments: args }) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-    return result.content?.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(result);
-  }
-
-  close(): void {
-    this.sseReader?.cancel();
-  }
-}
+// MCPClient is now imported from mcp-client.ts (StreamableMCPClient)
 
 // Call Azure OpenAI API
 async function callOpenAI(
@@ -404,34 +283,23 @@ serve(async (req) => {
         .from('intents').select('*').eq('is_active', true);
       if (intentsError) throw new Error(`Failed to fetch intents: ${intentsError.message}`);
 
-      // Connect to MCP
+      // Connect to MCP using Streamable HTTP
       let mcpTools: { name: string; description: string; inputSchema: unknown }[] = [];
+      let mcpClientInstance: StreamableMCPClient | null = null;
+
       console.log(`[api] MCP credentials check — auth:${!!mcpAuthToken}, entityId:${!!mcpEntityId}, orgId:${!!mcpOrgId}`);
       if (mcpAuthToken && mcpEntityId && mcpOrgId) {
         try {
-          mcpClient = new MCPClient(Deno.env.get('MCP_BASE_URL') || 'https://6af2-110-225-253-88.ngrok-free.app', {
-            'Authorization': `Bearer ${mcpAuthToken}`,
-            'X-Entity-Id': mcpEntityId,
-            'X-Org-Id': mcpOrgId,
-            'Accept': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-          });
-          const maxAttempts = 3;
-          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-              await mcpClient.connect();
-              await mcpClient.initialize();
-              mcpTools = await mcpClient.listTools();
-              break;
-            } catch (e) {
-              if (attempt === maxAttempts) throw e;
-              await new Promise((r) => setTimeout(r, 300 * attempt));
-            }
+          const mcpBaseUrl = Deno.env.get('MCP_BASE_URL') || '';
+          const result = await createMCPClient(apiMessageId, mcpBaseUrl, mcpAuthToken, mcpEntityId, mcpOrgId);
+          if (result) {
+            mcpClientInstance = result.client;
+            mcpTools = result.tools;
+            console.log(`[api] MCP: ${mcpTools.length} tools loaded`);
+          } else {
+            sendEvent('error', { message: 'MCP connection failed: could not initialize', recoverable: true });
           }
         } catch (e) {
-          try { mcpClient?.close(); } catch { /* ignore */ }
-          mcpClient = null;
-          mcpTools = [];
           sendEvent('error', { message: `MCP connection failed: ${e instanceof Error ? e.message : String(e)}`, recoverable: true });
         }
       }
@@ -505,7 +373,7 @@ serve(async (req) => {
                   if ('org_id' in schema.properties && mcpOrgId) toolArgs.org_id = mcpOrgId;
                 }
                 console.log(`[api] Fast path calling tool: ${mcpTool.name} with args:`, JSON.stringify(toolArgs));
-                const result = await mcpClient.callTool(mcpTool.name, toolArgs);
+                const result = await mcpClientInstance!.callTool(mcpTool.name, toolArgs);
                 console.log(`[api] Tool raw result for ${mcpTool.name}:`, result.slice(0, 500));
                 const truncated = truncateResult(result);
                 let recordCount = 1;
@@ -662,7 +530,7 @@ serve(async (req) => {
                     if ('org_id' in toolSchema.properties && mcpOrgId) toolInput.org_id = mcpOrgId;
                   }
                   console.log(`[api] Calling tool: ${toolName} with args:`, JSON.stringify(toolInput));
-                  const result = await mcpClient.callTool(toolName, toolInput);
+                  const result = await mcpClientInstance!.callTool(toolName, toolInput);
                   const truncated = truncateResult(result);
                   mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
                   let recordCount = 1;
