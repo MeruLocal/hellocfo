@@ -116,9 +116,8 @@ serve(async (req) => {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
         const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app").replace(/\/+$/, "");
-        // Build SSE URL - avoid double-pathing if MCP_BASE_URL already ends with /sse
-        const sseBase = mcpBaseUrl.endsWith("/sse") ? mcpBaseUrl : `${mcpBaseUrl}/sse`;
-        const sseUrl = new URL(sseBase);
+        // SSE endpoint is base_url/?entityid=...&orgid=... (root path with query params)
+        const sseUrl = new URL(`${mcpBaseUrl}/`);
         sseUrl.searchParams.set("entityid", entityId);
         sseUrl.searchParams.set("orgid", orgId);
         console.log(`[${reqId}] SSE URL (MCP_BASE_URL was: ${mcpBaseUrl}): ${sseUrl.toString()}`);
