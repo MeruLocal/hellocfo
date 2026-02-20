@@ -406,6 +406,7 @@ serve(async (req) => {
 
       // Connect to MCP
       let mcpTools: { name: string; description: string; inputSchema: unknown }[] = [];
+      console.log(`[api] MCP credentials check — auth:${!!mcpAuthToken}, entityId:${!!mcpEntityId}, orgId:${!!mcpOrgId}`);
       if (mcpAuthToken && mcpEntityId && mcpOrgId) {
         try {
           mcpClient = new MCPClient('https://mcp.hellobooks.ai', {
@@ -503,6 +504,7 @@ serve(async (req) => {
                   if ('entity_id' in schema.properties && mcpEntityId) toolArgs.entity_id = mcpEntityId;
                   if ('org_id' in schema.properties && mcpOrgId) toolArgs.org_id = mcpOrgId;
                 }
+                console.log(`[api] Fast path calling tool: ${mcpTool.name} with args:`, JSON.stringify(toolArgs));
                 const result = await mcpClient.callTool(mcpTool.name, toolArgs);
                 const truncated = truncateResult(result);
                 let recordCount = 1;
@@ -652,6 +654,13 @@ serve(async (req) => {
               if (mcpClient) {
                 sendEvent('executing_tool', { tool: toolName });
                 try {
+                  // Always inject entity_id and org_id — HelloBooks MCP requires these for data scoping
+                  const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+                  if (toolSchema?.properties) {
+                    if ('entity_id' in toolSchema.properties && mcpEntityId) toolInput.entity_id = mcpEntityId;
+                    if ('org_id' in toolSchema.properties && mcpOrgId) toolInput.org_id = mcpOrgId;
+                  }
+                  console.log(`[api] Calling tool: ${toolName} with args:`, JSON.stringify(toolInput));
                   const result = await mcpClient.callTool(toolName, toolInput);
                   const truncated = truncateResult(result);
                   mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
