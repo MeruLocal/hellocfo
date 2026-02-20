@@ -484,7 +484,15 @@ serve(async (req) => {
         } else {
           // Bookkeeper or CFO path with filtered tools
           const toolSelection = selectToolsForQuery(query, effectiveCategory);
-          const filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+          let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+
+          // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL of them.
+          // This prevents the LLM from hallucinating that tools don't exist.
+          const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
+          if (usingAllTools) {
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
+            console.log(`[api] No keyword match — falling back to all ${filteredTools.length} MCP tools`);
+          }
 
           sendEvent('tools_filtered', {
             category: effectiveCategory, toolCount: filteredTools.length,
@@ -493,7 +501,7 @@ serve(async (req) => {
           });
 
           const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}`;
+          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Pass limit=1000 in the arguments.`;
 
           const messages: unknown[] = [
             ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
