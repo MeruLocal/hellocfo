@@ -344,10 +344,7 @@ serve(async (req) => {
               sendEvent("executing_tool", { tool: toolName });
               try {
                 // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
-                // Inject high limit for list/get tools to return all records
-                const isListTool = /list|get|fetch|all|bills?|invoices?|customers?|vendors?|parties?/i.test(toolName);
-                const fastArgs: Record<string, unknown> = isListTool ? { limit: 1000 } : {};
-                const mcpResult = await mcpClientInstance.callTool(toolName, fastArgs);
+                const mcpResult = await mcpClientInstance.callTool(toolName, {});
                 const truncated = truncateResult(mcpResult);
                 mcpResults.push({ tool: toolName, result: truncated, success: true });
                 sendEvent("tool_result", { tool: toolName, success: true });
@@ -511,7 +508,7 @@ serve(async (req) => {
 
             // Build category-specific system prompt
             const categoryPrompt = effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Pass limit=1000 in the arguments.`;
+            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.`;
 
             // Build messages
             const messages: unknown[] = [...conversationHistory, { role: "user", content: query }];
@@ -542,9 +539,6 @@ serve(async (req) => {
 
                   try {
                     // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
-                    // Inject high limit for list/get tools to return all records
-                    const isListTool = /list|get|fetch|all|bills?|invoices?|customers?|vendors?|parties?/i.test(toolName);
-                    if (isListTool && !toolInput.limit) toolInput.limit = 1000;
                     const mcpResult = await mcpClientInstance.callTool(toolName, toolInput);
                     const truncated = truncateResult(mcpResult);
                     mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
