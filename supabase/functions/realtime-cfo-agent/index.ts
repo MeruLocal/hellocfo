@@ -344,7 +344,10 @@ serve(async (req) => {
               sendEvent("executing_tool", { tool: toolName });
               try {
                 // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
-                const mcpResult = await mcpClientInstance.callTool(toolName, {});
+                // Inject high limit for list/get tools to return all records
+                const isListTool = /list|get|fetch|all|bills?|invoices?|customers?|vendors?|parties?/i.test(toolName);
+                const fastArgs: Record<string, unknown> = isListTool ? { limit: 1000 } : {};
+                const mcpResult = await mcpClientInstance.callTool(toolName, fastArgs);
                 const truncated = truncateResult(mcpResult);
                 mcpResults.push({ tool: toolName, result: truncated, success: true });
                 sendEvent("tool_result", { tool: toolName, success: true });
@@ -531,6 +534,9 @@ serve(async (req) => {
 
                   try {
                     // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
+                    // Inject high limit for list/get tools to return all records
+                    const isListTool = /list|get|fetch|all|bills?|invoices?|customers?|vendors?|parties?/i.test(toolName);
+                    if (isListTool && !toolInput.limit) toolInput.limit = 1000;
                     const mcpResult = await mcpClientInstance.callTool(toolName, toolInput);
                     const truncated = truncateResult(mcpResult);
                     mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
