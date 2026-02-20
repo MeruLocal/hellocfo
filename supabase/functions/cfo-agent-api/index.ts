@@ -365,11 +365,8 @@ serve(async (req) => {
             try {
               const mcpTool = mcpTools.find(t => t.name === toolName || t.name.toLowerCase().includes(toolName.toLowerCase()));
               if (mcpTool) {
-                // Pass entity_id and org_id so HelloBooks MCP tools can scope the data
+                // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
                 const toolArgs: Record<string, unknown> = {};
-                // Always inject entity_id and org_id — required for data scoping regardless of tool schema
-                if (mcpEntityId) toolArgs.entity_id = mcpEntityId;
-                if (mcpOrgId) toolArgs.org_id = mcpOrgId;
                 console.log(`[api] Fast path calling tool: ${mcpTool.name} with args:`, JSON.stringify(toolArgs));
                 const result = await mcpClientInstance!.callTool(mcpTool.name, toolArgs);
                 console.log(`[api] Tool raw result for ${mcpTool.name}:`, result.slice(0, 500));
@@ -521,10 +518,7 @@ serve(async (req) => {
               if (mcpClientInstance) {
                 sendEvent('executing_tool', { tool: toolName });
                 try {
-                  // Always inject entity_id and org_id — HelloBooks MCP requires these for data scoping
-                // Always inject entity_id and org_id — required for data scoping regardless of tool schema
-                  if (mcpEntityId) toolInput.entity_id = mcpEntityId;
-                  if (mcpOrgId) toolInput.org_id = mcpOrgId;
+                  // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
                   console.log(`[api] Calling tool: ${toolName} with args:`, JSON.stringify(toolInput));
                   const result = await mcpClientInstance!.callTool(toolName, toolInput);
                   const truncated = truncateResult(result);
