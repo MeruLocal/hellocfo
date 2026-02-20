@@ -2841,32 +2841,74 @@ function MCPToolsView({
   tools: MCPTool[];
   isLoading: boolean;
   error: string | null;
-  onRefresh: () => void;
+  onRefresh: (creds: { authToken: string; entityId: string; orgId: string }) => void;
 }) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const { getToolAnalytics } = useToolAnalytics();
+  const [authToken, setAuthToken] = useState('');
+  const [entityId, setEntityId] = useState('');
+  const [orgId, setOrgId] = useState('');
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-2">
         <h1 className="text-2xl font-bold text-gray-900">MCP Tools</h1>
+      </div>
+      <p className="text-gray-500 mb-4">Available data sources for resolution flows</p>
+
+      {/* Credentials Form */}
+      <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">HelloBooks MCP Credentials</h3>
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">H-Authorization Token</label>
+            <input
+              type="password"
+              placeholder="Bearer token..."
+              value={authToken}
+              onChange={e => setAuthToken(e.target.value)}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Entity ID</label>
+            <input
+              type="text"
+              placeholder="entity_id..."
+              value={entityId}
+              onChange={e => setEntityId(e.target.value)}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Org ID</label>
+            <input
+              type="text"
+              placeholder="org_id..."
+              value={orgId}
+              onChange={e => setOrgId(e.target.value)}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+        </div>
         <button
-          onClick={onRefresh}
-          disabled={isLoading}
+          onClick={() => onRefresh({ authToken, entityId, orgId })}
+          disabled={isLoading || !authToken || !entityId || !orgId}
           className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
         >
           <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-          Refresh HelloBooks
+          {isLoading ? 'Connecting...' : 'Fetch MCP Tools'}
         </button>
       </div>
-      <p className="text-gray-500 mb-4">Available data sources for resolution flows</p>
-      
+
       {/* HelloBooks Badge */}
-      <div className="mb-4">
-        <span className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white">
-          🔌 HelloBooks MCP ({tools.length})
-        </span>
-      </div>
+      {tools.length > 0 && (
+        <div className="mb-4">
+          <span className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white">
+            🔌 HelloBooks MCP ({tools.length})
+          </span>
+        </div>
+      )}
 
       {/* Error State */}
       {error && (
@@ -2895,7 +2937,7 @@ function MCPToolsView({
           <div className="col-span-1 space-y-2 max-h-[500px] overflow-y-auto">
             {tools.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                No tools loaded. Click Refresh to fetch from HelloBooks.
+                Enter credentials above and click "Fetch MCP Tools".
               </div>
             ) : (
               tools.map(tool => (
@@ -5104,10 +5146,7 @@ export default function CFOQueryResolutionEngine() {
   const [showAIGeneratorModal, setShowAIGeneratorModal] = useState(false);
   const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
 
-  // Fetch MCP tools on initial mount
-  useEffect(() => {
-    fetchHelloBooksMcpTools();
-  }, []);
+  // MCP tools are fetched on demand via the MCPToolsView credentials form
 
   // MCP tools from HelloBooks
   const allMcpTools = helloBooksMcpTools;
@@ -5852,7 +5891,7 @@ export default function CFOQueryResolutionEngine() {
             tools={helloBooksMcpTools}
             isLoading={isFetchingMcpTools}
             error={mcpToolsError}
-            onRefresh={fetchHelloBooksMcpTools}
+            onRefresh={(creds) => fetchHelloBooksMcpTools(creds)}
           />
         )}
         {activeTab === 'enrichments' && (

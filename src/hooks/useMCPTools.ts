@@ -17,17 +17,35 @@ export interface MCPTool {
   responseFields: string[];
 }
 
+export interface MCPCredentials {
+  authToken: string;
+  entityId: string;
+  orgId: string;
+}
+
 export function useMCPTools() {
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTools = useCallback(async () => {
+  const fetchTools = useCallback(async (credentials?: MCPCredentials) => {
     setLoading(true);
     setError(null);
 
     try {
-      const { data, error: invokeError } = await supabase.functions.invoke('fetch-mcp-tools');
+      const headers: Record<string, string> = {};
+      const body: Record<string, string> = {};
+
+      if (credentials) {
+        headers['H-Authorization'] = `Bearer ${credentials.authToken}`;
+        body['entityId'] = credentials.entityId;
+        body['orgId'] = credentials.orgId;
+      }
+
+      const { data, error: invokeError } = await supabase.functions.invoke('fetch-mcp-tools', {
+        headers,
+        body,
+      });
 
       if (invokeError) throw invokeError;
 
