@@ -559,22 +559,32 @@ const callAI = async (
     };
   }
   
-  if (provider === 'openai') {
-    console.log('[AI CALL] Using OpenAI endpoint...');
+  // Handle both 'openai' and 'azure-openai' providers (same API format)
+  if (provider === 'openai' || provider === 'azure-openai') {
+    const isAzure = provider === 'azure-openai';
+    console.log(`[AI CALL] Using ${isAzure ? 'Azure OpenAI' : 'OpenAI'} endpoint...`);
     const openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (isAzure) {
+      // Azure OpenAI uses api-key header
+      headers['api-key'] = apiKey!;
+    } else {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
     
     const response = await fetchWithTimeout(openaiEndpoint, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model,
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
         temperature,
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: 'developer', content: systemPrompt },
           { role: 'user', content: prompt }
         ],
       }),
@@ -585,11 +595,11 @@ const callAI = async (
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[AI CALL ERROR] OpenAI ${response.status}:`, errorText.substring(0, 200));
+      console.error(`[AI CALL ERROR] ${isAzure ? 'Azure OpenAI' : 'OpenAI'} ${response.status}:`, errorText.substring(0, 200));
       if (response.status === 429) {
-        throw new Error('OpenAI rate limited (429). Please wait and try again.');
+        throw new Error(`${isAzure ? 'Azure OpenAI' : 'OpenAI'} rate limited (429). Please wait and try again.`);
       }
-      throw new Error(`OpenAI error: ${response.status} - ${errorText.substring(0, 100)}`);
+      throw new Error(`${isAzure ? 'Azure OpenAI' : 'OpenAI'} error: ${response.status} - ${errorText.substring(0, 100)}`);
     }
 
     const data = await response.json();
