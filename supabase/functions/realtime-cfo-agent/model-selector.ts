@@ -114,6 +114,8 @@ INSTRUCTIONS:
 - Include context with numbers (% change, comparisons)
 - Use markdown tables and formatting for clarity
 - When data shows concerning trends, flag them proactively
+- When the user asks for "all" records (all bills, all invoices, all customers), present EVERY record returned by the tool — do NOT say "and X more" or truncate the list
+- Show the complete dataset in a properly formatted table
 
 ANALYSIS APPROACH:
 - Lead with the key finding/insight

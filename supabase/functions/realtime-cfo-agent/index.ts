@@ -343,7 +343,10 @@ serve(async (req) => {
               if (!toolName) continue;
               sendEvent("executing_tool", { tool: toolName });
               try {
-                const mcpResult = await mcpClientInstance.callTool(toolName, {});
+                const pipelineArgs: Record<string, unknown> = {};
+                if (entityId) pipelineArgs.entity_id = entityId;
+                if (orgId) pipelineArgs.org_id = orgId;
+                const mcpResult = await mcpClientInstance.callTool(toolName, pipelineArgs);
                 const truncated = truncateResult(mcpResult);
                 mcpResults.push({ tool: toolName, result: truncated, success: true });
                 sendEvent("tool_result", { tool: toolName, success: true });
@@ -529,6 +532,9 @@ serve(async (req) => {
                   sendEvent("executing_tool", { tool: toolName, description: toolName });
 
                   try {
+                    // Always inject entity_id and org_id — required for data scoping regardless of tool schema
+                    if (entityId) toolInput.entity_id = entityId;
+                    if (orgId) toolInput.org_id = orgId;
                     const mcpResult = await mcpClientInstance.callTool(toolName, toolInput);
                     const truncated = truncateResult(mcpResult);
                     mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });

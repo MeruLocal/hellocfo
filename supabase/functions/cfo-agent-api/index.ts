@@ -367,11 +367,9 @@ serve(async (req) => {
               if (mcpTool) {
                 // Pass entity_id and org_id so HelloBooks MCP tools can scope the data
                 const toolArgs: Record<string, unknown> = {};
-                const schema = mcpTool.inputSchema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
-                if (schema?.properties) {
-                  if ('entity_id' in schema.properties && mcpEntityId) toolArgs.entity_id = mcpEntityId;
-                  if ('org_id' in schema.properties && mcpOrgId) toolArgs.org_id = mcpOrgId;
-                }
+                // Always inject entity_id and org_id — required for data scoping regardless of tool schema
+                if (mcpEntityId) toolArgs.entity_id = mcpEntityId;
+                if (mcpOrgId) toolArgs.org_id = mcpOrgId;
                 console.log(`[api] Fast path calling tool: ${mcpTool.name} with args:`, JSON.stringify(toolArgs));
                 const result = await mcpClientInstance!.callTool(mcpTool.name, toolArgs);
                 console.log(`[api] Tool raw result for ${mcpTool.name}:`, result.slice(0, 500));
@@ -524,11 +522,9 @@ serve(async (req) => {
                 sendEvent('executing_tool', { tool: toolName });
                 try {
                   // Always inject entity_id and org_id — HelloBooks MCP requires these for data scoping
-                  const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;
-                  if (toolSchema?.properties) {
-                    if ('entity_id' in toolSchema.properties && mcpEntityId) toolInput.entity_id = mcpEntityId;
-                    if ('org_id' in toolSchema.properties && mcpOrgId) toolInput.org_id = mcpOrgId;
-                  }
+                // Always inject entity_id and org_id — required for data scoping regardless of tool schema
+                  if (mcpEntityId) toolInput.entity_id = mcpEntityId;
+                  if (mcpOrgId) toolInput.org_id = mcpOrgId;
                   console.log(`[api] Calling tool: ${toolName} with args:`, JSON.stringify(toolInput));
                   const result = await mcpClientInstance!.callTool(toolName, toolInput);
                   const truncated = truncateResult(result);
