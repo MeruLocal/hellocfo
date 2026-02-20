@@ -261,7 +261,7 @@ serve(async (req) => {
 
   // Process in background
   (async () => {
-    let mcpClient: MCPClient | null = null;
+    // mcpClientInstance is used instead (see below)
 
     const apiMessageId = crypto.randomUUID().slice(0, 8);
     let feedbackPath = "unknown";
@@ -355,7 +355,7 @@ serve(async (req) => {
 
         // Execute pipeline
         const toolResults: { tool: string; success: boolean; data?: string; error?: string }[] = [];
-        if (mcpClient && pipeline.length > 0) {
+        if (mcpClientInstance && pipeline.length > 0) {
           sendEvent('pipeline_executing', { stepCount: pipeline.length });
           for (const step of pipeline) {
             if (step.nodeType && step.nodeType !== 'api_call') continue;
@@ -520,7 +520,7 @@ serve(async (req) => {
               let toolInput: Record<string, unknown> = {};
               try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
 
-              if (mcpClient) {
+              if (mcpClientInstance) {
                 sendEvent('executing_tool', { tool: toolName });
                 try {
                   // Always inject entity_id and org_id — HelloBooks MCP requires these for data scoping
@@ -543,7 +543,7 @@ serve(async (req) => {
                   messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: String(error) }) });
                 }
               } else {
-                messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: 'MCP not connected' }) });
+                messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: 'MCP not available' }) });
               }
             }
 
@@ -679,7 +679,7 @@ serve(async (req) => {
         implicit_signals: { source: "api" },
       }, "api");
 
-      mcpClient?.close();
+      mcpClientInstance?.close();
       closeStream();
     }
   })();
