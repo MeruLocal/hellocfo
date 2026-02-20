@@ -134,11 +134,13 @@ serve(async (req) => {
             ...mcpHeaders,
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
-            "ngrok-skip-browser-warning": "true",  // bypass ngrok interstitial page
+            "ngrok-skip-browser-warning": "true",
+            "User-Agent": "MCP-Client/1.0",  // bypass ngrok interstitial (non-standard UA)
           },
         });
 
-        console.log(`[${reqId}] SSE response status: ${sseResponse.status}`);
+        const contentType = sseResponse.headers.get("content-type") || "unknown";
+        console.log(`[${reqId}] SSE response status: ${sseResponse.status}, content-type: ${contentType}`);
 
         if (sseResponse.ok) {
           break; // Success, exit retry loop
