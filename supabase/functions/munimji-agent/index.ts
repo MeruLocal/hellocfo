@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -122,114 +123,7 @@ function selectTools(query: string): string[] {
   return [...new Set(tools)];
 }
 
-// ─── MCP Client ───────────────────────────────────────────────────────────────
-
-class MCPClient {
-  private baseUrl: string;
-  private headers: Record<string, string>;
-  private sessionUrl: string | null = null;
-  private sseReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  private pendingRequests = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-  private buffer = "";
-  private reqId: string;
-
-  constructor(baseUrl: string, headers: Record<string, string>, reqId: string) {
-    this.baseUrl = baseUrl; this.headers = headers; this.reqId = reqId;
-  }
-
-  async connect(): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/sse`, { headers: this.headers });
-    if (!res.ok) throw new Error(`MCP connect failed: HTTP ${res.status}`);
-    this.sseReader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { value, done } = await this.sseReader.read();
-      if (done) break;
-      this.buffer += decoder.decode(value, { stream: true });
-      for (const line of this.buffer.split("\n")) {
-        if (line.startsWith("data: /") || line.startsWith("data: http")) {
-          this.sessionUrl = line.startsWith("data: /")
-            ? `${this.baseUrl}${line.slice(6).trim()}`
-            : line.slice(6).trim();
-          this.listenSSE(decoder);
-          return;
-        }
-      }
-      this.buffer = "";
-    }
-    throw new Error("Failed to get MCP session URL");
-  }
-
-  private listenSSE(decoder: TextDecoder): void {
-    (async () => {
-      while (true) {
-        const { value, done } = await this.sseReader!.read();
-        if (done) break;
-        this.buffer += decoder.decode(value, { stream: true });
-        const msgs = this.buffer.replace(/\r\n/g, "\n").split("\n\n");
-        this.buffer = msgs.pop() || "";
-        for (const msg of msgs) {
-          let evType = "", data = "";
-          for (const line of msg.split("\n")) {
-            if (line.startsWith("event:")) evType = line.slice(6).trim();
-            else if (line.startsWith("data:")) data = line.slice(5).trim();
-          }
-          if (evType === "message" && data) {
-            try {
-              const r = JSON.parse(data);
-              const p = this.pendingRequests.get(r.id);
-              if (p) {
-                this.pendingRequests.delete(r.id);
-                if (r.error) p.reject(new Error(r.error.message || JSON.stringify(r.error)));
-                else p.resolve(r.result);
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      }
-    })();
-  }
-
-  private async request(method: string, params?: unknown): Promise<unknown> {
-    const id = Date.now() + Math.floor(Math.random() * 1000);
-    const promise = new Promise<unknown>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error(`Timeout: ${method}`));
-        }
-      }, 30000);
-    });
-    await fetch(this.sessionUrl!, {
-      method: "POST",
-      headers: { ...this.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
-    });
-    return promise;
-  }
-
-  async initialize(): Promise<void> {
-    await this.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "munimji-agent", version: "1.0" } });
-    await fetch(this.sessionUrl!, {
-      method: "POST",
-      headers: { ...this.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-    });
-  }
-
-  async listTools(): Promise<Array<{ name: string; description: string; inputSchema: unknown }>> {
-    const r = (await this.request("tools/list")) as { tools: Array<{ name: string; description: string; inputSchema: unknown }> };
-    return r.tools || [];
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    const r = (await this.request("tools/call", { name, arguments: args })) as { content: Array<{ type: string; text?: string }> };
-    return r.content?.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(r);
-  }
-
-  close(): void { this.sseReader?.cancel(); }
-}
+// MCPClient replaced by StreamableMCPClient imported from mcp-client.ts
 
 // ─── OpenAI Call ──────────────────────────────────────────────────────────────
 
@@ -337,7 +231,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   const encoder = new TextEncoder();
-  let mcpClient: MCPClient | null = null;
+  let mcpClient: StreamableMCPClient | null = null;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -456,30 +350,35 @@ Chat ID: ${chatDisplayId}`;
           clearInterval(heartbeatInterval); controller.close(); return;
         }
 
-        // ── Connect to MCP ──
+        // ── Connect to MCP (Streamable HTTP) ──
         const hAuth = req.headers.get("h-authorization") || req.headers.get("H-Authorization");
-        const authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth)
+        let authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth)
           || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
+        // Strip redundant Bearer prefix
+        while (authToken?.toLowerCase().startsWith("bearer ")) authToken = authToken.substring(7).trim();
         const orgId = body?.org_id || body?.orgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+        const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "";
 
         let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
 
-        if (authToken && resolvedEntityId && orgId) {
+        if (authToken && resolvedEntityId && orgId && mcpBaseUrl) {
           send("thinking", { phase: "connecting", message: "Connecting to data source..." });
           try {
-            mcpClient = new MCPClient(Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app", {
-              Authorization: `Bearer ${authToken}`,
-              "X-Entity-Id": resolvedEntityId,
-              "X-Org-Id": orgId,
-            }, reqId);
-            await mcpClient.connect();
-            await mcpClient.initialize();
-            mcpTools = await mcpClient.listTools();
-            console.log(`[${reqId}] MCP: ${mcpTools.length} tools`);
+            const mcpResult = await createMCPClient(reqId, mcpBaseUrl, authToken, resolvedEntityId, orgId);
+            if (mcpResult) {
+              mcpClient = mcpResult.client;
+              mcpTools = mcpResult.tools;
+              console.log(`[${reqId}] MCP: ${mcpTools.length} tools loaded`);
+            } else {
+              console.error(`[${reqId}] MCP initialization failed`);
+              send("thinking", { phase: "mcp_fallback", message: "Using AI knowledge base..." });
+            }
           } catch (e) {
             console.error(`[${reqId}] MCP failed:`, e);
             send("thinking", { phase: "mcp_fallback", message: "Using AI knowledge base..." });
           }
+        } else {
+          console.warn(`[${reqId}] MCP skipped — missing auth/entity/org/url`);
         }
 
         // ── Select & build tools ──
