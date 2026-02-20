@@ -116,7 +116,13 @@ serve(async (req) => {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
         const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
-        sseResponse = await fetch(`${mcpBaseUrl}/sse`, {
+        // MCP server requires entityid and orgid as query parameters
+        const sseUrl = new URL(`${mcpBaseUrl}/sse`);
+        sseUrl.searchParams.set("entityid", entityId);
+        sseUrl.searchParams.set("orgid", orgId);
+        console.log(`[${reqId}] SSE URL: ${sseUrl.toString()}`);
+        
+        sseResponse = await fetch(sseUrl.toString(), {
           method: "GET",
           headers: {
             ...mcpHeaders,
@@ -253,6 +259,13 @@ serve(async (req) => {
             const base = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
             messageEndpoint = `${base}${messageEndpoint}`;
           }
+          // Ensure entityid and orgid are present as query params on message endpoint too
+          try {
+            const epUrl = new URL(messageEndpoint);
+            if (!epUrl.searchParams.has("entityid")) epUrl.searchParams.set("entityid", entityId);
+            if (!epUrl.searchParams.has("orgid")) epUrl.searchParams.set("orgid", orgId);
+            messageEndpoint = epUrl.toString();
+          } catch { /* keep as-is if URL parsing fails */ }
           console.log(`[${reqId}] Got message endpoint: ${messageEndpoint}`);
 
           // Send initialize request
