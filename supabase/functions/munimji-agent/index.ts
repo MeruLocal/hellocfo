@@ -524,6 +524,14 @@ CRITICAL RULES:
               let args: Record<string, unknown> = {};
               try { args = JSON.parse(tc.function.arguments); } catch { /* empty */ }
 
+              // Always inject entity_id and org_id — HelloBooks MCP tools require these
+              // to scope data to the correct entity. The LLM may not always include them.
+              const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+              if (toolSchema?.properties) {
+                if ("entity_id" in toolSchema.properties && resolvedEntityId) args.entity_id = resolvedEntityId;
+                if ("org_id" in toolSchema.properties && orgId) args.org_id = orgId;
+              }
+
               send("tool_call", { tool: toolName, args });
 
               let toolResultStr = "";
