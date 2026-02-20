@@ -457,16 +457,17 @@ Chat ID: ${chatDisplayId}`;
         }
 
         // ── Connect to MCP ──
-        const authToken = req.headers.get("h-authorization")?.replace("Bearer ", "")
+        const hAuth = req.headers.get("h-authorization") || req.headers.get("H-Authorization");
+        const authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth)
           || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-        const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+        const orgId = body?.org_id || body?.orgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
 
         let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
 
         if (authToken && resolvedEntityId && orgId) {
           send("thinking", { phase: "connecting", message: "Connecting to data source..." });
           try {
-            mcpClient = new MCPClient("https://6af2-110-225-253-88.ngrok-free.app", {
+            mcpClient = new MCPClient(Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app", {
               Authorization: `Bearer ${authToken}`,
               "X-Entity-Id": resolvedEntityId,
               "X-Org-Id": orgId,

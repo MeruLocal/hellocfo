@@ -110,7 +110,8 @@ serve(async (req) => {
       try {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
-        sseResponse = await fetch("https://6af2-110-225-253-88.ngrok-free.app/sse", {
+        const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
+        sseResponse = await fetch(`${mcpBaseUrl}/sse`, {
           method: "GET",
           headers: {
             ...mcpHeaders,
@@ -222,7 +223,8 @@ serve(async (req) => {
           // Server sends the message endpoint URL
           messageEndpoint = event.data;
           if (!messageEndpoint.startsWith("http")) {
-            messageEndpoint = `https://6af2-110-225-253-88.ngrok-free.app${messageEndpoint}`;
+            const base = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
+            messageEndpoint = `${base}${messageEndpoint}`;
           }
           console.log(`[${reqId}] Got message endpoint: ${messageEndpoint}`);
 

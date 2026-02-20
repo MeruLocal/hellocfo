@@ -316,8 +316,9 @@ serve(async (req) => {
         // ============================
         const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-        // Entity isolation — entityId scopes ALL data access
-        const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
+        // Entity isolation — entityId from request body/headers, fallback to env
+        const body = await req.clone().json().catch(() => ({}));
+        const entityId = body?.entityId || req.headers.get("X-Entity-Id") || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
 
         const { data: llmConfig, error: llmError } = await supabase
           .from("llm_configs")
@@ -351,14 +352,16 @@ serve(async (req) => {
         // ============================
         // STEP 2: Connect to MCP
         // ============================
-        const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-        const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+        const hAuth = req.headers.get("H-Authorization") || req.headers.get("h-authorization");
+        const authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth) || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
+        const orgId = body?.orgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+        const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
 
         let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
 
         if (authToken && entityId && orgId) {
           try {
-            mcpClient = new MCPClient("https://6af2-110-225-253-88.ngrok-free.app", {
+            mcpClient = new MCPClient(mcpBaseUrl, {
               Authorization: `Bearer ${authToken}`,
               "X-Entity-Id": entityId,
               "X-Org-Id": orgId,
