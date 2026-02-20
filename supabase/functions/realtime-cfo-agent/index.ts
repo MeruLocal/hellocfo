@@ -486,14 +486,22 @@ serve(async (req) => {
           } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
             const toolSelection = selectToolsForQuery(query, effectiveCategory);
-            const filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+            let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+
+            // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL of them.
+            // This prevents the LLM from hallucinating that tools don't exist.
+            const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
+            if (usingAllTools) {
+              filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
+              console.log(`[${reqId}] No keyword match — falling back to all ${filteredTools.length} MCP tools`);
+            }
 
             sendEvent("tools_filtered", {
               category: effectiveCategory,
               toolCount: filteredTools.length,
               totalMcpTools: mcpTools.length,
               tools: filteredTools.map((t) => t.function.name),
-              strategy: toolSelection.strategy,
+              strategy: usingAllTools ? "all_tools_fallback" : toolSelection.strategy,
               groupsSelected: toolSelection.matchedCategories,
             });
 
@@ -503,7 +511,7 @@ serve(async (req) => {
 
             // Build category-specific system prompt
             const categoryPrompt = effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
-            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}`;
+            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Pass limit=1000 in the arguments.`;
 
             // Build messages
             const messages: unknown[] = [...conversationHistory, { role: "user", content: query }];
