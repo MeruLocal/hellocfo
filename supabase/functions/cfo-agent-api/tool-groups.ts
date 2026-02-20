@@ -17,37 +17,37 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   // ----- INVOICES / SALES -----
   {
     name: "invoices",
-    description: "Sales invoices — list, search, view, update",
-    tools: ["get_all_invoices", "get_invoice_by_id", "update_invoice", "find_invoice_document"],
-    keywords: ["invoice", "invoices", "sales", "revenue", "billing", "billed", "sale"],
+    description: "Sales invoices — list, search, view, create, update",
+    tools: ["get_all_invoices", "get_invoice_by_id", "update_invoice", "find_invoice_document", "create_invoice", "create_invoice_line_item"],
+    keywords: ["invoice", "invoices", "sales", "revenue", "billing", "billed", "sale", "create invoice", "new invoice", "raise invoice"],
   },
   // ----- BILLS / PURCHASES -----
   {
     name: "bills",
-    description: "Vendor bills — list, search, view, update",
-    tools: ["get_bills", "get_bill_by_id", "update_bill"],
-    keywords: ["bill", "bills", "purchase", "purchases", "vendor bill", "payable", "payables", "ap"],
+    description: "Vendor bills — list, search, view, create, update",
+    tools: ["get_bills", "get_bill_by_id", "update_bill", "create_bill"],
+    keywords: ["bill", "bills", "purchase", "purchases", "vendor bill", "payable", "payables", "ap", "create bill", "new bill"],
   },
   // ----- PAYMENTS -----
   {
     name: "payments",
-    description: "Payments received and made — list, search, view, update",
-    tools: ["get_all_payments", "get_payment_by_id", "update_payment", "find_payment_document"],
-    keywords: ["payment", "payments", "paid", "pay", "received", "receipt", "collection", "collected"],
+    description: "Payments received and made — list, search, view, create, update",
+    tools: ["get_all_payments", "get_payment_by_id", "update_payment", "find_payment_document", "create_payment"],
+    keywords: ["payment", "payments", "paid", "pay", "received", "receipt", "collection", "collected", "create payment", "record payment"],
   },
   // ----- CUSTOMERS -----
   {
     name: "customers",
     description: "Customer management — list, view, create, update",
     tools: ["get_all_customers", "get_customer_by_id", "create_customer", "update_customer"],
-    keywords: ["customer", "customers", "client", "clients", "buyer", "debtor", "debtors"],
+    keywords: ["customer", "customers", "client", "clients", "buyer", "debtor", "debtors", "create customer", "add customer", "new customer"],
   },
   // ----- VENDORS -----
   {
     name: "vendors",
     description: "Vendor management — list, view, create, update",
     tools: ["get_all_vendors", "get_vendor_by_id", "create_vendor", "update_vendor"],
-    keywords: ["vendor", "vendors", "supplier", "suppliers", "creditor", "creditors"],
+    keywords: ["vendor", "vendors", "supplier", "suppliers", "creditor", "creditors", "create vendor", "add vendor", "new vendor"],
   },
   // ----- CREDIT NOTES -----
   {
