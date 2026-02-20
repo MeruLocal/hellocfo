@@ -496,7 +496,14 @@ serve(async (req) => {
             try {
               const mcpTool = mcpTools.find(t => t.name === toolName || t.name.toLowerCase().includes(toolName.toLowerCase()));
               if (mcpTool) {
-                const result = await mcpClient.callTool(mcpTool.name, {});
+                // Pass entity_id and org_id so HelloBooks MCP tools can scope the data
+                const toolArgs: Record<string, unknown> = {};
+                const schema = mcpTool.inputSchema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
+                if (schema?.properties) {
+                  if ('entity_id' in schema.properties && mcpEntityId) toolArgs.entity_id = mcpEntityId;
+                  if ('org_id' in schema.properties && mcpOrgId) toolArgs.org_id = mcpOrgId;
+                }
+                const result = await mcpClient.callTool(mcpTool.name, toolArgs);
                 const truncated = truncateResult(result);
                 let recordCount = 1;
                 try { const p = JSON.parse(result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
