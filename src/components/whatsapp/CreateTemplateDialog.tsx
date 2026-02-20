@@ -142,13 +142,14 @@ export function CreateTemplateDialog({ open, onOpenChange }: CreateTemplateDialo
         sort_order: 100,
       };
       
-      const { data: template, error } = await supabase
+      const { data: template, error } = await (supabase as any)
         .from('whatsapp_templates')
         .insert(insertData)
         .select()
         .single();
       
       if (error) throw error;
+      const typedTemplate = template as { id: string; [key: string]: any };
       
       // 2. Optionally create in Twilio
       if (createInTwilio && isTemplate) {
@@ -157,7 +158,7 @@ export function CreateTemplateDialog({ open, onOpenChange }: CreateTemplateDialo
           {
             body: {
               action: 'create',
-              templateId: template.id,
+              templateId: typedTemplate.id,
             },
           }
         );
@@ -169,7 +170,7 @@ export function CreateTemplateDialog({ open, onOpenChange }: CreateTemplateDialo
             description: `Failed to create in Twilio: ${createResult?.error || 'Unknown error'}`,
             variant: 'destructive',
           });
-          return template;
+          return typedTemplate;
         }
         
         // 3. Optionally submit for approval
@@ -179,7 +180,7 @@ export function CreateTemplateDialog({ open, onOpenChange }: CreateTemplateDialo
             {
               body: {
                 action: 'submit-approval',
-                templateId: template.id,
+                templateId: typedTemplate.id,
                 whatsappCategory,
               },
             }
@@ -196,7 +197,7 @@ export function CreateTemplateDialog({ open, onOpenChange }: CreateTemplateDialo
         }
       }
       
-      return template;
+      return typedTemplate;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-templates'] });

@@ -54,7 +54,7 @@ export function TemplateNotifications() {
   }, []);
 
   const fetchNotifications = async () => {
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from("template_notifications")
       .select("*")
       .order("created_at", { ascending: false })
@@ -65,11 +65,11 @@ export function TemplateNotifications() {
       return;
     }
 
-    setNotifications(data || []);
+    setNotifications((data || []) as Notification[]);
   };
 
   const markAsRead = async (id: string) => {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from("template_notifications")
       .update({ is_read: true })
       .eq("id", id);
@@ -85,7 +85,7 @@ export function TemplateNotifications() {
     const unreadIds = notifications.filter((n) => !n.is_read).map((n) => n.id);
     if (unreadIds.length === 0) return;
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from("template_notifications")
       .update({ is_read: true })
       .in("id", unreadIds);

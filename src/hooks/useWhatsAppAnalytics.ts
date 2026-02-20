@@ -87,7 +87,7 @@ export function useWhatsAppAnalytics(days: number = 30): WhatsAppAnalytics {
       const weekStart = subDays(now, 7);
 
       // Fetch all messages in date range
-      const { data: messages, error: messagesError } = await supabase
+      const { data: messages, error: messagesError } = await (supabase as any)
         .from('whatsapp_messages')
         .select('*')
         .gte('created_at', startDate.toISOString())
