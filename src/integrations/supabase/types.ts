@@ -182,6 +182,45 @@ export type Database = {
         }
         Relationships: []
       }
+      entities: {
+        Row: {
+          created_at: string
+          currency: string | null
+          entity_id: string
+          gstin: string | null
+          id: string
+          is_default: boolean | null
+          name: string
+          org_id: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          currency?: string | null
+          entity_id: string
+          gstin?: string | null
+          id?: string
+          is_default?: boolean | null
+          name: string
+          org_id?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          currency?: string | null
+          entity_id?: string
+          gstin?: string | null
+          id?: string
+          is_default?: boolean | null
+          name?: string
+          org_id?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       entity_types: {
         Row: {
           created_at: string
@@ -719,6 +758,39 @@ export type Database = {
         }
         Relationships: []
       }
+      quick_suggestions: {
+        Row: {
+          created_at: string
+          entity_id: string | null
+          icon: string | null
+          id: string
+          is_active: boolean | null
+          label: string
+          message: string
+          sort_order: number | null
+        }
+        Insert: {
+          created_at?: string
+          entity_id?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean | null
+          label: string
+          message: string
+          sort_order?: number | null
+        }
+        Update: {
+          created_at?: string
+          entity_id?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean | null
+          label?: string
+          message?: string
+          sort_order?: number | null
+        }
+        Relationships: []
+      }
       response_cache: {
         Row: {
           cache_key: string
@@ -877,34 +949,55 @@ export type Database = {
       }
       unified_conversations: {
         Row: {
+          auto_generated_name: string | null
+          chat_display_id: string | null
+          chat_name: string | null
+          chat_number: number | null
           conversation_id: string
           created_at: string
           entity_id: string
           id: string
+          is_deleted: boolean | null
+          last_message_preview: string | null
           message_count: number | null
           messages: Json
+          mode: string | null
           summary: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          auto_generated_name?: string | null
+          chat_display_id?: string | null
+          chat_name?: string | null
+          chat_number?: number | null
           conversation_id: string
           created_at?: string
           entity_id: string
           id?: string
+          is_deleted?: boolean | null
+          last_message_preview?: string | null
           message_count?: number | null
           messages?: Json
+          mode?: string | null
           summary?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          auto_generated_name?: string | null
+          chat_display_id?: string | null
+          chat_name?: string | null
+          chat_number?: number | null
           conversation_id?: string
           created_at?: string
           entity_id?: string
           id?: string
+          is_deleted?: boolean | null
+          last_message_preview?: string | null
           message_count?: number | null
           messages?: Json
+          mode?: string | null
           summary?: string | null
           updated_at?: string
           user_id?: string
