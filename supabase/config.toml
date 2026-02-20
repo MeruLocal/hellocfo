@@ -44,3 +44,6 @@ verify_jwt = false
 
 [functions.export-chat]
 verify_jwt = false
+
+[functions.cfo-agent-mcp]
+verify_jwt = false
