@@ -162,6 +162,7 @@ For CUSTOMER/VENDOR creation:
 
 RULES:
 - Always fill in real values from the tool result — never use placeholder text
+- NEVER show raw database IDs (UUIDs or numeric IDs) to the user — use human-readable references like invoice number, bill number, or party name instead
 - If a URL/link is not available, omit that action button
 - Status values: \`Draft\`, \`Pending\`, \`Paid\`, \`Overdue\`, \`Cancelled\`
 - Format amounts with commas: ₹5,000.00
