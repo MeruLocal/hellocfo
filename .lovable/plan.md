@@ -1,107 +1,70 @@
 
-## Root Cause: `tools/list` Response is SSE, Not JSON
+## Root Cause: Wrong Variable Used for MCP Tool Calls
 
-The logs confirm the MCP server (HelloBooks v2.14.2) uses the **Streamable HTTP** transport where EVERY response — including `tools/list` — is returned as `text/event-stream`, not plain JSON.
+The `cfo-agent-api/index.ts` has a **split-brain variable bug** introduced during the migration from the old `MCPClient` to the new `StreamableMCPClient`:
 
-Current broken flow:
-```text
-[OK]  POST / → 200 text/event-stream (initialize)
-[OK]  Read SSE stream → get initialize result (id=1)
-[OK]  POST / with tools/list
-[BUG] toolsResp.json() called → FAILS silently (it's SSE, not JSON!)
-[---] tools = null → falls back to Classic SSE
-[---] Classic SSE times out in waiting_endpoint (server doesn't emit endpoint event)
-[503] Error returned
-```
+- `mcpClientInstance` is correctly set to the `StreamableMCPClient` instance when MCP connects successfully (line 295-296)
+- But `mcpClient` (old variable, type `MCPClient`) is declared on line 264 and **never assigned** — it stays `null` forever
+- All the **guards** that gate actual tool calls use `if (mcpClient)` → always false → tools NEVER run
+- The actual `.callTool()` calls correctly reference `mcpClientInstance!` but they're inside dead code blocks
 
-Fixed flow:
-```text
-[OK]  POST / → 200 text/event-stream (initialize)
-[OK]  Read SSE stream → get initialize result (id=1)
-[OK]  POST / with tools/list → returns SSE stream
-[FIX] Read SSE stream from tools/list response → parse message event
-[OK]  Extract data.result.tools
-[200] Return tools list
-```
+This is why the chatbot says "MCP not connected" — MCP IS connected and tools ARE loaded, but the wrong null variable is checked before calling them.
 
-## Files to Change
+## Exact Lines to Fix in `supabase/functions/cfo-agent-api/index.ts`
 
-**`supabase/functions/fetch-mcp-tools/index.ts`**
-
-### Fix 1: `readSSEForTools` (lines 241-257) — the core bug
-
-Replace the broken `.json()` call with a function that reads the `tools/list` SSE response stream properly:
-
+### Fix 1 — Line 264: Remove the dead `mcpClient` variable
 ```typescript
-if (data.result && data.id === 1) {
-  // Got init response — send notifications/initialized then tools/list
-  // tools/list response is ALSO SSE, not JSON — must read it as a stream
-  const toolsResp = await fetch(baseUrl, {
-    method: "POST",
-    headers: { ... },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
-  });
-  if (toolsResp.ok && toolsResp.body) {
-    // Read the SSE stream from this second POST
-    const toolsFromSSE = await readSSEStreamForTools(reqId, toolsResp);
-    if (toolsFromSSE) { tools = toolsFromSSE; break; }
-  }
+// BEFORE (broken):
+let mcpClient: MCPClient | null = null;
+
+// AFTER (fixed):
+// (remove this line entirely — mcpClientInstance is used instead)
+```
+
+### Fix 2 — Line 358: Fast-path tool execution guard
+```typescript
+// BEFORE (broken):
+if (mcpClient && pipeline.length > 0) {
+
+// AFTER (fixed):
+if (mcpClientInstance && pipeline.length > 0) {
+```
+
+### Fix 3 — Line 523: LLM-path tool call guard
+```typescript
+// BEFORE (broken):
+if (mcpClient) {
+
+// AFTER (fixed):
+if (mcpClientInstance) {
+```
+
+### Fix 4 — Line 546: Else branch for missing MCP
+```typescript
+// BEFORE (broken):
+} else {
+  messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: 'MCP not connected' }) });
+}
+
+// AFTER (fixed):
+} else {
+  messages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ error: 'MCP not available' }) });
 }
 ```
 
-### Fix 2: Add `readSSEStreamForTools` helper
-
-A small focused helper that reads a single SSE stream and returns the first `tools` array it finds:
-
+### Fix 5 — Line 682: Cleanup call
 ```typescript
-async function readSSEStreamForTools(reqId: string, response: Response): Promise<unknown[] | null> {
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const deadline = Date.now() + 8000; // 8s max for tools response
+// BEFORE (broken):
+mcpClient?.close();
 
-  while (Date.now() < deadline) {
-    const result = await readWithTimeout(reader, 3000);
-    if (!result || result.done) break;
-    buffer += decoder.decode(result.value, { stream: true });
-    const { events, remaining } = parseSSEBuffer(buffer);
-    buffer = remaining;
-    for (const ev of events) {
-      if (ev.type === 'message') {
-        try {
-          const d = JSON.parse(ev.data);
-          if (d.result?.tools) {
-            console.log(`[${reqId}] tools/list SSE: got ${d.result.tools.length} tools`);
-            reader.cancel();
-            return d.result.tools;
-          }
-        } catch { /* continue */ }
-      }
-    }
-  }
-  reader.cancel();
-  return null;
-}
+// AFTER (fixed):
+mcpClientInstance?.close();
 ```
 
-### Fix 3: Also send `notifications/initialized` between init and tools/list
+## Impact
 
-Per MCP spec, after receiving the `initialize` result, the client MUST send `notifications/initialized` before calling `tools/list`. Add this step (fire-and-forget, no need to read its response):
-
-```typescript
-// After getting init result, notify server then request tools
-await fetch(baseUrl, {
-  method: "POST",
-  headers: { ... },
-  body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
-});
-// Now request tools
-const toolsResp = await fetch(baseUrl, { ... tools/list ... });
-```
-
-## Technical Summary
-
-The fix is entirely within `readSSEForTools` and adds one small helper function. No new files, no secrets changes, no schema changes needed. The edge function will be redeployed automatically.
-
-The Classic SSE path (GET-based) can remain as a fallback, though the Streamable HTTP path (POST-based) already works with HelloBooks v2.14.2 — it just needs the response read correctly as SSE.
+After these fixes:
+- "Give me all bills" → MCP connects → tools loaded → LLM selects `get_all_bills` → tool call runs → real data returned
+- Fast-path intents will also execute their MCP pipeline steps correctly
+- No new files, no schema changes, no secrets changes — purely a variable name fix
+- The function will be redeployed automatically
