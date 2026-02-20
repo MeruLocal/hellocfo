@@ -98,10 +98,9 @@ serve(async (req) => {
       );
     }
 
+    // MCP spec only requires Authorization header — no extra headers
     const mcpHeaders = {
       "Authorization": `Bearer ${authToken}`,
-      "X-Entity-Id": entityId,
-      "X-Org-Id": orgId,
     };
 
     console.log(`[${reqId}] Connecting to MCP SSE endpoint...`);
@@ -115,7 +114,13 @@ serve(async (req) => {
       try {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
-        const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app").replace(/\/+$/, "");
+        const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
+        if (!mcpBaseUrl) {
+          return new Response(
+            JSON.stringify({ error: "MCP_BASE_URL secret is not configured. Please set it in the project secrets." }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
         // SSE endpoint is base_url/?entityid=...&orgid=... (root path with query params)
         const sseUrl = new URL(`${mcpBaseUrl}/`);
         sseUrl.searchParams.set("entityid", entityId);
@@ -247,7 +252,12 @@ serve(async (req) => {
         break;
       }
 
-      buffer += decoder.decode(result.value, { stream: true });
+      const chunk = decoder.decode(result.value, { stream: true });
+      // Log first chunk raw so we can diagnose what the MCP server actually sends
+      if (buffer.length === 0 && chunk.length > 0) {
+        console.log(`[${reqId}] First SSE chunk (${chunk.length} bytes): ${chunk.substring(0, 500)}`);
+      }
+      buffer += chunk;
       const { events, remaining } = parseSSEBuffer(buffer);
       buffer = remaining;
 
@@ -258,7 +268,7 @@ serve(async (req) => {
           // Server sends the message endpoint URL
           messageEndpoint = event.data;
           if (!messageEndpoint.startsWith("http")) {
-            const base = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
+            const base = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
             messageEndpoint = `${base}${messageEndpoint}`;
           }
           // Ensure entityid and orgid are present as query params on message endpoint too
