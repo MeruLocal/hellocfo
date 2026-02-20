@@ -466,7 +466,7 @@ Chat ID: ${chatDisplayId}`;
         if (authToken && resolvedEntityId && orgId) {
           send("thinking", { phase: "connecting", message: "Connecting to data source..." });
           try {
-            mcpClient = new MCPClient("https://mcp.hellobooks.ai", {
+            mcpClient = new MCPClient("https://6af2-110-225-253-88.ngrok-free.app", {
               Authorization: `Bearer ${authToken}`,
               "X-Entity-Id": resolvedEntityId,
               "X-Org-Id": orgId,

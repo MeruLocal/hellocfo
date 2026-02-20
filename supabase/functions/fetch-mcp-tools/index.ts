@@ -110,7 +110,7 @@ serve(async (req) => {
       try {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
-        sseResponse = await fetch("https://mcp.hellobooks.ai/sse", {
+        sseResponse = await fetch("https://6af2-110-225-253-88.ngrok-free.app/sse", {
           method: "GET",
           headers: {
             ...mcpHeaders,
@@ -222,7 +222,7 @@ serve(async (req) => {
           // Server sends the message endpoint URL
           messageEndpoint = event.data;
           if (!messageEndpoint.startsWith("http")) {
-            messageEndpoint = `https://mcp.hellobooks.ai${messageEndpoint}`;
+            messageEndpoint = `https://6af2-110-225-253-88.ngrok-free.app${messageEndpoint}`;
           }
           console.log(`[${reqId}] Got message endpoint: ${messageEndpoint}`);
 
