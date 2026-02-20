@@ -92,23 +92,37 @@ function classifyQuery(query: string): "bookkeeper" | "cfo" | "general_chat" {
 
 // Tool group keywords for filtering
 const TOOL_KEYWORDS: Record<string, string[]> = {
-  invoices: ["invoice", "invoices", "sales", "billing"],
-  bills: ["bill", "bills", "purchase", "payable"],
-  payments: ["payment", "payments", "paid", "received", "collection"],
-  customers: ["customer", "customers", "client", "debtor"],
-  vendors: ["vendor", "vendors", "supplier", "creditor"],
-  aging_reports: ["aging", "aged", "overdue", "outstanding", "receivable", "payable", "ar", "ap"],
-  transactions: ["transaction", "bank", "banking", "reconcil", "statement"],
+  invoices: ["invoice", "invoices", "sales", "billing", "billed", "sale"],
+  bills: ["bill", "bills", "purchase", "purchases", "payable", "payables", "vendor bill"],
+  payments: ["payment", "payments", "paid", "received", "receipt", "collection", "collected"],
+  customers: ["customer", "customers", "client", "clients", "debtor", "debtors", "buyer"],
+  vendors: ["vendor", "vendors", "supplier", "suppliers", "creditor", "creditors"],
+  aging_reports: ["aging", "ageing", "aged", "overdue", "outstanding", "receivable", "receivables", "payable", "payables", "ar", "ap", "dso", "dpo"],
+  transactions: ["transaction", "transactions", "bank", "banking", "reconcil", "uncategorized", "categorize", "statement", "transfer"],
+  credit_notes: ["credit note", "credit notes", "cn", "debit note", "return", "refund"],
+  delivery_challans: ["challan", "challans", "delivery", "dispatch", "dc"],
 };
 
 const TOOL_GROUPS: Record<string, string[]> = {
-  invoices: ["get_all_invoices", "get_invoice_by_id", "update_invoice"],
-  bills: ["get_bills", "get_bill_by_id", "update_bill"],
-  payments: ["get_all_payments", "get_payment_by_id", "update_payment"],
+  invoices: [
+    "get_all_invoices", "get_invoice_by_id", "update_invoice", "find_invoice_document",
+    "create_invoice", "create_invoice_line_item",
+  ],
+  bills: ["get_bills", "get_bill_by_id", "update_bill", "create_bill"],
+  payments: ["get_all_payments", "get_payment_by_id", "update_payment", "find_payment_document", "create_payment"],
   customers: ["get_all_customers", "get_customer_by_id", "create_customer", "update_customer"],
   vendors: ["get_all_vendors", "get_vendor_by_id", "create_vendor", "update_vendor"],
   aging_reports: ["get_aged_receivables_report", "get_aged_payables_report"],
-  transactions: ["get_all_transactions", "get_transaction_by_id", "get_grouped_transactions"],
+  transactions: [
+    "get_all_transactions", "get_transaction_by_id", "get_selected_transactions",
+    "update_transactions", "get_grouped_transactions", "get_transaction_line_items",
+    "update_transaction_line_item", "find_transfer_document",
+  ],
+  credit_notes: [
+    "get_all_sales_credit_notes", "get_sales_credit_note_by_id", "update_sales_credit_note", "find_sales_credit_note_document",
+    "get_all_purchase_credit_notes", "get_purchase_credit_note_by_id", "update_purchase_credit_note", "find_purchase_credit_note_document",
+  ],
+  delivery_challans: ["get_all_delivery_challans", "get_delivery_challan_by_id", "update_delivery_challan"],
 };
 
 function selectTools(query: string): string[] {
