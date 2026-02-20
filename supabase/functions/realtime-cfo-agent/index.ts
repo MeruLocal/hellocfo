@@ -354,16 +354,6 @@ serve(async (req) => {
             }
           }
 
-                let recordCount = 1;
-                try { const p = JSON.parse(mcpResult); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
-                sendEvent("tool_result", { tool: toolName, success: true, recordCount });
-              } catch (error) {
-                mcpResults.push({ tool: toolName, error: String(error), success: false });
-                sendEvent("tool_result", { tool: toolName, success: false, error: String(error) });
-              }
-            }
-          }
-
           // Apply enrichments
           if (enrichments.length > 0) {
             sendEvent("enrichments_applying", { enrichments: enrichments.map((e) => e.type) });
