@@ -9,20 +9,14 @@ const corsHeaders = {
 // Parse SSE events properly - handles \r\n and \n\n delimiters
 function parseSSEBuffer(buffer: string): { events: Array<{type: string, data: string}>, remaining: string } {
   const events: Array<{type: string, data: string}> = [];
-  
-  // Normalize line endings and split by double newline (event separator)
   const normalized = buffer.replace(/\r\n/g, '\n');
   const parts = normalized.split('\n\n');
-  
-  // Last part may be incomplete
   const remaining = parts.pop() || '';
   
   for (const part of parts) {
     if (!part.trim()) continue;
-    
     let eventType = 'message';
     const dataLines: string[] = [];
-    
     const lines = part.split('\n');
     for (const line of lines) {
       if (line.startsWith('event:')) {
@@ -31,16 +25,13 @@ function parseSSEBuffer(buffer: string): { events: Array<{type: string, data: st
         dataLines.push(line.substring(5).trim());
       }
     }
-    
     if (dataLines.length > 0) {
       events.push({ type: eventType, data: dataLines.join('\n') });
     }
   }
-  
   return { events, remaining };
 }
 
-// Read from stream with timeout
 async function readWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutMs: number
@@ -48,347 +39,400 @@ async function readWithTimeout(
   const timeoutPromise = new Promise<null>((resolve) => {
     setTimeout(() => resolve(null), timeoutMs);
   });
-  
   return Promise.race([reader.read(), timeoutPromise]);
+}
+
+// --- Approach 1: Streamable HTTP (new MCP spec 2025) ---
+// POST initialize directly, server responds with SSE or JSON
+async function tryStreamableHTTP(
+  reqId: string,
+  mcpBaseUrl: string,
+  authToken: string,
+  entityId: string,
+  orgId: string
+): Promise<unknown[] | null> {
+  console.log(`[${reqId}] Trying Streamable HTTP approach (POST initialize)...`);
+  
+  const baseHeaders = {
+    "Authorization": `Bearer ${authToken}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2024-11-05",
+    "ngrok-skip-browser-warning": "true",
+    "User-Agent": "MCP-Client/1.0",
+  };
+
+  // Try POST to root or /mcp path with initialize
+  const urls = [
+    `${mcpBaseUrl}/?entityid=${entityId}&orgid=${orgId}`,
+    `${mcpBaseUrl}/mcp?entityid=${entityId}&orgid=${orgId}`,
+    `${mcpBaseUrl}/sse?entityid=${entityId}&orgid=${orgId}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      console.log(`[${reqId}] Streamable HTTP POST to: ${url.replace(/entityid=[^&]+/, 'entityid=***').replace(/orgid=[^&]+/, 'orgid=***')}`);
+      const initResp = await fetch(url, {
+        method: "POST",
+        headers: baseHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "hellocfo-client", version: "1.0.0" }
+          }
+        })
+      });
+
+      console.log(`[${reqId}] POST ${url.split('?')[0].split('/').pop()}: status=${initResp.status}, content-type=${initResp.headers.get('content-type')}`);
+
+      if (!initResp.ok) {
+        const text = await initResp.text();
+        console.log(`[${reqId}] Non-OK response: ${text.substring(0, 200)}`);
+        continue;
+      }
+
+      const ct = initResp.headers.get('content-type') || '';
+
+      if (ct.includes('text/event-stream')) {
+        // Server responded with SSE — read events from this stream
+        console.log(`[${reqId}] Got SSE response from POST, reading events...`);
+        const tools = await readSSEForTools(reqId, initResp, authToken, url, entityId, orgId, 10000);
+        if (tools !== null) return tools;
+      } else {
+        // JSON response
+        const data = await initResp.json();
+        console.log(`[${reqId}] JSON init response: ${JSON.stringify(data).substring(0, 200)}`);
+        if (data.result) {
+          // Send initialized + tools/list
+          const toolsResp = await fetch(url, {
+            method: "POST",
+            headers: baseHeaders,
+            body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+          });
+          if (toolsResp.ok) {
+            const toolsData = await toolsResp.json();
+            if (toolsData.result?.tools) {
+              console.log(`[${reqId}] Got ${toolsData.result.tools.length} tools via JSON`);
+              return toolsData.result.tools;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.log(`[${reqId}] Streamable HTTP attempt failed: ${e}`);
+    }
+  }
+  return null;
+}
+
+// --- Approach 2: Classic HTTP+SSE (2024-11-05) ---
+// GET SSE endpoint → wait for `endpoint` event → POST messages
+async function tryClassicSSE(
+  reqId: string,
+  mcpBaseUrl: string,
+  authToken: string,
+  entityId: string,
+  orgId: string
+): Promise<unknown[] | null> {
+  console.log(`[${reqId}] Trying Classic SSE approach (GET for SSE stream)...`);
+
+  const mcpHeaders = {
+    "Authorization": `Bearer ${authToken}`,
+    "ngrok-skip-browser-warning": "true",
+    "User-Agent": "MCP-Client/1.0",
+  };
+
+  const sseUrl = new URL(`${mcpBaseUrl}/`);
+  sseUrl.searchParams.set("entityid", entityId);
+  sseUrl.searchParams.set("orgid", orgId);
+
+  const sseResponse = await fetch(sseUrl.toString(), {
+    method: "GET",
+    headers: {
+      ...mcpHeaders,
+      "Accept": "text/event-stream",
+      "Cache-Control": "no-cache",
+    },
+  });
+
+  const contentType = sseResponse.headers.get("content-type") || "unknown";
+  console.log(`[${reqId}] SSE GET status: ${sseResponse.status}, content-type: ${contentType}`);
+
+  if (!sseResponse.ok) {
+    const text = await sseResponse.text();
+    console.log(`[${reqId}] SSE GET failed: ${text.substring(0, 300)}`);
+    return null;
+  }
+
+  // Helper to send JSON-RPC to message endpoint
+  async function sendRequest(endpoint: string, body: object) {
+    console.log(`[${reqId}] POST to ${endpoint.split('?')[0]}: ${JSON.stringify(body).substring(0, 100)}`);
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",
+        "User-Agent": "MCP-Client/1.0",
+        ...mcpHeaders,
+      },
+      body: JSON.stringify(body),
+    });
+    console.log(`[${reqId}] POST response: ${resp.status}`);
+    if (!resp.ok && resp.status !== 202) {
+      const text = await resp.text();
+      console.error(`[${reqId}] POST failed: ${text.substring(0, 200)}`);
+      throw new Error(`POST failed: ${resp.status}`);
+    }
+    // consume body
+    try { await resp.text(); } catch { /* ignore */ }
+  }
+
+  const reader = sseResponse.body?.getReader();
+  if (!reader) return null;
+
+  const tools = await readSSEForToolsWithHandshake(reqId, reader, mcpBaseUrl, authToken, entityId, orgId, sendRequest, 25000);
+  reader.cancel();
+  return tools;
+}
+
+// Read SSE stream from a POST response (Streamable HTTP)
+async function readSSEForTools(
+  reqId: string,
+  response: Response,
+  authToken: string,
+  baseUrl: string,
+  entityId: string,
+  orgId: string,
+  timeoutMs: number
+): Promise<unknown[] | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let tools: unknown[] | null = null;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const result = await readWithTimeout(reader, 3000);
+    if (result === null) continue;
+    if (result.done) break;
+
+    const chunk = decoder.decode(result.value, { stream: true });
+    if (buffer.length === 0) console.log(`[${reqId}] SSE chunk: ${chunk.substring(0, 300)}`);
+    buffer += chunk;
+
+    const { events, remaining } = parseSSEBuffer(buffer);
+    buffer = remaining;
+
+    for (const event of events) {
+      console.log(`[${reqId}] SSE event type=${event.type}: ${event.data.substring(0, 200)}`);
+      if (event.type === 'message') {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.result?.tools) {
+            tools = data.result.tools;
+            break;
+          }
+          if (data.result && data.id === 1) {
+            // Got init response, now ask for tools
+            const toolsResp = await fetch(baseUrl, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${authToken}`,
+                "Content-Type": "application/json",
+                "ngrok-skip-browser-warning": "true",
+                "User-Agent": "MCP-Client/1.0",
+              },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
+            });
+            if (toolsResp.ok) {
+              const td = await toolsResp.json();
+              if (td.result?.tools) { tools = td.result.tools; break; }
+            }
+          }
+        } catch { /* continue */ }
+      }
+    }
+    if (tools) break;
+  }
+
+  reader.cancel();
+  return tools;
+}
+
+// Read SSE stream from GET, managing MCP handshake
+async function readSSEForToolsWithHandshake(
+  reqId: string,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  mcpBaseUrl: string,
+  _authToken: string,
+  entityId: string,
+  orgId: string,
+  sendRequest: (endpoint: string, body: object) => Promise<void>,
+  timeoutMs: number
+): Promise<unknown[] | null> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let tools: unknown[] | null = null;
+  let state: 'waiting_endpoint' | 'waiting_init' | 'waiting_tools' = 'waiting_endpoint';
+  let messageEndpoint = "";
+  const deadline = Date.now() + timeoutMs;
+  let firstChunk = true;
+
+  while (Date.now() < deadline) {
+    const result = await readWithTimeout(reader, 4000);
+    if (result === null) {
+      console.log(`[${reqId}] Read timeout, state=${state}, elapsed=${Date.now() - (deadline - timeoutMs)}ms`);
+      continue;
+    }
+    if (result.done) { console.log(`[${reqId}] Stream ended`); break; }
+
+    const chunk = decoder.decode(result.value, { stream: true });
+    if (firstChunk) {
+      console.log(`[${reqId}] First chunk (${chunk.length}b): ${chunk.substring(0, 400)}`);
+      firstChunk = false;
+    }
+    buffer += chunk;
+
+    const { events, remaining } = parseSSEBuffer(buffer);
+    buffer = remaining;
+
+    for (const event of events) {
+      console.log(`[${reqId}] Event type=${event.type} data=${event.data.substring(0, 200)}`);
+
+      if (event.type === "endpoint" && state === 'waiting_endpoint') {
+        messageEndpoint = event.data.trim();
+        if (!messageEndpoint.startsWith("http")) {
+          const base = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
+          messageEndpoint = `${base}${messageEndpoint}`;
+        }
+        try {
+          const epUrl = new URL(messageEndpoint);
+          if (!epUrl.searchParams.has("entityid")) epUrl.searchParams.set("entityid", entityId);
+          if (!epUrl.searchParams.has("orgid")) epUrl.searchParams.set("orgid", orgId);
+          messageEndpoint = epUrl.toString();
+        } catch { /* keep as-is */ }
+        console.log(`[${reqId}] Got endpoint: ${messageEndpoint.replace(/entityid=[^&]+/, '***').replace(/orgid=[^&]+/, '***')}`);
+        state = 'waiting_init';
+        await sendRequest(messageEndpoint, {
+          jsonrpc: "2.0", id: 1, method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "hellocfo-client", version: "1.0.0" } }
+        });
+      }
+
+      if (event.type === "message" && state !== 'waiting_endpoint') {
+        try {
+          const data = JSON.parse(event.data);
+          console.log(`[${reqId}] Message id=${data.id} hasResult=${!!data.result} hasError=${!!data.error}`);
+          if (data.error) {
+            console.error(`[${reqId}] MCP error: ${JSON.stringify(data.error)}`);
+            return null;
+          }
+          if (data.id === 1 && data.result && state === 'waiting_init') {
+            await sendRequest(messageEndpoint, { jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+            state = 'waiting_tools';
+            await sendRequest(messageEndpoint, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+          }
+          if (data.id === 2 && data.result && state === 'waiting_tools') {
+            tools = data.result.tools || [];
+            console.log(`[${reqId}] Got ${tools?.length} tools!`);
+            return tools;
+          }
+        } catch { /* continue */ }
+      }
+    }
+    if (tools) break;
+  }
+  console.log(`[${reqId}] Classic SSE ended in state=${state}`);
+  return tools;
 }
 
 serve(async (req) => {
   const reqId = crypto.randomUUID().slice(0, 8);
-  console.log(`[${reqId}] Starting MCP tools fetch`);
+  console.log(`[${reqId}] fetch-mcp-tools START`);
 
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Get credentials from H-Authorization header and body first, fallback to env
     const hAuthHeader = req.headers.get("H-Authorization");
-    // Strip ALL "Bearer " prefixes (handles double-prefix like "Bearer Bearer <token>")
     let authTokenFromHeader: string | null = hAuthHeader ?? null;
     while (authTokenFromHeader?.toLowerCase().startsWith("bearer ")) {
       authTokenFromHeader = authTokenFromHeader.substring(7).trim();
     }
     if (!authTokenFromHeader) authTokenFromHeader = null;
-    
-    // Parse body for entityId and orgId if POST request
+
     let bodyEntityId: string | null = null;
     let bodyOrgId: string | null = null;
-    
+
     if (req.method === "POST") {
       try {
         const body = await req.json();
         bodyEntityId = body.entityId || null;
         bodyOrgId = body.orgId || null;
-      } catch {
-        // Body parsing failed, continue with env vars
-      }
+      } catch { /* ignore */ }
     }
-    
+
     const authToken = authTokenFromHeader || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
     const entityId = bodyEntityId || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID");
     const orgId = bodyOrgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
-    
-    console.log(`[${reqId}] Using credentials from: auth=${authTokenFromHeader ? 'header' : 'env'}, entityId=${bodyEntityId ? 'body' : 'env'}, orgId=${bodyOrgId ? 'body' : 'env'}`);
+
+    console.log(`[${reqId}] auth=${authTokenFromHeader ? 'header' : 'env'}, entityId=${bodyEntityId ? 'body' : 'env'}, orgId=${bodyOrgId ? 'body' : 'env'}`);
 
     if (!authToken || !entityId || !orgId) {
-      console.error(`[${reqId}] Missing MCP credentials`);
       return new Response(
-        JSON.stringify({ error: "MCP credentials not configured. Provide H-Authorization header and entityId/orgId in body, or configure env vars." }),
+        JSON.stringify({ error: "MCP credentials not configured. Provide H-Authorization header and entityId/orgId in body." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // MCP spec only requires Authorization header — no extra headers
-    const mcpHeaders = {
-      "Authorization": `Bearer ${authToken}`,
-    };
-
-    console.log(`[${reqId}] Connecting to MCP SSE endpoint...`);
-
-    // Connect to SSE endpoint with retry logic for 503 errors
-    const MAX_RETRIES = 3;
-    let sseResponse: Response | null = null;
-    let lastError = "";
-    
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
-        
-        const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
-        if (!mcpBaseUrl) {
-          return new Response(
-            JSON.stringify({ error: "MCP_BASE_URL secret is not configured. Please set it in the project secrets." }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-        // SSE endpoint is base_url/?entityid=...&orgid=... (root path with query params)
-        const sseUrl = new URL(`${mcpBaseUrl}/`);
-        sseUrl.searchParams.set("entityid", entityId);
-        sseUrl.searchParams.set("orgid", orgId);
-        console.log(`[${reqId}] SSE URL: ${sseUrl.toString().replace(/entityid=[^&]+/, 'entityid=***').replace(/orgid=[^&]+/, 'orgid=***')}`);
-        console.log(`[${reqId}] MCP_BASE_URL secret value starts with: ${mcpBaseUrl.substring(0, 30)}...`);
-        
-        sseResponse = await fetch(sseUrl.toString(), {
-          method: "GET",
-          headers: {
-            ...mcpHeaders,
-            "Accept": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "ngrok-skip-browser-warning": "true",
-            "User-Agent": "MCP-Client/1.0",  // bypass ngrok interstitial (non-standard UA)
-          },
-        });
-
-        const contentType = sseResponse.headers.get("content-type") || "unknown";
-        console.log(`[${reqId}] SSE response status: ${sseResponse.status}, content-type: ${contentType}`);
-
-        if (sseResponse.ok) {
-          break; // Success, exit retry loop
-        }
-
-        // Never retry on 401/403 (auth errors)
-        if (sseResponse.status === 401 || sseResponse.status === 403) {
-          lastError = await sseResponse.text();
-          console.error(`[${reqId}] Auth error ${sseResponse.status}: ${lastError}`);
-          break;
-        }
-
-        // Handle 503/504 with retry
-        if ((sseResponse.status === 503 || sseResponse.status === 504) && attempt < MAX_RETRIES) {
-          const retryDelay = attempt * 1000;
-          console.log(`[${reqId}] MCP server unavailable (${sseResponse.status}), retrying in ${retryDelay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, retryDelay));
-          continue;
-        }
-
-        // Non-retryable error or last attempt
-        lastError = await sseResponse.text();
-        console.error(`[${reqId}] SSE connection failed: ${lastError}`);
-      } catch (fetchError) {
-        lastError = fetchError instanceof Error ? fetchError.message : "Network error";
-        console.error(`[${reqId}] SSE fetch error: ${lastError}`);
-        if (attempt < MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-        }
-      }
-    }
-
-    if (!sseResponse || !sseResponse.ok) {
-      const status = sseResponse?.status || 0;
-      const isAuthError = status === 401 || status === 403;
-      
-      let errorDetails: string;
-      try {
-        const parsed = JSON.parse(lastError);
-        errorDetails = parsed.detail || parsed.error || lastError;
-      } catch {
-        errorDetails = lastError || "Unknown error";
-      }
-
+    const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
+    if (!mcpBaseUrl) {
       return new Response(
-        JSON.stringify({ 
-          error: isAuthError 
-            ? "MCP authentication failed" 
-            : "MCP server temporarily unavailable",
-          details: isAuthError
-            ? `Authentication rejected by MCP server: ${errorDetails}. Please check your H-Authorization token, Entity ID, and Org ID.`
-            : "The MCP server is currently unavailable. Please try again in a few minutes.",
-          status,
-          tools: []
-        }),
-        { status: isAuthError ? 401 : 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const reader = sseResponse.body?.getReader();
-    if (!reader) {
-      return new Response(
-        JSON.stringify({ error: "Failed to get SSE reader" }),
+        JSON.stringify({ error: "MCP_BASE_URL secret is not configured." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+    console.log(`[${reqId}] MCP_BASE_URL: ${mcpBaseUrl.substring(0, 40)}...`);
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let messageEndpoint = "";
-    let tools: unknown[] = [];
-    
-    // State machine
-    let state: 'waiting_endpoint' | 'waiting_init_response' | 'waiting_tools_response' = 'waiting_endpoint';
-    
-    const OVERALL_TIMEOUT = 30000;
-    const READ_TIMEOUT = 5000;
-    const startTime = Date.now();
+    // Try Streamable HTTP first (newer spec), then fall back to Classic SSE
+    let tools: unknown[] | null = null;
 
-    // Helper to send JSON-RPC request
-    async function sendRequest(endpoint: string, body: object) {
-      console.log(`[${reqId}] Sending to ${endpoint}: ${JSON.stringify(body)}`);
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true",
-          ...mcpHeaders,
-        },
-        body: JSON.stringify(body),
-      });
-      console.log(`[${reqId}] POST response status: ${response.status}`);
-      if (!response.ok && response.status !== 202) {
-        const text = await response.text();
-        console.error(`[${reqId}] POST failed: ${text}`);
-        throw new Error(`POST failed: ${response.status} ${text}`);
-      }
+    tools = await tryStreamableHTTP(reqId, mcpBaseUrl, authToken, entityId, orgId);
+
+    if (!tools) {
+      console.log(`[${reqId}] Streamable HTTP failed, trying Classic SSE...`);
+      tools = await tryClassicSSE(reqId, mcpBaseUrl, authToken, entityId, orgId);
     }
 
-    // Main read loop
-    while (Date.now() - startTime < OVERALL_TIMEOUT) {
-      const result = await readWithTimeout(reader, READ_TIMEOUT);
-      
-      if (result === null) {
-        // Timeout on this read, but overall not expired yet
-        console.log(`[${reqId}] Read timeout, state=${state}, continuing...`);
-        continue;
-      }
-      
-      if (result.done) {
-        console.log(`[${reqId}] SSE stream ended`);
-        break;
-      }
-
-      const chunk = decoder.decode(result.value, { stream: true });
-      // Log first chunk raw so we can diagnose what the MCP server actually sends
-      if (buffer.length === 0 && chunk.length > 0) {
-        console.log(`[${reqId}] First SSE chunk (${chunk.length} bytes): ${chunk.substring(0, 500)}`);
-      }
-      buffer += chunk;
-      const { events, remaining } = parseSSEBuffer(buffer);
-      buffer = remaining;
-
-      for (const event of events) {
-        console.log(`[${reqId}] SSE event: type=${event.type}, data=${event.data.substring(0, 200)}`);
-
-        if (event.type === "endpoint" && state === 'waiting_endpoint') {
-          // Server sends the message endpoint URL
-          messageEndpoint = event.data;
-          if (!messageEndpoint.startsWith("http")) {
-            const base = (Deno.env.get("MCP_BASE_URL") || "").replace(/\/+$/, "");
-            messageEndpoint = `${base}${messageEndpoint}`;
-          }
-          // Ensure entityid and orgid are present as query params on message endpoint too
-          try {
-            const epUrl = new URL(messageEndpoint);
-            if (!epUrl.searchParams.has("entityid")) epUrl.searchParams.set("entityid", entityId);
-            if (!epUrl.searchParams.has("orgid")) epUrl.searchParams.set("orgid", orgId);
-            messageEndpoint = epUrl.toString();
-          } catch { /* keep as-is if URL parsing fails */ }
-          console.log(`[${reqId}] Got message endpoint: ${messageEndpoint}`);
-
-          // Send initialize request
-          state = 'waiting_init_response';
-          await sendRequest(messageEndpoint, {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: {
-              protocolVersion: "2024-11-05",
-              capabilities: {},
-              clientInfo: { name: "lovable-mcp-client", version: "1.0.0" }
-            }
-          });
-          console.log(`[${reqId}] Initialize request sent`);
-        }
-
-        if (event.type === "message") {
-          try {
-            const data = JSON.parse(event.data);
-            console.log(`[${reqId}] Parsed message: id=${data.id}, hasResult=${!!data.result}, hasError=${!!data.error}`);
-
-            // Handle errors
-            if (data.error) {
-              console.error(`[${reqId}] MCP error: ${JSON.stringify(data.error)}`);
-              reader.cancel();
-              return new Response(
-                JSON.stringify({ error: data.error.message || "MCP error", details: data.error }),
-                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-
-            // Check for initialize response (id: 1)
-            if (data.id === 1 && data.result && state === 'waiting_init_response') {
-              console.log(`[${reqId}] Initialize successful, sending notifications/initialized...`);
-              
-              // Send notifications/initialized (required by MCP spec)
-              await sendRequest(messageEndpoint, {
-                jsonrpc: "2.0",
-                method: "notifications/initialized",
-                params: {}
-              });
-              console.log(`[${reqId}] notifications/initialized sent`);
-
-              // Now request tools list
-              state = 'waiting_tools_response';
-              await sendRequest(messageEndpoint, {
-                jsonrpc: "2.0",
-                id: 2,
-                method: "tools/list",
-                params: {}
-              });
-              console.log(`[${reqId}] tools/list request sent`);
-            }
-
-            // Check for tools/list response (id: 2)
-            if (data.id === 2 && data.result && state === 'waiting_tools_response') {
-              tools = data.result.tools || [];
-              console.log(`[${reqId}] Got tools: ${tools.length} tools`);
-              reader.cancel();
-              break;
-            }
-          } catch (e) {
-            console.log(`[${reqId}] Failed to parse message: ${e}`);
-          }
-        }
-      }
-
-      // Exit if we got tools
-      if (tools.length > 0) break;
-    }
-
-    reader.cancel();
-
-    // Check if we timed out in a specific state
-    if (tools.length === 0) {
-      let errorMsg = "Unknown error";
-      if (state === 'waiting_endpoint') {
-        errorMsg = "No endpoint event received from SSE";
-      } else if (state === 'waiting_init_response') {
-        errorMsg = "Initialize response timeout";
-      } else if (state === 'waiting_tools_response') {
-        errorMsg = "tools/list response timeout";
-      }
-      console.error(`[${reqId}] Timeout in state: ${state}`);
+    if (!tools || tools.length === 0) {
       return new Response(
         JSON.stringify({
           error: "MCP server temporarily unavailable",
-          details: "The HelloBooks MCP server did not respond in time. Please try again in a few minutes.",
-          state,
+          details: "Could not retrieve tools via Streamable HTTP or Classic SSE. Check MCP server logs.",
           tools: [],
         }),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`[${reqId}] Success! Returning ${tools.length} tools`);
-
+    console.log(`[${reqId}] SUCCESS: ${tools.length} tools`);
     return new Response(
-      JSON.stringify({ tools, source: "mcp_sse" }),
+      JSON.stringify({ tools, source: "mcp" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error: unknown) {
-    console.error(`[${reqId}] Error fetching MCP tools:`, error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[${reqId}] Error:`, msg);
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: msg }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
