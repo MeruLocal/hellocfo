@@ -63,7 +63,12 @@ serve(async (req) => {
   try {
     // Get credentials from H-Authorization header and body first, fallback to env
     const hAuthHeader = req.headers.get("H-Authorization");
-    const authTokenFromHeader = hAuthHeader?.startsWith("Bearer ") ? hAuthHeader.replace("Bearer ", "").trim() : null;
+    // Strip ALL "Bearer " prefixes (handles double-prefix like "Bearer Bearer <token>")
+    let authTokenFromHeader: string | null = hAuthHeader ?? null;
+    while (authTokenFromHeader?.toLowerCase().startsWith("bearer ")) {
+      authTokenFromHeader = authTokenFromHeader.substring(7).trim();
+    }
+    if (!authTokenFromHeader) authTokenFromHeader = null;
     
     // Parse body for entityId and orgId if POST request
     let bodyEntityId: string | null = null;
