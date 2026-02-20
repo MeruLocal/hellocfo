@@ -115,12 +115,13 @@ serve(async (req) => {
       try {
         console.log(`[${reqId}] SSE connection attempt ${attempt}/${MAX_RETRIES}`);
         
-        const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app";
-        // MCP server requires entityid and orgid as query parameters
-        const sseUrl = new URL(`${mcpBaseUrl}/sse`);
+        const mcpBaseUrl = (Deno.env.get("MCP_BASE_URL") || "https://6af2-110-225-253-88.ngrok-free.app").replace(/\/+$/, "");
+        // Build SSE URL - avoid double-pathing if MCP_BASE_URL already ends with /sse
+        const sseBase = mcpBaseUrl.endsWith("/sse") ? mcpBaseUrl : `${mcpBaseUrl}/sse`;
+        const sseUrl = new URL(sseBase);
         sseUrl.searchParams.set("entityid", entityId);
         sseUrl.searchParams.set("orgid", orgId);
-        console.log(`[${reqId}] SSE URL: ${sseUrl.toString()}`);
+        console.log(`[${reqId}] SSE URL (MCP_BASE_URL was: ${mcpBaseUrl}): ${sseUrl.toString()}`);
         
         sseResponse = await fetch(sseUrl.toString(), {
           method: "GET",
