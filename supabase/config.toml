@@ -35,3 +35,12 @@ verify_jwt = false
 
 [functions.get-tool-analytics]
 verify_jwt = false
+
+[functions.munimji-agent]
+verify_jwt = false
+
+[functions.upload-attachment]
+verify_jwt = false
+
+[functions.export-chat]
+verify_jwt = false
