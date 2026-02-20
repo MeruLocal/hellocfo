@@ -491,6 +491,174 @@ export type Database = {
           },
         ]
       }
+      meta_account_health: {
+        Row: {
+          account_status: string
+          current_quality_score: number
+          id: string
+          messages_sent_today: number
+          messaging_limit: string
+          quality_rating: string
+          templates_approved_30d: number
+          templates_rejected_30d: number
+          templates_submitted_today: number
+          updated_at: string
+        }
+        Insert: {
+          account_status?: string
+          current_quality_score?: number
+          id?: string
+          messages_sent_today?: number
+          messaging_limit?: string
+          quality_rating?: string
+          templates_approved_30d?: number
+          templates_rejected_30d?: number
+          templates_submitted_today?: number
+          updated_at?: string
+        }
+        Update: {
+          account_status?: string
+          current_quality_score?: number
+          id?: string
+          messages_sent_today?: number
+          messaging_limit?: string
+          quality_rating?: string
+          templates_approved_30d?: number
+          templates_rejected_30d?: number
+          templates_submitted_today?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      meta_blocked_content: {
+        Row: {
+          category: string
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          pattern: string
+          pattern_type: string
+          severity: string
+        }
+        Insert: {
+          category?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          pattern: string
+          pattern_type?: string
+          severity?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          pattern?: string
+          pattern_type?: string
+          severity?: string
+        }
+        Relationships: []
+      }
+      meta_messaging_consent: {
+        Row: {
+          consent_source: string
+          consent_type: string
+          consented_at: string
+          created_at: string
+          entity_id: string | null
+          id: string
+          is_active: boolean
+          opted_out_at: string | null
+          org_id: string | null
+          phone_e164: string
+          updated_at: string
+        }
+        Insert: {
+          consent_source: string
+          consent_type?: string
+          consented_at?: string
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          is_active?: boolean
+          opted_out_at?: string | null
+          org_id?: string | null
+          phone_e164: string
+          updated_at?: string
+        }
+        Update: {
+          consent_source?: string
+          consent_type?: string
+          consented_at?: string
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          is_active?: boolean
+          opted_out_at?: string | null
+          org_id?: string | null
+          phone_e164?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      meta_rate_limits: {
+        Row: {
+          action_type: string
+          created_at: string
+          id: string
+          window_end: string
+          window_start: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string
+          id?: string
+          window_end: string
+          window_start?: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string
+          id?: string
+          window_end?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
+      meta_template_audit: {
+        Row: {
+          action: string
+          created_at: string
+          id: string
+          meta_response: Json | null
+          submitted_by: string | null
+          template_name: string
+          validation_result: Json | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          id?: string
+          meta_response?: Json | null
+          submitted_by?: string | null
+          template_name: string
+          validation_result?: Json | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          id?: string
+          meta_response?: Json | null
+          submitted_by?: string | null
+          template_name?: string
+          validation_result?: Json | null
+        }
+        Relationships: []
+      }
       modules: {
         Row: {
           color: string
@@ -617,6 +785,42 @@ export type Database = {
         }
         Relationships: []
       }
+      template_notifications: {
+        Row: {
+          created_at: string
+          id: string
+          is_read: boolean
+          new_status: string
+          notification_type: string
+          previous_status: string | null
+          rejection_reason: string | null
+          template_id: string
+          template_name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          new_status: string
+          notification_type: string
+          previous_status?: string | null
+          rejection_reason?: string | null
+          template_id: string
+          template_name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          new_status?: string
+          notification_type?: string
+          previous_status?: string | null
+          rejection_reason?: string | null
+          template_id?: string
+          template_name?: string
+        }
+        Relationships: []
+      }
       tool_registry: {
         Row: {
           avg_feedback_score: number | null
@@ -725,6 +929,138 @@ export type Database = {
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
           user_id?: string
+        }
+        Relationships: []
+      }
+      whatsapp_messages: {
+        Row: {
+          body: string | null
+          created_at: string
+          direction: string
+          entity_id: string | null
+          error_code: string | null
+          error_message: string | null
+          id: string
+          media_content_type: string | null
+          media_url: string | null
+          message_type: string
+          org_id: string | null
+          phone_e164: string
+          processing_status: string
+          template_key: string | null
+          twilio_sid: string | null
+          updated_at: string
+        }
+        Insert: {
+          body?: string | null
+          created_at?: string
+          direction?: string
+          entity_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          media_content_type?: string | null
+          media_url?: string | null
+          message_type?: string
+          org_id?: string | null
+          phone_e164: string
+          processing_status?: string
+          template_key?: string | null
+          twilio_sid?: string | null
+          updated_at?: string
+        }
+        Update: {
+          body?: string | null
+          created_at?: string
+          direction?: string
+          entity_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          media_content_type?: string | null
+          media_url?: string | null
+          message_type?: string
+          org_id?: string | null
+          phone_e164?: string
+          processing_status?: string
+          template_key?: string | null
+          twilio_sid?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      whatsapp_templates: {
+        Row: {
+          buttons: Json
+          category: string
+          country_codes: string[]
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          is_template: boolean
+          message_body: string
+          meta_quality_score: string | null
+          meta_rejection_reason: string | null
+          meta_reviewed_at: string | null
+          meta_status: string | null
+          meta_submitted_at: string | null
+          meta_template_id: string | null
+          name: string
+          sort_order: number
+          template_key: string
+          twilio_sid: string | null
+          updated_at: string
+          variables: Json
+          whatsapp_category: string
+        }
+        Insert: {
+          buttons?: Json
+          category?: string
+          country_codes?: string[]
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          is_template?: boolean
+          message_body?: string
+          meta_quality_score?: string | null
+          meta_rejection_reason?: string | null
+          meta_reviewed_at?: string | null
+          meta_status?: string | null
+          meta_submitted_at?: string | null
+          meta_template_id?: string | null
+          name: string
+          sort_order?: number
+          template_key: string
+          twilio_sid?: string | null
+          updated_at?: string
+          variables?: Json
+          whatsapp_category?: string
+        }
+        Update: {
+          buttons?: Json
+          category?: string
+          country_codes?: string[]
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          is_template?: boolean
+          message_body?: string
+          meta_quality_score?: string | null
+          meta_rejection_reason?: string | null
+          meta_reviewed_at?: string | null
+          meta_status?: string | null
+          meta_submitted_at?: string | null
+          meta_template_id?: string | null
+          name?: string
+          sort_order?: number
+          template_key?: string
+          twilio_sid?: string | null
+          updated_at?: string
+          variables?: Json
+          whatsapp_category?: string
         }
         Relationships: []
       }

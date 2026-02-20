@@ -63,7 +63,7 @@ export async function validateTemplateContent(
   let score = 100;
 
   // 1. Check for prohibited patterns from database
-  const { data: blockedContent } = await supabase
+  const { data: blockedContent } = await (supabase as any)
     .from("meta_blocked_content")
     .select("*")
     .eq("is_active", true);
@@ -211,7 +211,7 @@ export async function checkRateLimit(
   const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000);
 
   // Count actions in window
-  const { count } = await supabase
+  const { count } = await (supabase as any)
     .from("meta_rate_limits")
     .select("*", { count: 'exact', head: true })
     .eq("action_type", actionType)
@@ -246,7 +246,7 @@ export async function recordRateLimitAction(
   const now = new Date();
   const windowEnd = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour window
 
-  await supabase.from("meta_rate_limits").insert({
+  await (supabase as any).from("meta_rate_limits").insert({
     action_type: actionType,
     window_start: now.toISOString(),
     window_end: windowEnd.toISOString(),
@@ -259,7 +259,7 @@ export async function recordRateLimitAction(
 export async function checkMessagingConsent(
   phoneE164: string
 ): Promise<{ hasConsent: boolean; consentType?: string; optedOutAt?: string }> {
-  const { data } = await supabase
+  const { data } = await (supabase as any)
     .from("meta_messaging_consent")
     .select("*")
     .eq("phone_e164", phoneE164)
@@ -287,7 +287,7 @@ export async function recordMessagingConsent(
   entityId?: string,
   orgId?: string
 ): Promise<boolean> {
-  const { error } = await supabase
+  const { error } = await (supabase as any)
     .from("meta_messaging_consent")
     .upsert({
       phone_e164: phoneE164,
@@ -307,7 +307,7 @@ export async function recordMessagingConsent(
  * Record opt-out
  */
 export async function recordOptOut(phoneE164: string): Promise<boolean> {
-  const { error } = await supabase
+  const { error } = await (supabase as any)
     .from("meta_messaging_consent")
     .update({
       opted_out_at: new Date().toISOString(),
@@ -328,7 +328,7 @@ export async function logTemplateAudit(
   metaResponse?: any,
   submittedBy?: string
 ): Promise<void> {
-  await supabase.from("meta_template_audit").insert({
+  await (supabase as any).from("meta_template_audit").insert({
     template_name: templateName,
     action,
     validation_result: validationResult as any,
@@ -349,7 +349,7 @@ export async function getAccountHealth(): Promise<{
   messagesSentToday: number;
   rejectionRate30d: number;
 }> {
-  const { data } = await supabase
+  const { data } = await (supabase as any)
     .from("meta_account_health")
     .select("*")
     .limit(1)
@@ -384,7 +384,7 @@ export async function updateAccountHealth(
     account_status: string;
   }>
 ): Promise<void> {
-  await supabase
+  await (supabase as any)
     .from("meta_account_health")
     .update(updates)
     .neq("id", ""); // Update all rows
