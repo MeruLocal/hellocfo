@@ -264,6 +264,7 @@ const PAGINATION_FOLLOW_PATTERNS = [
   /\b(more|next|next\s+page|show\s+more|aur\s+dikhao|agla|agle|next\s+\d+)\b/i,
   /\b(previous|prev|pichla|pehle\s+wale)\b/i,
 ];
+const OVERDUE_PATTERNS = [/\boverdue\b/i, /\bpast\s+due\b/i, /\bdue\s+date\s+passed\b/i, /\blate\s+payments?\b/i];
 
 const LIST_TOOL_PATTERNS = /^(get_|list_|fetch_|search_|find_)/i;
 
@@ -273,6 +274,10 @@ function isBulkListQuery(query: string): boolean {
 
 function isPaginationFollowUp(query: string): boolean {
   return PAGINATION_FOLLOW_PATTERNS.some(p => p.test(query));
+}
+
+function isOverdueQuery(query: string): boolean {
+  return OVERDUE_PATTERNS.some(p => p.test(query));
 }
 
 function isListTool(toolName: string): boolean {
@@ -292,6 +297,18 @@ function detectRequestedEntities(query: string): string[] {
   if (/\bdelivery.?challans?\b/.test(q)) entities.push('delivery_challans');
   if (/\btransactions?\b/.test(q)) entities.push('transactions');
   return entities;
+}
+
+function hasUnresolvedTemplatePlaceholders(text: string): boolean {
+  return /\{[a-zA-Z0-9_.-]+\}/.test(text);
+}
+
+function isLikelyTransientNoDataResponse(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    t.includes('no records found') &&
+    (t.includes('temporary issue') || t.includes('try again') || t.includes('right now'))
+  );
 }
 
 const ENTITY_KEYWORDS: Record<string, string[]> = {
@@ -334,6 +351,7 @@ function inferEntityFromTool(
 function scoreListToolForEntity(
   tool: { name: string; description: string; inputSchema: unknown },
   entity: string,
+  preferOverdue = false,
 ): number {
   const keywords = ENTITY_KEYWORDS[entity] || [entity.replace(/_/g, ' ')];
   const text = `${tool.name} ${tool.description || ''}`.toLowerCase();
@@ -351,6 +369,7 @@ function scoreListToolForEntity(
   if (/\b(all|list|fetch|search|find)\b/.test(text)) score += 3;
   if (/\bby[_\s-]?id\b|\bdetail\b|\bsingle\b/.test(text)) score -= 5;
   if (/^(create_|update_|delete_|void_|cancel_)/.test(nameLower)) score -= 8;
+  if (preferOverdue && /\boverdue|aging|ageing|receivable|payable|due\b/.test(text)) score += 5;
 
   const schema = tool.inputSchema as { properties?: Record<string, unknown> } | undefined;
   const properties = schema?.properties ? Object.keys(schema.properties) : [];
@@ -367,15 +386,281 @@ function scoreListToolForEntity(
 function selectPreferredListToolForEntity(
   entity: string,
   tools: Array<{ name: string; description: string; inputSchema: unknown }>,
+  preferOverdue = false,
 ): { toolName: string; score: number } | null {
   let best: { toolName: string; score: number } | null = null;
   for (const tool of tools) {
-    const score = scoreListToolForEntity(tool, entity);
+    const score = scoreListToolForEntity(tool, entity, preferOverdue);
     if (!Number.isFinite(score)) continue;
     if (!best || score > best.score) best = { toolName: tool.name, score };
   }
   if (!best || best.score <= 0) return null;
   return best;
+}
+
+function selectPreferredListToolsForEntities(
+  entities: string[],
+  tools: Array<{ name: string; description: string; inputSchema: unknown }>,
+  preferOverdue = false,
+): Array<{ entity: string; toolName: string; score: number }> {
+  const picks: Array<{ entity: string; toolName: string; score: number }> = [];
+  const used = new Set<string>();
+
+  for (const entity of entities) {
+    let best: { toolName: string; score: number } | null = null;
+    for (const tool of tools) {
+      if (!isListTool(tool.name) || used.has(tool.name)) continue;
+      const score = scoreListToolForEntity(tool, entity, preferOverdue);
+      if (!Number.isFinite(score)) continue;
+      if (!best || score > best.score) best = { toolName: tool.name, score };
+    }
+    if (best && best.score > 0) {
+      picks.push({ entity, toolName: best.toolName, score: best.score });
+      used.add(best.toolName);
+    }
+  }
+
+  return picks;
+}
+
+function stripMarkdownCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fence ? fence[1] : trimmed;
+}
+
+function coerceToObjectArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v));
+}
+
+function extractFirstObjectArray(obj: Record<string, unknown>): Record<string, unknown>[] {
+  const preferred = ['data', 'items', 'results', 'records', 'rows', 'invoices', 'bills', 'vendors', 'customers', 'payments'];
+  for (const key of preferred) {
+    const arr = coerceToObjectArray(obj[key]);
+    if (arr.length > 0) return arr;
+  }
+  for (const value of Object.values(obj)) {
+    const arr = coerceToObjectArray(value);
+    if (arr.length > 0) return arr;
+  }
+  return [];
+}
+
+function extractTotalCount(obj: Record<string, unknown>): number | undefined {
+  const keys = ['total', 'total_count', 'totalCount', 'count', 'record_count', 'recordCount'];
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractHasMore(obj: Record<string, unknown>): boolean | undefined {
+  const keys = ['has_more', 'hasMore', 'more', 'has_next', 'hasNext'];
+  for (const key of keys) {
+    if (typeof obj[key] === 'boolean') return obj[key] as boolean;
+  }
+  return undefined;
+}
+
+function parseListToolResult(result: string): {
+  rows: Record<string, unknown>[];
+  totalCount?: number;
+  hasMore?: boolean;
+  parseError?: string;
+} {
+  const cleaned = stripMarkdownCodeFence(result);
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) return { rows: coerceToObjectArray(parsed) };
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      return {
+        rows: extractFirstObjectArray(obj),
+        totalCount: extractTotalCount(obj),
+        hasMore: extractHasMore(obj),
+      };
+    }
+    return { rows: [] };
+  } catch (e) {
+    return { rows: [], parseError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function normalizeKeyForMatch(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function findKeyByAlias(keys: string[], aliases: string[]): string | null {
+  const byNorm = new Map(keys.map(k => [normalizeKeyForMatch(k), k]));
+  for (const alias of aliases) {
+    const found = byNorm.get(normalizeKeyForMatch(alias));
+    if (found) return found;
+  }
+  return null;
+}
+
+const ENTITY_COLUMN_ALIASES: Record<string, string[][]> = {
+  invoices: [
+    ['invoice_number', 'invoice_no', 'invoice'],
+    ['customer_name', 'customer', 'party_name', 'party'],
+    ['issue_date', 'invoice_date', 'date'],
+    ['due_date', 'due'],
+    ['status', 'workflow_status', 'invoice_status'],
+    ['total', 'total_amount', 'amount', 'grand_total', 'balance'],
+  ],
+  bills: [
+    ['bill_number', 'bill_no', 'bill'],
+    ['vendor_name', 'vendor', 'party_name', 'party'],
+    ['issue_date', 'bill_date', 'date'],
+    ['due_date', 'due'],
+    ['status', 'workflow_status', 'bill_status'],
+    ['total', 'total_amount', 'amount', 'grand_total', 'balance'],
+  ],
+  vendors: [
+    ['vendor_name', 'name', 'display_name'],
+    ['gstin', 'gst_number', 'tax_id'],
+    ['email', 'email_address'],
+    ['phone', 'mobile', 'contact_number'],
+    ['status', 'state'],
+    ['balance', 'outstanding', 'payable'],
+  ],
+  customers: [
+    ['customer_name', 'name', 'display_name'],
+    ['gstin', 'gst_number', 'tax_id'],
+    ['email', 'email_address'],
+    ['phone', 'mobile', 'contact_number'],
+    ['status', 'state'],
+    ['balance', 'outstanding', 'receivable'],
+  ],
+  payments: [
+    ['payment_number', 'payment_no', 'payment'],
+    ['party_name', 'customer_name', 'vendor_name', 'party'],
+    ['payment_date', 'date', 'transaction_date'],
+    ['payment_mode', 'mode'],
+    ['status', 'state'],
+    ['amount', 'total', 'received', 'paid'],
+  ],
+};
+
+function isInternalOrIdField(key: string, values: unknown[]): boolean {
+  const lower = key.toLowerCase();
+  if (
+    lower === 'id' ||
+    lower.endsWith('_id') ||
+    lower.includes('uuid') ||
+    lower.includes('entity') ||
+    lower.includes('org') ||
+    lower.includes('created_by') ||
+    lower.includes('updated_by')
+  ) return true;
+
+  return values.some(v => {
+    if (typeof v !== 'string') return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim());
+  });
+}
+
+function pickDisplayColumns(entity: string, rows: Record<string, unknown>[]): string[] {
+  if (rows.length === 0) return [];
+  const keys = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
+  const aliases = ENTITY_COLUMN_ALIASES[entity] || [];
+  const selected: string[] = [];
+
+  for (const aliasGroup of aliases) {
+    const key = findKeyByAlias(keys, aliasGroup);
+    if (key && !selected.includes(key)) selected.push(key);
+  }
+
+  const fallbackKeys = keys.filter(k => !selected.includes(k)).filter(k => {
+    const values = rows.map(r => r[k]).filter(v => v !== undefined && v !== null);
+    return !isInternalOrIdField(k, values);
+  });
+  for (const k of fallbackKeys) {
+    if (selected.length >= 6) break;
+    selected.push(k);
+  }
+
+  return selected.slice(0, 6);
+}
+
+function formatColumnLabel(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .replace(/\bNo\b/g, '#');
+}
+
+function toDisplayString(value: unknown, key: string): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') {
+    if (/(amount|total|balance|rate|price|value|tax|gst)/i.test(key)) {
+      return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return value.toLocaleString('en-IN');
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'string') {
+    const v = value.trim();
+    if (!v) return '—';
+    return v.length > 80 ? `${v.slice(0, 77)}...` : v;
+  }
+  if (Array.isArray(value)) return value.length === 0 ? '—' : `${value.length} items`;
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const name = obj.name || obj.display_name || obj.title || obj.value;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+    return '[object]';
+  }
+  return String(value);
+}
+
+function escapeMarkdownCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+function entityTitle(entity: string): string {
+  const map: Record<string, string> = {
+    invoices: 'Invoices',
+    bills: 'Bills',
+    customers: 'Customers',
+    vendors: 'Vendors',
+    payments: 'Payments',
+    credit_notes: 'Credit Notes',
+    delivery_challans: 'Delivery Challans',
+    transactions: 'Transactions',
+  };
+  return map[entity] || entity.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function renderEntityTableSection(
+  entity: string,
+  rows: Record<string, unknown>[],
+  totalCount?: number,
+  hasMore?: boolean,
+): string {
+  if (rows.length === 0) return `## ${entityTitle(entity)} (showing 0)\nNo records found for current filters.`;
+
+  const columns = pickDisplayColumns(entity, rows);
+  if (columns.length === 0) return `## ${entityTitle(entity)} (showing ${rows.length})\nNo displayable columns found.`;
+
+  const countText = totalCount && totalCount >= rows.length ? `${rows.length} of ${totalCount}` : `${rows.length}`;
+  const header = `## ${entityTitle(entity)} (showing ${countText})`;
+  const tableHeader = `| ${columns.map(c => formatColumnLabel(c)).join(' | ')} |`;
+  const tableDivider = `| ${columns.map(() => '---').join(' | ')} |`;
+  const tableRows = rows.map(row => {
+    const cells = columns.map(col => escapeMarkdownCell(toDisplayString(row[col], col)));
+    return `| ${cells.join(' | ')} |`;
+  });
+
+  const lines = [header, tableHeader, tableDivider, ...tableRows];
+  if (hasMore) lines.push(`_More records are available. Ask "show more ${entity}" to load next page._`);
+  return lines.join('\n');
 }
 
 const DEFAULT_PAGE_SIZE = 15;
@@ -469,6 +754,53 @@ function injectAllRecordsDefaults(
       const enumAllowsAll = enumValues.length === 0 || enumValues.some(v => String(v).toLowerCase() === 'all');
       if (enumAllowsAll) result[key] = 'all';
     }
+  }
+
+  return result;
+}
+
+function injectOverdueDefaults(
+  args: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const s = schema as { properties?: Record<string, unknown> } | undefined;
+  if (!s?.properties) return args;
+  const result = { ...args };
+
+  const statusKeys = ['status', 'statuses', 'workflow_status', 'workflowStatus', 'invoice_status', 'bill_status', 'state'];
+  for (const key of statusKeys) {
+    if (!(key in s.properties)) continue;
+    if (result[key] !== undefined && result[key] !== null && result[key] !== '') continue;
+
+    const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
+    const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum.map(v => String(v)) : [];
+    if (enumValues.length === 0) {
+      result[key] = 'overdue';
+      break;
+    }
+
+    const overdueCandidate = enumValues.find(v => v.toLowerCase() === 'overdue');
+    if (overdueCandidate) {
+      result[key] = overdueCandidate;
+      break;
+    }
+  }
+
+  // Common cutoff keys for due-date queries
+  const today = new Date().toISOString().slice(0, 10);
+  const cutoffKeys = ['due_before', 'due_date_to', 'to_date', 'end_date', 'before_date', 'date_to'];
+  for (const key of cutoffKeys) {
+    if (key in s.properties && (result[key] === undefined || result[key] === null || result[key] === '')) {
+      result[key] = today;
+      break;
+    }
+  }
+
+  if ('include_draft' in s.properties && (result.include_draft === undefined || result.include_draft === null)) {
+    result.include_draft = false;
+  }
+  if ('includeDraft' in s.properties && (result.includeDraft === undefined || result.includeDraft === null)) {
+    result.includeDraft = false;
   }
 
   return result;
@@ -819,6 +1151,11 @@ serve(async (req) => {
     const cachedResponse = await checkCache(supabase, effectiveEntityId, cacheKey, "api");
 
     if (cachedResponse) {
+      const cachedText = cachedResponse.content || '';
+      const ignoreCachedListNoData = isBulkListQuery(query) && isLikelyTransientNoDataResponse(cachedText);
+      if (hasUnresolvedTemplatePlaceholders(cachedText) || ignoreCachedListNoData) {
+        console.warn('[api] Ignoring cached response due to invalid placeholder/transient-empty content');
+      } else {
       if (!stream) {
         return new Response(JSON.stringify({
           success: true, query, path: "cached", response: cachedResponse.content,
@@ -850,6 +1187,7 @@ serve(async (req) => {
       return new Response(cacheStream, {
         headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
       });
+      }
     }
   }
 
@@ -953,6 +1291,7 @@ serve(async (req) => {
       const queryRequestedEntities = detectRequestedEntities(query);
       const queryRequestedPageSize = extractRequestedPageSize(query);
       const queryIsPaginationFollowUp = isPaginationFollowUp(query);
+      const queryIsOverdueList = isOverdueQuery(query) && queryRequestedEntities.length > 0;
       const queryPaginationState = queryIsPaginationFollowUp ? extractPaginationState(conversationHistory) : null;
       const mcpToolsByName = new Map(mcpTools.map(t => [t.name, t]));
 
@@ -980,6 +1319,9 @@ serve(async (req) => {
           if (queryIsBulkList) {
             args = injectAllRecordsDefaults(args, schema);
           }
+          if (queryIsOverdueList) {
+            args = injectOverdueDefaults(args, schema);
+          }
           if (queryIsPaginationFollowUp) {
             const state = queryPaginationState?.[toolName];
             if (state) args = injectPaginationFollowUpArgs(args, schema, state);
@@ -994,7 +1336,7 @@ serve(async (req) => {
           try {
             console.log(`[api] Tool ${toolName} attempt ${attempt}/${maxAttempts} args:`, JSON.stringify(args));
             const result = await mcpClientInstance!.callTool(toolName, args);
-            const truncated = truncateResult(result);
+            const truncated = truncateResult(result, isListTool(toolName) ? MAX_TOOL_RESULT_CHARS : 8000);
 
             // Check if result payload indicates an error
             if (isToolResultError(result)) {
@@ -1088,7 +1430,125 @@ serve(async (req) => {
       }
 
       const CONFIDENCE_THRESHOLD = 0.85;
-      const useFastPath = !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD;
+      const deterministicListEntities = queryRequestedEntities.length > 0
+        ? queryRequestedEntities
+        : [];
+      const useDeterministicListPath = !isConfirmation && queryIsBulkList && deterministicListEntities.length > 0;
+
+      if (useDeterministicListPath) {
+        sendEvent('route_classified', {
+          path: 'deterministic_list',
+          category: effectiveCategory,
+          entities: deterministicListEntities,
+        });
+
+        const listPicks = selectPreferredListToolsForEntities(deterministicListEntities, mcpTools);
+        const deterministicMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
+        allMcpResults = deterministicMcpResults;
+
+        if (listPicks.length === 0) {
+          const msg = "I couldn't find matching list tools from your connected data source. Please reconnect HelloBooks and try again.";
+          sendEvent('response_chunk', { text: msg });
+          sendEvent('complete', {
+            success: false, query, path: 'deterministic_list',
+            matchedIntent: null, reasoning: 'No matching dynamic list tools',
+            response: msg,
+            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          });
+          feedbackPath = "deterministic_list";
+          feedbackResponse = msg;
+          return;
+        }
+
+        const sections: string[] = [];
+        let anySuccess = false;
+        const toolsUsed: string[] = [];
+
+        for (const pick of listPicks) {
+          sendEvent('executing_tool', { tool: pick.toolName, entity: pick.entity, isWrite: false });
+          const execResult = await executeToolCall(pick.toolName, {}, `det-list-${pick.entity}`);
+
+          deterministicMcpResults.push({
+            tool: pick.toolName,
+            input: {},
+            result: execResult.result,
+            success: execResult.success,
+            error: execResult.failureReason,
+            attempts: execResult.attempts,
+          });
+
+          const parsed = parseListToolResult(execResult.result || '');
+          const pag = extractPaginationMeta(pick.toolName, execResult.result || '');
+          const hasMore = parsed.hasMore !== undefined ? parsed.hasMore : pag.hasMore;
+          const totalCount = parsed.totalCount ?? pag.totalCount;
+
+          sendEvent('tool_result', {
+            tool: pick.toolName,
+            success: execResult.success,
+            recordCount: parsed.rows.length,
+            attempts: execResult.attempts,
+            entity: pick.entity,
+          });
+
+          if (!execResult.success) {
+            sections.push(`## ${entityTitle(pick.entity)}\nI couldn't fetch records right now.`);
+            continue;
+          }
+
+          anySuccess = true;
+          toolsUsed.push(pick.toolName);
+          sections.push(renderEntityTableSection(pick.entity, parsed.rows, totalCount, hasMore));
+        }
+
+        const responseParts: string[] = [];
+        if (sections.length > 0) responseParts.push(sections.join('\n\n'));
+        if (anySuccess) {
+          responseParts.push("Would you like to see more records, or apply filters (date range, status, customer/vendor, amount)?");
+        } else {
+          responseParts.push("I wasn't able to fetch records right now. Please try again in a moment.");
+        }
+        const responseText = responseParts.join('\n\n').trim();
+
+        for (let i = 0; i < responseText.length; i += 50) {
+          sendEvent('response_chunk', { text: responseText.slice(i, i + 50) });
+          await new Promise(r => setTimeout(r, 20));
+        }
+
+        sendEvent('complete', {
+          success: anySuccess,
+          query,
+          path: 'deterministic_list',
+          category: effectiveCategory,
+          matchedIntent: null,
+          extractedEntities: {},
+          reasoning: `Deterministic list fetch for ${deterministicListEntities.join(', ')}`,
+          toolResults: deterministicMcpResults.map(r => ({ tool: r.tool, success: r.success, error: r.error, attempts: r.attempts })),
+          response: responseText,
+          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+        });
+
+        if (anySuccess && toolsUsed.length > 0 && !hasUnresolvedTemplatePlaceholders(responseText)) {
+          const ttl = determineTTL("llm", effectiveCategory, toolsUsed);
+          const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
+          await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, effectiveCategory, ttl, "api");
+        }
+
+        feedbackPath = "deterministic_list";
+        feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
+        feedbackToolsLoaded = mcpTools.map(t => t.name);
+        feedbackToolsUsed = toolsUsed;
+        feedbackStrategy = "deterministic_list";
+        feedbackResponse = responseText;
+      } else {
+        const fastPipeline = bestIntent?.resolution_flow?.dataPipeline || [];
+        const hasExecutableFastPipeline = fastPipeline.some(step => {
+          if (step.nodeType && step.nodeType !== 'api_call') return false;
+          const name = (step.mcpTool || step.tool || '').toLowerCase();
+          if (!name) return false;
+          return mcpTools.some(t => t.name.toLowerCase() === name || t.name.toLowerCase().includes(name));
+        });
+        const fastPathEligibleQuery = !queryIsBulkList && !queryIsPaginationFollowUp && !queryIsOverdueList;
+        const useFastPath = !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline;
 
       if (useFastPath && bestIntent) {
         // ========== FAST PATH ==========
@@ -1157,7 +1617,7 @@ serve(async (req) => {
 
         // Cache write — fast path
         const fastToolsUsed = toolResults.map(r => r.tool);
-        if (!hasWriteOperations(fastToolsUsed)) {
+        if (!hasWriteOperations(fastToolsUsed) && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
           const ttl = determineTTL("fast", "fast", fastToolsUsed);
           const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
           await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, "fast", ttl, "api");
@@ -1335,7 +1795,7 @@ serve(async (req) => {
               let toolInput: Record<string, unknown> = {};
               try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
 
-              if (queryIsBulkList && isListTool(requestedToolName)) {
+              if ((queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
                 const requestedToolDef = mcpToolsByName.get(requestedToolName);
                 const requestedEntity = inferEntityFromTool(
                   requestedToolName,
@@ -1344,10 +1804,10 @@ serve(async (req) => {
                 );
 
                 if (requestedEntity && queryRequestedEntities.includes(requestedEntity)) {
-                  const preferred = selectPreferredListToolForEntity(requestedEntity, mcpTools);
+                  const preferred = selectPreferredListToolForEntity(requestedEntity, mcpTools, queryIsOverdueList);
                   if (preferred && preferred.toolName !== requestedToolName) {
                     const currentScore = requestedToolDef
-                      ? scoreListToolForEntity(requestedToolDef, requestedEntity)
+                      ? scoreListToolForEntity(requestedToolDef, requestedEntity, queryIsOverdueList)
                       : Number.NEGATIVE_INFINITY;
                     if (!Number.isFinite(currentScore) || preferred.score > currentScore + 1) {
                       toolName = preferred.toolName;
@@ -1469,7 +1929,7 @@ serve(async (req) => {
 
           // Cache write — LLM path (skip for write operations and confirmations)
           const llmToolsUsed = mcpResults.map(r => r.tool);
-          if (!hasWriteOperations(llmToolsUsed) && !isConfirmation) {
+          if (!hasWriteOperations(llmToolsUsed) && !isConfirmation && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
             const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
             const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
             await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, effectiveCategory, ttl, "api");
