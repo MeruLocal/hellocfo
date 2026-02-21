@@ -136,7 +136,7 @@ function parseCreatedDoc(toolName: string, resultStr: string): CreatedDoc | null
       record.party_name || record.name || null;
     amount = record.total || record.amount || record.grand_total || record.balance || null;
     if (typeof amount === 'string') amount = parseFloat(amount) || null;
-  } catch { /* not JSON */ }
+  } catch (_e) { /* not JSON */ }
   return { docType, docNumber, internalId, party, amount, createdAt: new Date().toISOString() };
 }
 
@@ -176,6 +176,8 @@ function detectDetailLookup(query: string): DetailLookupIntent | null {
   }
   return null;
 }
+
+
 // ─── Follow-up / Confirmation Detection ──────────────────────────────────────
 
 const CONFIRMATION_PATTERNS = [

@@ -2,6 +2,7 @@
 // Provides aggressive caching with entity isolation and TTL-based invalidation
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getInvalidationTargets } from "../_shared/tool-groups.ts";
 
 export interface CacheEntry {
   id: string;
@@ -146,8 +147,7 @@ export async function invalidateCacheForEntity(
   if (!isWriteOp) return 0;
 
   try {
-    const { getInvalidationTargets } = await import("../_shared/tool-groups.ts");
-    const targets = getInvalidationTargets(toolsUsed);
+      const targets = getInvalidationTargets(toolsUsed);
 
     if (targets === null || targets.length === 0) {
       if (targets === null) {
