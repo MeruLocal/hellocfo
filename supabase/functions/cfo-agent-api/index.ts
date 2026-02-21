@@ -2002,6 +2002,7 @@ serve(async (req) => {
           feedbackResponse = responseText;
         }
       }
+      }
 
     } catch (error) {
       console.error('[Error]', error);
