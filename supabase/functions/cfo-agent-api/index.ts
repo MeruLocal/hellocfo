@@ -17,6 +17,7 @@ import {
   hasWriteOperations,
 } from "./response-cache.ts";
 import { logFeedback } from "./feedback-logger.ts";
+import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 
 const corsHeaders = {
@@ -675,6 +676,28 @@ serve(async (req) => {
         token_cost: feedbackTokenCost,
         implicit_signals: { source: "api" },
       }, "api");
+
+      // RL logging — intent routing stats or LLM path patterns
+      if (feedbackPath === "fast" && feedbackIntent) {
+        await logIntentRouting(supabase, {
+          intentId: feedbackIntent,
+          intentName: feedbackIntent,
+          confidenceBucket: feedbackIntentConfidence ?? 0.85,
+          success: !!feedbackResponse,
+          responseTimeMs,
+        }, "api");
+      } else if (feedbackPath === "llm" || feedbackPath === "llm_tools") {
+        await logLLMPathPattern(supabase, {
+          queryText: query,
+          entityId: effectiveEntityId,
+          toolsUsed: feedbackToolsUsed || [],
+          toolSelectionStrategy: feedbackStrategy || "unknown",
+          responseTimeMs,
+        }, "api");
+        if (Math.random() < 0.1) {
+          await checkForSuggestedIntents(supabase, "api");
+        }
+      }
 
       mcpClientInstance?.close();
       closeStream();

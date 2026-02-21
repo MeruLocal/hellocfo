@@ -113,6 +113,90 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     tools: ["update_usage"],
     keywords: ["usage", "cost", "token"],
   },
+  // ----- EXPENSES -----
+  {
+    name: "expenses",
+    description: "Expense management — create, edit, list, categorize",
+    tools: ["create_expense", "edit_expense", "delete_expense", "list_expenses", "categorize_expense", "list_expense_categories", "list_bank_accounts"],
+    keywords: ["expense", "expenses", "spending", "expenditure", "kharcha"],
+  },
+  // ----- BANKING -----
+  {
+    name: "banking",
+    description: "Bank statement import, transaction categorization, reconciliation",
+    tools: ["import_bank_statement", "categorize_transaction", "match_transaction", "create_bank_rule", "list_bank_transactions", "list_bank_accounts", "reconcile_account", "get_bank_balance"],
+    keywords: ["bank", "reconcile", "statement", "import", "bank transaction", "bank balance"],
+  },
+  // ----- INVENTORY -----
+  {
+    name: "inventory",
+    description: "Product and stock management",
+    tools: ["create_product", "edit_product", "adjust_stock", "list_products", "get_product", "stock_transfer", "list_warehouses", "stock_valuation"],
+    keywords: ["stock", "warehouse", "product", "item", "sku", "inventory"],
+  },
+  // ----- JOURNAL ENTRIES -----
+  {
+    name: "journal",
+    description: "Journal entries and chart of accounts",
+    tools: ["create_journal_entry", "edit_journal_entry", "delete_journal_entry", "list_journal_entries", "get_chart_of_accounts", "list_accounts"],
+    keywords: ["journal", "ledger", "day book", "journal entry"],
+  },
+  // ----- GST ACTIONS -----
+  {
+    name: "gst_actions",
+    description: "GST filing, e-invoice, e-way bill, ITC reconciliation",
+    tools: ["file_gstr1", "file_gstr3b", "generate_einvoice", "cancel_einvoice", "create_eway_bill", "reconcile_gst", "get_gst_summary", "list_hsn_codes", "validate_gstin"],
+    keywords: ["gst", "gstr", "tax file", "einvoice", "eway", "hsn", "itc", "gst filing"],
+  },
+  // ----- P&L REPORTS -----
+  {
+    name: "reports_pnl",
+    description: "Profit & Loss, revenue breakdown, expense breakdown, margins",
+    tools: ["get_profit_loss", "get_revenue_breakdown", "get_expense_breakdown", "get_gross_margin", "get_operating_margin", "compare_periods"],
+    keywords: ["p&l", "profit loss", "income statement", "revenue", "margin", "munafa", "profit"],
+  },
+  // ----- BALANCE SHEET REPORTS -----
+  {
+    name: "reports_balance",
+    description: "Balance sheet and trial balance reports",
+    tools: ["get_balance_sheet", "get_trial_balance", "get_chart_of_accounts"],
+    keywords: ["balance sheet", "trial balance", "account balance"],
+  },
+  // ----- CASH FLOW REPORTS -----
+  {
+    name: "reports_cashflow",
+    description: "Cash flow, liquidity, runway, burn rate analysis",
+    tools: ["get_account_balance", "get_account_transactions", "get_cash_flow_statement", "get_bank_balance", "get_cash_position", "forecast_cash_flow", "list_bank_accounts"],
+    keywords: ["cash flow", "cash position", "liquidity", "runway", "burn rate"],
+  },
+  // ----- PAYABLES REPORTS -----
+  {
+    name: "reports_payables",
+    description: "AP aging, overdue bills, vendor balances, DPO",
+    tools: ["get_ap_aging", "list_overdue_bills", "get_vendor_balance", "get_dpo", "list_vendors", "get_payment_schedule"],
+    keywords: ["ap aging", "overdue bill", "dpo", "payment schedule"],
+  },
+  // ----- GST REPORTS -----
+  {
+    name: "reports_gst",
+    description: "GST summary, GSTR data, ITC summary, HSN summary",
+    tools: ["get_gst_summary", "get_gstr1_data", "get_gstr3b_data", "get_itc_summary", "get_hsn_summary", "get_gst_reconciliation"],
+    keywords: ["gst summary", "gst report", "gstr data", "itc summary"],
+  },
+  // ----- KPI DASHBOARD -----
+  {
+    name: "kpi_dashboard",
+    description: "Key performance indicators, dashboard overview, health snapshot",
+    tools: ["get_revenue_kpi", "get_expense_kpi", "get_profit_kpi", "get_cashflow_kpi", "get_ar_kpi", "get_ap_kpi", "get_growth_rate", "get_runway"],
+    keywords: ["kpi", "dashboard", "health", "overview", "summary", "snapshot"],
+  },
+  // ----- TRENDS & ANALYSIS -----
+  {
+    name: "trends_analysis",
+    description: "Period comparisons, trend analysis, forecasting, anomaly detection",
+    tools: ["compare_periods", "trend", "forecast", "anomaly_detection", "budget_vs_actual", "what_if_analysis", "get_profit_loss", "get_balance_sheet"],
+    keywords: ["compare", "vs", "trend", "forecast", "anomaly", "budget", "what if", "analysis"],
+  },
 ];
 
 // ============================================================
@@ -152,8 +236,8 @@ export function selectToolsForQuery(
       };
     } else {
       return {
-        toolNames: getAllToolNames(["aging_reports", "invoices", "bills", "payments", "accounts"]),
-        matchedCategories: ["aging_reports", "invoices", "bills", "payments", "accounts"],
+        toolNames: getAllToolNames(["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"]),
+        matchedCategories: ["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"],
         strategy: "default_cfo",
       };
     }
@@ -167,6 +251,13 @@ export function selectToolsForQuery(
   if (matchedCategories.includes("aging_reports") && !expanded.includes("bills")) expanded.push("bills");
   if (matchedCategories.includes("payments") && !expanded.includes("invoices")) expanded.push("invoices");
   if (matchedCategories.includes("credit_notes") && !expanded.includes("invoices")) expanded.push("invoices");
+  if (matchedCategories.includes("reports_pnl") && !expanded.includes("trends_analysis")) expanded.push("trends_analysis");
+  if (matchedCategories.includes("reports_cashflow") && !expanded.includes("banking")) expanded.push("banking");
+  if (matchedCategories.includes("reports_payables") && !expanded.includes("bills")) expanded.push("bills");
+  if (matchedCategories.includes("reports_payables") && !expanded.includes("vendors")) expanded.push("vendors");
+  if (matchedCategories.includes("gst_actions") && !expanded.includes("reports_gst")) expanded.push("reports_gst");
+  if (matchedCategories.includes("expenses") && !expanded.includes("accounts")) expanded.push("accounts");
+  if (matchedCategories.includes("inventory") && !expanded.includes("invoices")) expanded.push("invoices");
 
   return {
     toolNames: getAllToolNames(expanded),
