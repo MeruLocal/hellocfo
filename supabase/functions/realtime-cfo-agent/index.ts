@@ -17,6 +17,7 @@ import {
   hasWriteOperations,
 } from "./response-cache.ts";
 import { logFeedback } from "./feedback-logger.ts";
+import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 
 const corsHeaders = {
@@ -707,6 +708,28 @@ serve(async (req) => {
           token_cost: feedbackTokenCost,
           implicit_signals: { source: "realtime" },
         }, reqId);
+
+        // RL logging — intent routing stats or LLM path patterns
+        if (feedbackPath === "fast" && feedbackIntent) {
+          await logIntentRouting(supabase, {
+            intentId: feedbackIntent,
+            intentName: feedbackIntent,
+            confidenceBucket: feedbackIntentConfidence ?? 0.85,
+            success: !!feedbackResponse,
+            responseTimeMs,
+          }, reqId);
+        } else if (feedbackPath === "llm" || feedbackPath === "llm_tools") {
+          await logLLMPathPattern(supabase, {
+            queryText: query,
+            entityId: entityId,
+            toolsUsed: feedbackToolsUsed || [],
+            toolSelectionStrategy: feedbackStrategy || "unknown",
+            responseTimeMs,
+          }, reqId);
+          if (Math.random() < 0.1) {
+            await checkForSuggestedIntents(supabase, reqId);
+          }
+        }
 
         controller.close();
 

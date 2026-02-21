@@ -1,77 +1,57 @@
 
-## Root Cause: entity_id and org_id Not Being Injected Into get_bills Call
+## Munimji Implementation Status — Updated 2026-02-21
 
-The logs confirm `get_bills` is called with empty args `{}`. This causes HelloBooks MCP to return unscoped/default data (only 2 sample bills) instead of the real data for the user's entity.
+### ✅ COMPLETED
 
-### Why Injection is Failing
+| # | Item | Status |
+|---|------|--------|
+| 1 | **Layer 1: Response Cache** — TTL-based caching, entity-scoped, invalidation on writes | ✅ Done |
+| 2 | **Layer 2: General Chat Detection** — Pattern matching (English + Hindi), ≤6 words rule | ✅ Done |
+| 3 | **Layer 4: Tool Groups** — All 17 groups defined in `_shared/tool-groups.ts` (single source of truth) | ✅ Done |
+| 4 | **Layer 5: Model Selection** — Haiku/Sonnet toggling based on complexity | ✅ Done |
+| 5 | **Layer 6: LLM Call with Tools** — OpenAI function-calling, tool loop, SSE streaming | ✅ Done |
+| 6 | **Layer 7: Enrichments (basic)** — Currency formatting, auto-enrichment detection | ✅ Done |
+| 7 | **Layer 8: Post-Processing (basic)** — Conversation persistence, cache write, feedback logging | ✅ Done |
+| 8 | **DB Tables** — All 7 tables created: unified_conversations, response_cache, feedback_log, tool_registry, intent_routing_stats, llm_path_patterns, suggested_intents | ✅ Done |
+| 9 | **Tool-groups deduplication** — Single `_shared/tool-groups.ts` used by both cfo-agent-api and realtime-cfo-agent | ✅ Done |
+| 10 | **Entity/Org ID injection fix** — Unconditional injection into all MCP tool calls | ✅ Done |
+| 11 | **Create tools added** — create_invoice, create_bill, create_payment, create_customer, create_vendor | ✅ Done |
+| 12 | **List truncation fix** — System prompts updated to show all records | ✅ Done |
+| 13 | **RL Logging wired** — Both agents log to intent_routing_stats (fast path) and llm_path_patterns (LLM path), auto-suggests intents at 10+ occurrences | ✅ Done |
+| 14 | **Documentation** — CFO_AGENT_API.md, CONVERSATION_HISTORY_API.md, HelloCFO_Workflow.md | ✅ Done |
+| 15 | **Expanded category relationships** — reports_pnl→trends, cashflow→banking, payables→vendors, gst→reports_gst, etc. | ✅ Done |
+| 16 | **Default CFO set expanded** — Now includes reports_pnl, reports_balance, reports_cashflow, kpi_dashboard | ✅ Done |
 
-In `cfo-agent-api/index.ts` (lines 527-531), the `entity_id` and `org_id` are only injected **conditionally** — if those parameter names appear in the tool's input schema `properties`:
+### ❌ REMAINING (API-only items)
 
-```typescript
-const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;
-if (toolSchema?.properties) {
-  if ('entity_id' in toolSchema.properties && mcpEntityId) toolInput.entity_id = mcpEntityId;
-  if ('org_id' in toolSchema.properties && mcpOrgId) toolInput.org_id = mcpOrgId;
-}
-```
+| # | Item | Priority | Complexity |
+|---|------|----------|------------|
+| 1 | **Consolidate to single munimji-agent** — Merge cfo-agent-api + realtime-cfo-agent into one function per the plan | HIGH | Large |
+| 2 | **Layer 3: Intent Fast Path** — Match against `intents` DB table, extract entities, execute pre-built pipelines with confidence thresholds | HIGH | Medium |
+| 3 | **Follow-up detection (Strategy 3)** — Reuse last tool group for short (<5 word) follow-up messages | MEDIUM | Small |
+| 4 | **Conversation history summarization** — After 20 messages, summarize older ones with Haiku, keep summary + last 10 | MEDIUM | Medium |
+| 5 | **Cache invalidation map** — Detailed per-tool invalidation (create_invoice → clear profit, revenue, aging, etc.) | MEDIUM | Small |
+| 6 | **Exception: Progressive field collection** — Ask only for missing required fields, use smart defaults | MEDIUM | Medium |
+| 7 | **Exception: Duplicate detection** — Check before every CREATE (customer GSTIN/PAN match, invoice number match) | MEDIUM | Medium |
+| 8 | **Exception: Hindi number parsing** — paanch lakh → ₹5,00,000, do crore → ₹2,00,00,000 | LOW | Small |
+| 9 | **Exception: Context/pronoun resolution** — "Send it" → last entity, "Do the same for TCS" → repeat action | LOW | Medium |
+| 10 | **Exception: Dangerous action confirmation** — Tiered confirmation (LOW/MEDIUM/HIGH/CRITICAL) | LOW | Medium |
+| 11 | **Enrichments: Trend analysis** — "▲ 12.8% vs last quarter" on CFO reports | LOW | Small |
+| 12 | **Enrichments: Anomaly detection** — "⚠ Office supplies expense is 3x higher than average" | LOW | Medium |
+| 13 | **Enrichments: Projection/Benchmark** — Runway calculation, industry margin comparison | LOW | Medium |
+| 14 | **Adaptive confidence thresholds** — Use intent_routing_stats to auto-adjust per-intent thresholds | LOW | Medium |
+| 15 | **Implicit signal detection** — Detect rephrases (negative), follow-ups (positive), action taken (strong positive) | LOW | Small |
+| 16 | **Prompt caching** — Anthropic-style cache_control for system prompt + tool defs (if switching from OpenAI) | LOW | Medium |
 
-If the MCP server's tool schema for `get_bills` doesn't declare `entity_id` or `org_id` as explicit properties (which is common — many tools infer these from the URL query params already set during MCP connection), the injection block is skipped and the tool gets `{}` — returning only unscoped demo data.
+### ❌ REMAINING (Frontend items — NOT in current scope)
 
-### The Fix
-
-**Unconditionally always inject `entity_id` and `org_id` into every tool call**, rather than checking if the schema mentions them. The MCP URL already has them as query params (they're also passed as args for redundancy). This is done in two places:
-
-#### Fix 1 — LLM Path Tool Call (line 527-531, `cfo-agent-api/index.ts`)
-
-```typescript
-// BEFORE (broken — conditional injection):
-const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as ...
-if (toolSchema?.properties) {
-  if ('entity_id' in toolSchema.properties && mcpEntityId) toolInput.entity_id = mcpEntityId;
-  if ('org_id' in toolSchema.properties && mcpOrgId) toolInput.org_id = mcpOrgId;
-}
-
-// AFTER (fixed — always inject):
-if (mcpEntityId) toolInput.entity_id = mcpEntityId;
-if (mcpOrgId) toolInput.org_id = mcpOrgId;
-```
-
-#### Fix 2 — Fast Path Pipeline Tool Call (lines 370-374, `cfo-agent-api/index.ts`)
-
-Same conditional injection bug exists in the fast-path pipeline loop:
-
-```typescript
-// BEFORE (broken):
-const schema = mcpTool.inputSchema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
-if (schema?.properties) {
-  if ('entity_id' in schema.properties && mcpEntityId) toolArgs.entity_id = mcpEntityId;
-  if ('org_id' in schema.properties && mcpOrgId) toolArgs.org_id = mcpOrgId;
-}
-
-// AFTER (fixed):
-if (mcpEntityId) toolArgs.entity_id = mcpEntityId;
-if (mcpOrgId) toolArgs.org_id = mcpOrgId;
-```
-
-#### Fix 3 — Apply same fix to `realtime-cfo-agent/index.ts`
-
-The same conditional injection pattern likely exists in the `realtime-cfo-agent` function. This should be updated to always inject entity_id and org_id as well.
-
-### Also: Improve System Prompt for List Queries
-
-Add an explicit instruction to the `cfo` and `bookkeeper` prompts telling the LLM to **present all records** returned by the tool, not just the first few. Sometimes the LLM abbreviates long lists.
-
-Add to both `cfo` and `bookkeeper` system prompts in `model-selector.ts`:
-```
-- When the user asks for "all" records (all bills, all invoices, all customers), present EVERY record returned by the tool in the table — do NOT say "and X more" or truncate the list
-- Show the complete dataset in a properly formatted table
-```
-
-### Files to Change
-
-1. `supabase/functions/cfo-agent-api/index.ts` — Remove conditional injection, always pass entity_id/org_id
-2. `supabase/functions/realtime-cfo-agent/index.ts` — Same fix
-3. `supabase/functions/cfo-agent-api/model-selector.ts` — Add "show all records" instruction
-4. `supabase/functions/realtime-cfo-agent/model-selector.ts` — Same prompt update
-
-No schema changes, no secrets changes. Both functions will be redeployed after the fix.
+| # | Item |
+|---|------|
+| 1 | Welcome screen with 6 quick action cards |
+| 2 | Quick suggestion chips below input |
+| 3 | Entity switcher dropdown in header |
+| 4 | Chat numbering display (#MJ-XXXX) |
+| 5 | Mode badges (📝 Bookkeeper, 📊 CFO, 💬 Chat) |
+| 6 | Rich data cards inline (invoice card, report card) |
+| 7 | Voice input (🎤), camera for receipts (📸) |
+| 8 | Chat rename (inline edit) |
