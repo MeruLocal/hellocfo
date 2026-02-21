@@ -71,14 +71,22 @@ function truncateResult(result: unknown, maxLength = 8000): string {
   return str.substring(0, maxLength) + `... [truncated, ${str.length - maxLength} chars omitted]`;
 }
 
+// ─── Role Normalization ──────────────────────────────────────────────────────
+
+function normalizeConversationHistory(history: ChatMessage[]): ChatMessage[] {
+  return history.map(m => ({
+    ...m,
+    role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+  }));
+}
+
 // ─── Follow-up / Confirmation Detection ──────────────────────────────────────
 
 const CONFIRMATION_PATTERNS = [
-  /^(yes|yep|yeah|haan|ha|kar\s*do|ok|okay|sure|correct|sahi|theek|confirm|confirmed)[\s!?.]*$/i,
-  /please\s+(try|create|do|make|send|retry)/i,
-  /try\s+again/i,
-  /correct\s*(info|information|details)?/i,
-  /^(do\s+it|go\s+ahead|proceed|retry|execute)[\s!?.]*$/i,
+  /\b(yes|yep|yeah|haan|ha|kar\s*do|ok|okay|sure|correct|sahi|theek|confirm|confirmed)\b/i,
+  /\bplease\s+(try|create|do|make|send|retry)\b/i,
+  /\btry\s+again\b/i,
+  /\b(do\s+it|go\s+ahead|proceed|retry|execute)\b/i,
 ];
 
 interface PendingAction {
@@ -89,8 +97,24 @@ interface PendingAction {
 
 function isConfirmationMessage(query: string): boolean {
   const q = query.trim();
-  if (q.split(/\s+/).length > 15) return false;
-  return CONFIRMATION_PATTERNS.some(p => p.test(q));
+  // Pure confirmations (short) are always confirmations
+  if (q.split(/\s+/).length <= 8 && CONFIRMATION_PATTERNS.some(p => p.test(q))) return true;
+  // Longer messages that contain confirmation keywords + additional data (e.g., invoice number)
+  // are also confirmations if they have at least one confirmation keyword
+  if (q.split(/\s+/).length <= 25 && CONFIRMATION_PATTERNS.some(p => p.test(q))) return true;
+  return false;
+}
+
+/** Extract extra fields from a confirmation message (e.g., "invoice number is INV-123, yes confirm") */
+function extractFieldsFromConfirmation(query: string): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  // Invoice number
+  const invMatch = query.match(/invoice\s*(?:number|no|#)?\s*(?:is|:)?\s*([A-Z0-9][\w-]+)/i);
+  if (invMatch) fields.invoice_number = invMatch[1];
+  // Bill number
+  const billMatch = query.match(/bill\s*(?:number|no|#)?\s*(?:is|:)?\s*([A-Z0-9][\w-]+)/i);
+  if (billMatch) fields.bill_number = billMatch[1];
+  return fields;
 }
 
 function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction | null {
@@ -101,42 +125,55 @@ function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction
     const content = msg.content || '';
     const meta = msg.metadata || {};
 
-    // Check if metadata has pending tool info
+    // Check if metadata has pending tool info (persisted from previous turn)
     if (meta.pendingTool && meta.pendingArgs) {
       return {
         toolName: String(meta.pendingTool),
         args: meta.pendingArgs as Record<string, unknown>,
-        summary: String(meta.pendingSummary || ''),
+        summary: String(meta.pendingSummary || content.slice(0, 300)),
       };
+    }
+
+    // Check if metadata has category=bookkeeper and toolsUsed
+    const prevCategory = meta.category as string | undefined;
+    const prevToolsUsed = (meta.toolsUsed as string[]) || [];
+    if (prevCategory === 'bookkeeper' && prevToolsUsed.length > 0) {
+      const writeTools = prevToolsUsed.filter(t => /^(create_|update_|delete_|void_|cancel_)/.test(t));
+      if (writeTools.length > 0) {
+        return {
+          toolName: writeTools[0],
+          args: {},
+          summary: content.slice(0, 300),
+        };
+      }
     }
 
     // Heuristic: if assistant said it will create/retry and mentioned specific details
     const createMatch = content.match(/create\s+(invoice|bill|payment|customer|vendor)/i);
     if (createMatch) {
-      // The assistant mentioned it would create something — extract what we can
       return {
         toolName: `create_${createMatch[1].toLowerCase()}`,
         args: {},
-        summary: content.slice(0, 200),
+        summary: content.slice(0, 300),
       };
     }
 
-    // If assistant mentioned "confirm" or "retry", treat the previous context as pending
-    if (/confirm|retry|try again|I'll.*create/i.test(content)) {
-      const toolsUsed = (meta.toolsUsed as string[]) || [];
-      const writeTools = toolsUsed.filter(t => /^(create_|update_|delete_|void_|cancel_)/.test(t));
-      if (writeTools.length > 0) {
+    // If assistant mentioned "confirm" or "retry"
+    if (/confirm|retry|try again|I'll.*create|shall I|would you like me to/i.test(content)) {
+      // Try to infer tool from content
+      const actionMatch = content.match(/(create|update|delete|void|cancel)\s+(?:the\s+)?(?:this\s+)?(invoice|bill|payment|customer|vendor|credit.?note)/i);
+      if (actionMatch) {
         return {
-          toolName: writeTools[0],
+          toolName: `${actionMatch[1].toLowerCase()}_${actionMatch[2].toLowerCase().replace(/\s+/g, '_')}`,
           args: {},
-          summary: content.slice(0, 200),
+          summary: content.slice(0, 300),
         };
       }
-      // Even without explicit tool names, infer from content
+      // Generic pending action
       return {
         toolName: '',
         args: {},
-        summary: content.slice(0, 200),
+        summary: content.slice(0, 300),
       };
     }
   }
@@ -292,7 +329,9 @@ serve(async (req) => {
     });
   }
 
-  const { query, conversationId, conversationHistory = [], stream = true, entityId, orgId } = body;
+  const { query, conversationId, conversationHistory: rawConversationHistory = [], stream = true, entityId, orgId } = body;
+  // Normalize roles: treat 'agent' as 'assistant'
+  const conversationHistory = normalizeConversationHistory(rawConversationHistory);
   const hAuthHeader = req.headers.get('H-Authorization');
   const mcpAuthFromHeader = hAuthHeader?.startsWith('Bearer ') ? hAuthHeader.replace('Bearer ', '').trim() : null;
 
@@ -321,6 +360,12 @@ serve(async (req) => {
   // ─── Confirmation Detection ─────────────────────────────────────────────
   const isConfirmation = isConfirmationMessage(query);
   const pendingAction = isConfirmation ? extractPendingAction(conversationHistory) : null;
+  // Merge any extra fields from the confirmation message into pending args
+  if (isConfirmation && pendingAction) {
+    const extraFields = extractFieldsFromConfirmation(query);
+    Object.assign(pendingAction.args, extraFields);
+    console.log(`[api] Confirmation with pending action: ${pendingAction.toolName}, extra fields:`, extraFields);
+  }
 
   // ============================
   // CACHE CHECK — skip for confirmations and write intents
@@ -747,9 +792,12 @@ serve(async (req) => {
           // Build system prompt with confirmation context
           let confirmationContext = '';
           if (isConfirmation && pendingAction) {
-            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user just confirmed a previous action. You MUST immediately execute the action using tools. The previous context was: "${pendingAction.summary}". Do NOT ask for confirmation again. Do NOT generate fake data. Call the appropriate tool NOW.`;
+            const extraFieldsStr = Object.keys(pendingAction.args).length > 0
+              ? ` Additional fields provided by user in this message: ${JSON.stringify(pendingAction.args)}.`
+              : '';
+            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user just confirmed a previous action. You MUST immediately execute the action using tools. The pending tool is "${pendingAction.toolName || 'inferred from history'}".${extraFieldsStr} The previous context was: "${pendingAction.summary}". Do NOT ask for confirmation again. Do NOT generate fake data. Do NOT say you cannot create — call the appropriate tool NOW with all details from conversation history. If invoice_number is not specified, omit it to let the system auto-generate.`;
           } else if (isConfirmation) {
-            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user said "${query}" which is a confirmation/retry. Look at the conversation history to find what action was being discussed and execute it immediately using the available tools. Do NOT ask for more details unless truly missing critical info. Do NOT generate fake data.`;
+            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user said "${query}" which is a confirmation/retry. Look at the conversation history to find what action was being discussed and execute it immediately using the available tools. Extract all parameters (customer, items, amounts, dates, tax) from the conversation history. Do NOT ask for more details unless a truly required field (customer name, amount, items) is completely missing. Do NOT generate fake data. Call the tool NOW.`;
           }
 
           let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}`;
@@ -880,6 +928,25 @@ serve(async (req) => {
           content: query,
           timestamp: new Date().toISOString(),
         };
+        // Detect pending action for next turn: if the bot used write tools or proposed a create
+        let pendingToolForMeta: string | null = null;
+        let pendingArgsForMeta: Record<string, unknown> | null = null;
+        let pendingSummaryForMeta: string | null = null;
+        // If write tools were attempted (successful or not), persist them as pending for retry
+        const writeToolsUsed = feedbackToolsUsed.filter(t => isWriteTool(t));
+        if (writeToolsUsed.length > 0) {
+          pendingToolForMeta = writeToolsUsed[0];
+          pendingSummaryForMeta = (feedbackResponse || '').slice(0, 300);
+        }
+        // If the response text suggests a pending creation (e.g., "shall I create", "confirm")
+        if (!pendingToolForMeta && feedbackResponse) {
+          const proposalMatch = feedbackResponse.match(/(create|update)\s+(?:the\s+)?(?:this\s+)?(invoice|bill|payment|customer|vendor)/i);
+          if (proposalMatch) {
+            pendingToolForMeta = `${proposalMatch[1].toLowerCase()}_${proposalMatch[2].toLowerCase()}`;
+            pendingSummaryForMeta = feedbackResponse.slice(0, 300);
+          }
+        }
+
         const agentMsg = {
           id: apiMessageId,
           role: "agent",
@@ -894,6 +961,11 @@ serve(async (req) => {
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
             llmModel: feedbackModel,
             isConfirmation,
+            ...(pendingToolForMeta ? {
+              pendingTool: pendingToolForMeta,
+              pendingArgs: pendingArgsForMeta || {},
+              pendingSummary: pendingSummaryForMeta || '',
+            } : {}),
           },
         };
 
