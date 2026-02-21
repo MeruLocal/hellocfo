@@ -294,14 +294,113 @@ function detectRequestedEntities(query: string): string[] {
   return entities;
 }
 
+const ENTITY_KEYWORDS: Record<string, string[]> = {
+  bills: ['bill', 'bills', 'purchase', 'payable', 'vendor'],
+  invoices: ['invoice', 'invoices', 'sales', 'receivable', 'customer'],
+  customers: ['customer', 'customers', 'client', 'buyer', 'debtor'],
+  vendors: ['vendor', 'vendors', 'supplier', 'creditor'],
+  payments: ['payment', 'payments', 'receipt', 'collection'],
+  credit_notes: ['credit note', 'credit notes', 'refund', 'return'],
+  delivery_challans: ['delivery challan', 'challan', 'dispatch'],
+  transactions: ['transaction', 'transactions', 'bank', 'statement'],
+};
+
+function inferEntityFromTool(
+  toolName: string,
+  toolDescription: string,
+  fallbackEntities: string[],
+): string | null {
+  const text = `${toolName} ${toolDescription}`.toLowerCase();
+  let bestEntity: string | null = null;
+  let bestScore = 0;
+
+  for (const [entity, keywords] of Object.entries(ENTITY_KEYWORDS)) {
+    let score = 0;
+    for (const keyword of keywords) {
+      if (!text.includes(keyword)) continue;
+      score += toolName.toLowerCase().includes(keyword) ? 2 : 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestEntity = entity;
+    }
+  }
+
+  if (bestEntity) return bestEntity;
+  if (fallbackEntities.length === 1) return fallbackEntities[0];
+  return null;
+}
+
+function scoreListToolForEntity(
+  tool: { name: string; description: string; inputSchema: unknown },
+  entity: string,
+): number {
+  const keywords = ENTITY_KEYWORDS[entity] || [entity.replace(/_/g, ' ')];
+  const text = `${tool.name} ${tool.description || ''}`.toLowerCase();
+  const nameLower = tool.name.toLowerCase();
+
+  let entitySignal = 0;
+  for (const keyword of keywords) {
+    if (!text.includes(keyword)) continue;
+    entitySignal += nameLower.includes(keyword) ? 2 : 1;
+  }
+  if (entitySignal === 0) return Number.NEGATIVE_INFINITY;
+
+  let score = entitySignal * 3;
+  if (/\b(list|get|fetch|search|find)\b/.test(nameLower)) score += 2;
+  if (/\b(all|list|fetch|search|find)\b/.test(text)) score += 3;
+  if (/\bby[_\s-]?id\b|\bdetail\b|\bsingle\b/.test(text)) score -= 5;
+  if (/^(create_|update_|delete_|void_|cancel_)/.test(nameLower)) score -= 8;
+
+  const schema = tool.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  const properties = schema?.properties ? Object.keys(schema.properties) : [];
+  if (properties.some(k => ['limit', 'page', 'offset', 'page_size', 'per_page', 'cursor', 'skip'].includes(k))) {
+    score += 2;
+  }
+  if (properties.some(k => k.toLowerCase().includes('id')) && properties.length <= 2) {
+    score -= 2;
+  }
+
+  return score;
+}
+
+function selectPreferredListToolForEntity(
+  entity: string,
+  tools: Array<{ name: string; description: string; inputSchema: unknown }>,
+): { toolName: string; score: number } | null {
+  let best: { toolName: string; score: number } | null = null;
+  for (const tool of tools) {
+    const score = scoreListToolForEntity(tool, entity);
+    if (!Number.isFinite(score)) continue;
+    if (!best || score > best.score) best = { toolName: tool.name, score };
+  }
+  if (!best || best.score <= 0) return null;
+  return best;
+}
+
 const DEFAULT_PAGE_SIZE = 15;
 const MAX_PAGE_SIZE = 50;
+
+function extractRequestedPageSize(query: string): number | undefined {
+  const patterns = [
+    /\b(?:top|first|latest|last|next)\s+(\d{1,3})\b/i,
+    /\b(\d{1,3})\s+(?:records?|rows?|items?|bills?|invoices?|customers?|vendors?|payments?|transactions?)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    if (!match) continue;
+    const parsed = Number.parseInt(match[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.min(parsed, MAX_PAGE_SIZE);
+  }
+  return undefined;
+}
 
 /** Inject pagination defaults into list tool args */
 function injectPaginationDefaults(
   args: Record<string, unknown>,
   schema: unknown,
-  requestedSize?: number
+  requestedSize?: number,
+  forceMinimum = false,
 ): Record<string, unknown> {
   const s = schema as { properties?: Record<string, unknown> } | undefined;
   if (!s?.properties) return args;
@@ -309,12 +408,23 @@ function injectPaginationDefaults(
   const pageSize = requestedSize ? Math.min(requestedSize, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
 
   // Try common pagination param names
-  const paginationKeys = ['limit', 'page_size', 'per_page', 'take', 'pageSize', 'perPage'];
+  const paginationKeys = ['limit', 'page_size', 'per_page', 'take', 'pageSize', 'perPage', 'size', 'count', 'max_results', 'maxResults'];
   for (const key of paginationKeys) {
-    if (key in s.properties && !(key in result)) {
+    if (!(key in s.properties)) continue;
+    const existingValue = result[key];
+    if (existingValue === undefined || existingValue === null || existingValue === '') {
       result[key] = pageSize;
       break;
     }
+    if (forceMinimum) {
+      const existingNum = typeof existingValue === 'number'
+        ? existingValue
+        : (typeof existingValue === 'string' ? Number.parseInt(existingValue, 10) : NaN);
+      if (Number.isFinite(existingNum) && existingNum > 0 && existingNum < pageSize) {
+        result[key] = pageSize;
+      }
+    }
+    break;
   }
 
   // Inject page/offset defaults if schema supports
@@ -325,6 +435,70 @@ function injectPaginationDefaults(
       break;
     }
   }
+
+  return result;
+}
+
+function injectAllRecordsDefaults(
+  args: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const s = schema as { properties?: Record<string, unknown> } | undefined;
+  if (!s?.properties) return args;
+  const result = { ...args };
+
+  const allStatusKeys = [
+    'status',
+    'statuses',
+    'workflow_status',
+    'workflowStatus',
+    'payment_status',
+    'paymentStatus',
+    'approval_status',
+    'approvalStatus',
+    'bill_status',
+    'invoice_status',
+    'state',
+  ];
+
+  for (const key of allStatusKeys) {
+    if (!(key in s.properties)) continue;
+    if (result[key] === undefined || result[key] === null || result[key] === '') {
+      const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
+      const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum : [];
+      const enumAllowsAll = enumValues.length === 0 || enumValues.some(v => String(v).toLowerCase() === 'all');
+      if (enumAllowsAll) result[key] = 'all';
+    }
+  }
+
+  return result;
+}
+
+function injectPaginationFollowUpArgs(
+  args: Record<string, unknown>,
+  schema: unknown,
+  paginationState: PaginationState,
+): Record<string, unknown> {
+  const s = schema as { properties?: Record<string, unknown> } | undefined;
+  if (!s?.properties) return args;
+  const result = { ...args };
+
+  const nextPage = Math.max(1, (paginationState.lastPage || 1) + 1);
+  const nextOffset = Math.max(0, paginationState.lastOffset || 0);
+
+  if (paginationState.nextCursor) {
+    for (const cursorKey of ['cursor', 'next_cursor', 'nextCursor', 'page_token', 'pageToken']) {
+      if (cursorKey in s.properties) {
+        result[cursorKey] = paginationState.nextCursor;
+        break;
+      }
+    }
+  }
+
+  if ('page' in s.properties) result.page = nextPage;
+  if ('offset' in s.properties) result.offset = nextOffset;
+  if ('skip' in s.properties) result.skip = nextOffset;
+  if ('start' in s.properties) result.start = nextOffset;
 
   return result;
 }
@@ -775,6 +949,13 @@ serve(async (req) => {
         return;
       }
 
+      const queryIsBulkList = isBulkListQuery(query);
+      const queryRequestedEntities = detectRequestedEntities(query);
+      const queryRequestedPageSize = extractRequestedPageSize(query);
+      const queryIsPaginationFollowUp = isPaginationFollowUp(query);
+      const queryPaginationState = queryIsPaginationFollowUp ? extractPaginationState(conversationHistory) : null;
+      const mcpToolsByName = new Map(mcpTools.map(t => [t.name, t]));
+
       // ─── Helper: Execute a tool call with sanitization, scope injection, and retry ──
       async function executeToolCall(
         toolName: string,
@@ -790,7 +971,19 @@ serve(async (req) => {
 
         // For list tools, inject pagination defaults if not already set
         if (isListTool(toolName)) {
-          args = injectPaginationDefaults(args, schema);
+          args = injectPaginationDefaults(
+            args,
+            schema,
+            queryRequestedPageSize,
+            queryIsBulkList || queryIsPaginationFollowUp,
+          );
+          if (queryIsBulkList) {
+            args = injectAllRecordsDefaults(args, schema);
+          }
+          if (queryIsPaginationFollowUp) {
+            const state = queryPaginationState?.[toolName];
+            if (state) args = injectPaginationFollowUpArgs(args, schema, state);
+          }
           console.log(`[api] List tool ${toolName} — injected pagination defaults:`, JSON.stringify(args));
         }
 
@@ -1040,13 +1233,13 @@ serve(async (req) => {
             // For confirmations, load the tool group relevant to the pending action
             const pendingToolLower = pendingAction.toolName.toLowerCase();
             // Find which group contains this tool
-            toolSelection = selectToolsForQuery(pendingAction.summary || query, 'bookkeeper');
+            toolSelection = selectToolsForQuery(pendingAction.summary || query, 'bookkeeper', mcpTools);
             // Also ensure the specific pending tool is included
             if (!toolSelection.toolNames.includes(pendingAction.toolName)) {
               toolSelection.toolNames.push(pendingAction.toolName);
             }
           } else {
-            toolSelection = selectToolsForQuery(query, effectiveCategory);
+            toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
           }
 
           let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
@@ -1068,20 +1261,20 @@ serve(async (req) => {
           const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
 
           // ─── Pagination follow-up detection ───
-          const isPaginationRequest = isPaginationFollowUp(query);
-          const existingPaginationState = isPaginationRequest ? extractPaginationState(conversationHistory) : null;
+          const isPaginationRequest = queryIsPaginationFollowUp;
+          const existingPaginationState = queryPaginationState;
           let paginationContext = '';
           if (isPaginationRequest && existingPaginationState) {
             const stateEntries = Object.entries(existingPaginationState);
             const stateDesc = stateEntries.map(([tool, state]) =>
-              `Tool "${tool}": returned ${state.returnedSoFar} so far, hasMore=${state.hasMore}, nextPage=${state.lastPage + 1}, offset=${state.lastOffset + DEFAULT_PAGE_SIZE}`
+              `Tool "${tool}": returned ${state.returnedSoFar} so far, hasMore=${state.hasMore}, nextPage=${state.lastPage + 1}, offset=${state.lastOffset}`
             ).join('; ');
             paginationContext = `\n\n📄 PAGINATION CONTEXT: The user wants the NEXT page of results. Previous state: ${stateDesc}. Call the same list tool(s) with the next page/offset. Do NOT repeat the first page.`;
           }
 
           // ─── Bulk list detection ───
-          const isBulkList = isBulkListQuery(query);
-          const requestedEntities = detectRequestedEntities(query);
+          const isBulkList = queryIsBulkList;
+          const requestedEntities = queryRequestedEntities;
           let bulkListContext = '';
           if (isBulkList && requestedEntities.length >= 2) {
             bulkListContext = `\n\n📋 MULTI-LIST REQUEST: The user asked for ${requestedEntities.join(' AND ')}. You MUST call SEPARATE list tools for EACH entity type. Do NOT call just one tool. Call them all and present results in separate sections.`;
@@ -1137,12 +1330,35 @@ serve(async (req) => {
             messages.push(response.message);
 
             for (const toolCall of toolCalls) {
-              const toolName = toolCall.function.name;
+              const requestedToolName = toolCall.function.name;
+              let toolName = requestedToolName;
               let toolInput: Record<string, unknown> = {};
               try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
 
+              if (queryIsBulkList && isListTool(requestedToolName)) {
+                const requestedToolDef = mcpToolsByName.get(requestedToolName);
+                const requestedEntity = inferEntityFromTool(
+                  requestedToolName,
+                  requestedToolDef?.description || '',
+                  queryRequestedEntities,
+                );
+
+                if (requestedEntity && queryRequestedEntities.includes(requestedEntity)) {
+                  const preferred = selectPreferredListToolForEntity(requestedEntity, mcpTools);
+                  if (preferred && preferred.toolName !== requestedToolName) {
+                    const currentScore = requestedToolDef
+                      ? scoreListToolForEntity(requestedToolDef, requestedEntity)
+                      : Number.NEGATIVE_INFINITY;
+                    if (!Number.isFinite(currentScore) || preferred.score > currentScore + 1) {
+                      toolName = preferred.toolName;
+                      console.log(`[api] Remapped list tool ${requestedToolName} -> ${toolName} for entity ${requestedEntity} (score ${currentScore} -> ${preferred.score})`);
+                    }
+                  }
+                }
+              }
+
               if (mcpClientInstance) {
-                sendEvent('executing_tool', { tool: toolName, isWrite: isWriteTool(toolName) });
+                sendEvent('executing_tool', { tool: toolName, requestedTool: requestedToolName, isWrite: isWriteTool(toolName) });
 
                 const execResult = await executeToolCall(toolName, toolInput, toolCall.id);
 

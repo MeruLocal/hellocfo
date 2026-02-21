@@ -534,7 +534,7 @@ serve(async (req) => {
 
           } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
-            const toolSelection = selectToolsForQuery(query, effectiveCategory);
+            const toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
             let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
             // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL of them.

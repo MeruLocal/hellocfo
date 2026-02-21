@@ -210,6 +210,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
 export function selectToolsForQuery(
   query: string,
   category: "bookkeeper" | "cfo",
+  mcpTools?: Array<{ name: string; description: string; inputSchema: unknown }>,
 ): { toolNames: string[]; matchedCategories: string[]; strategy: string } {
   const queryLower = query.toLowerCase();
 
@@ -228,17 +229,21 @@ export function selectToolsForQuery(
 
   // If no specific match, provide broad defaults based on category
   if (matchedCategories.length === 0) {
+    const defaultCategories = category === "bookkeeper"
+      ? ["invoices", "bills", "payments", "transactions", "customers", "vendors"]
+      : ["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"];
+
     if (category === "bookkeeper") {
       return {
-        toolNames: getAllToolNames(["invoices", "bills", "payments", "transactions", "customers", "vendors"]),
-        matchedCategories: ["invoices", "bills", "payments", "transactions", "customers", "vendors"],
-        strategy: "default_bookkeeper",
+        toolNames: resolveToolNames(defaultCategories, mcpTools),
+        matchedCategories: defaultCategories,
+        strategy: mcpTools?.length ? "default_bookkeeper_dynamic" : "default_bookkeeper",
       };
     } else {
       return {
-        toolNames: getAllToolNames(["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"]),
-        matchedCategories: ["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"],
-        strategy: "default_cfo",
+        toolNames: resolveToolNames(defaultCategories, mcpTools),
+        matchedCategories: defaultCategories,
+        strategy: mcpTools?.length ? "default_cfo_dynamic" : "default_cfo",
       };
     }
   }
@@ -259,10 +264,12 @@ export function selectToolsForQuery(
   if (matchedCategories.includes("expenses") && !expanded.includes("accounts")) expanded.push("accounts");
   if (matchedCategories.includes("inventory") && !expanded.includes("invoices")) expanded.push("invoices");
 
+  const toolNames = resolveToolNames(expanded, mcpTools);
+
   return {
-    toolNames: getAllToolNames(expanded),
+    toolNames,
     matchedCategories: expanded,
-    strategy: "keyword_matched",
+    strategy: mcpTools?.length ? "keyword_matched_dynamic" : "keyword_matched",
   };
 }
 
@@ -277,6 +284,71 @@ function getAllToolNames(categoryNames: string[]): string[] {
     }
   }
   return names;
+}
+
+function resolveToolNames(
+  categoryNames: string[],
+  mcpTools?: Array<{ name: string; description: string; inputSchema: unknown }>,
+): string[] {
+  const staticNames = getAllToolNames(categoryNames);
+  if (!mcpTools || mcpTools.length === 0) return staticNames;
+
+  const available = new Set(mcpTools.map(t => t.name));
+  const matchedStatic = staticNames.filter(name => available.has(name));
+  const dynamic = getDynamicToolNames(categoryNames, mcpTools);
+
+  const merged: string[] = [];
+  for (const name of [...matchedStatic, ...dynamic]) {
+    if (!merged.includes(name)) merged.push(name);
+  }
+
+  // Final safety: if dynamic/static matching found nothing, fall back to all MCP tools.
+  if (merged.length === 0) return mcpTools.map(t => t.name);
+  return merged;
+}
+
+function getDynamicToolNames(
+  categoryNames: string[],
+  mcpTools: Array<{ name: string; description: string; inputSchema: unknown }>,
+): string[] {
+  const result: string[] = [];
+  const stopWords = new Set([
+    "and", "the", "for", "with", "from", "into", "over", "under", "this", "that",
+    "list", "view", "show", "get", "all", "data", "report", "reports", "summary",
+  ]);
+
+  for (const catName of categoryNames) {
+    const cat = TOOL_CATEGORIES.find(c => c.name === catName);
+    if (!cat) continue;
+
+    const nameHints = cat.name.toLowerCase().split(/[_\s]+/).filter(Boolean);
+    const keywordHints = cat.keywords.map(k => k.toLowerCase()).filter(Boolean);
+    const descHints = cat.description
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .filter(w => w.length >= 4 && !stopWords.has(w));
+
+    for (const tool of mcpTools) {
+      const text = `${tool.name} ${tool.description || ""}`.toLowerCase();
+      let score = 0;
+
+      for (const hint of keywordHints) {
+        if (hint.length < 3) continue;
+        if (text.includes(hint)) score += 3;
+      }
+      for (const hint of nameHints) {
+        if (hint.length < 3) continue;
+        if (text.includes(hint)) score += 2;
+      }
+      for (const hint of descHints) {
+        if (text.includes(hint)) score += 1;
+      }
+
+      if (score >= 3 && !result.includes(tool.name)) result.push(tool.name);
+    }
+  }
+  return result;
 }
 
 /**
