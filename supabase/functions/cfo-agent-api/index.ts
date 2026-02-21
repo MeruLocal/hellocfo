@@ -80,6 +80,171 @@ function normalizeConversationHistory(history: ChatMessage[]): ChatMessage[] {
   }));
 }
 
+// ─── Created Document Tracking ───────────────────────────────────────────────
+
+interface CreatedDoc {
+  docType: string;
+  docNumber: string | null;
+  internalId: string | null;
+  party: string | null;
+  amount: number | null;
+  createdAt: string;
+}
+
+function parseCreatedDoc(toolName: string, resultStr: string): CreatedDoc | null {
+  const docTypeMatch = toolName.match(/^(?:create|update)_(\w+)/);
+  if (!docTypeMatch) return null;
+  const docType = docTypeMatch[1];
+  let docNumber: string | null = null;
+  let internalId: string | null = null;
+  let party: string | null = null;
+  let amount: number | null = null;
+  try {
+    const parsed = JSON.parse(resultStr);
+    const obj = parsed?.data || parsed?.result || parsed || {};
+    const record = Array.isArray(obj) ? obj[0] : obj;
+    if (!record || typeof record !== 'object') return null;
+    docNumber = record.invoice_number || record.invoiceNumber || record.bill_number ||
+      record.billNumber || record.number || record.document_number || record.reference_number ||
+      record.credit_note_number || record.payment_number || null;
+    internalId = record.id || record.invoice_id || record.bill_id || record.payment_id ||
+      record.customer_id || record.vendor_id || record.contact_id || null;
+    party = record.customer_name || record.vendor_name || record.contact_name ||
+      record.party_name || record.name || null;
+    amount = record.total || record.amount || record.grand_total || record.balance || null;
+    if (typeof amount === 'string') amount = parseFloat(amount) || null;
+  } catch { /* not JSON */ }
+  return { docType, docNumber, internalId, party, amount, createdAt: new Date().toISOString() };
+}
+
+function extractCreatedDocs(conversationHistory: ChatMessage[]): CreatedDoc[] {
+  const docs: CreatedDoc[] = [];
+  for (let i = conversationHistory.length - 1; i >= Math.max(0, conversationHistory.length - 10); i--) {
+    const msg = conversationHistory[i];
+    if (msg.role !== 'assistant') continue;
+    const meta = msg.metadata || {};
+    if (meta.createdDocs && Array.isArray(meta.createdDocs)) {
+      docs.push(...(meta.createdDocs as CreatedDoc[]));
+    }
+  }
+  return docs;
+}
+
+function normalizeDocRef(ref: string): string {
+  return ref.replace(/[\s\-_]+/g, '').toUpperCase();
+}
+
+const DETAIL_LOOKUP_PATTERNS = [
+  /\b(?:show|get|view|display|find|fetch|details?\s+(?:of|for)?|info\s+(?:of|for)?)\b.*?\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
+  /\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
+];
+
+interface DetailLookupIntent {
+  docType: string;
+  docRef: string;
+}
+
+function detectDetailLookup(query: string): DetailLookupIntent | null {
+  for (const pattern of DETAIL_LOOKUP_PATTERNS) {
+    const match = query.match(pattern);
+    if (match) {
+      return { docType: match[1].toLowerCase().replace(/\s+/g, '_'), docRef: match[2] };
+    }
+  }
+  return null;
+}
+
+
+
+interface CreatedDoc {
+  docType: string;          // 'invoice' | 'bill' | 'payment' | 'customer' | 'vendor'
+  docNumber: string | null; // e.g. "INV-46466" — human-readable ref
+  internalId: string | null;
+  party: string | null;     // customer or vendor name
+  amount: number | null;
+  createdAt: string;
+}
+
+/** Parse a write-tool result to extract canonical document metadata */
+function parseCreatedDoc(toolName: string, resultStr: string): CreatedDoc | null {
+  const docTypeMatch = toolName.match(/^(?:create|update)_(\w+)/);
+  if (!docTypeMatch) return null;
+  const docType = docTypeMatch[1];
+
+  let docNumber: string | null = null;
+  let internalId: string | null = null;
+  let party: string | null = null;
+  let amount: number | null = null;
+
+  try {
+    const parsed = JSON.parse(resultStr);
+    const obj = parsed?.data || parsed?.result || parsed || {};
+    // Normalize: could be wrapped in arrays
+    const record = Array.isArray(obj) ? obj[0] : obj;
+    if (!record || typeof record !== 'object') return null;
+
+    // Extract doc number variants
+    docNumber = record.invoice_number || record.invoiceNumber || record.bill_number ||
+      record.billNumber || record.number || record.document_number || record.reference_number ||
+      record.credit_note_number || record.payment_number || null;
+
+    // Internal ID
+    internalId = record.id || record.invoice_id || record.bill_id || record.payment_id ||
+      record.customer_id || record.vendor_id || record.contact_id || null;
+
+    // Party
+    party = record.customer_name || record.vendor_name || record.contact_name ||
+      record.party_name || record.name || null;
+
+    // Amount
+    amount = record.total || record.amount || record.grand_total || record.balance || null;
+    if (typeof amount === 'string') amount = parseFloat(amount) || null;
+  } catch { /* not JSON */ }
+
+  return { docType, docNumber, internalId, party, amount, createdAt: new Date().toISOString() };
+}
+
+/** Extract createdDocs from conversation history (recent messages only) */
+function extractCreatedDocs(conversationHistory: ChatMessage[]): CreatedDoc[] {
+  const docs: CreatedDoc[] = [];
+  for (let i = conversationHistory.length - 1; i >= Math.max(0, conversationHistory.length - 10); i--) {
+    const msg = conversationHistory[i];
+    if (msg.role !== 'assistant') continue;
+    const meta = msg.metadata || {};
+    if (meta.createdDocs && Array.isArray(meta.createdDocs)) {
+      docs.push(...(meta.createdDocs as CreatedDoc[]));
+    }
+  }
+  return docs;
+}
+
+/** Normalize an invoice/bill reference for comparison */
+function normalizeDocRef(ref: string): string {
+  return ref.replace(/[\s\-_]+/g, '').toUpperCase();
+}
+
+// ─── Invoice/Document Detail Lookup Patterns ─────────────────────────────────
+
+const DETAIL_LOOKUP_PATTERNS = [
+  /\b(?:show|get|view|display|find|fetch|details?\s+(?:of|for)?|info\s+(?:of|for)?)\b.*?\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
+  /\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
+];
+
+interface DetailLookupIntent {
+  docType: string;
+  docRef: string;
+}
+
+function detectDetailLookup(query: string): DetailLookupIntent | null {
+  for (const pattern of DETAIL_LOOKUP_PATTERNS) {
+    const match = query.match(pattern);
+    if (match) {
+      return { docType: match[1].toLowerCase().replace(/\s+/g, '_'), docRef: match[2] };
+    }
+  }
+  return null;
+}
+
 // ─── Follow-up / Confirmation Detection ──────────────────────────────────────
 
 const CONFIRMATION_PATTERNS = [
@@ -968,7 +1133,23 @@ serve(async (req) => {
             confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user said "${query}" which is a confirmation/retry. Look at the conversation history to find what action was being discussed and execute it immediately using the available tools. Extract all parameters (customer, items, amounts, dates, tax) from the conversation history. Do NOT ask for more details unless a truly required field (customer name, amount, items) is completely missing. Do NOT generate fake data. Call the tool NOW.`;
           }
 
-          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}`;
+          // ─── Detail lookup context (created-doc resolver) ───
+          const detailLookup = !isConfirmation ? detectDetailLookup(query) : null;
+          let detailLookupContext = '';
+          if (detailLookup) {
+            const createdDocs = extractCreatedDocs(conversationHistory);
+            const normalizedRef = normalizeDocRef(detailLookup.docRef);
+            const matchedDoc = createdDocs.find(d =>
+              d.docNumber && normalizeDocRef(d.docNumber) === normalizedRef
+            );
+            if (matchedDoc && matchedDoc.internalId) {
+              detailLookupContext = `\n\n🔍 DOCUMENT LOOKUP CONTEXT: The user is asking about ${detailLookup.docType} "${detailLookup.docRef}". This document was created in this conversation. Internal ID: ${matchedDoc.internalId}. Use the get/view detail tool with this internal ID to fetch full details. If the first lookup returns empty, retry once after a brief pause — the record may still be syncing.`;
+            } else {
+              detailLookupContext = `\n\n🔍 DOCUMENT LOOKUP CONTEXT: The user is asking about ${detailLookup.docType} "${detailLookup.docRef}". Search by the document NUMBER/reference, NOT by ID. Use a search or find tool with the invoice/bill number parameter. If not found on first try and the document was recently created, retry once. Do NOT call get_invoice_by_id with the human-readable number — that requires an internal ID.`;
+            }
+          }
+
+          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}`;
 
           // For confirmations, include more history
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
@@ -1046,17 +1227,41 @@ serve(async (req) => {
           // ─── Backend guardrail: block fake success cards ───
           let responseText = response.message.content || '';
           const hasSuccessfulWriteTool = mcpResults.some(r => isWriteTool(r.tool) && r.success);
-          const hasSuccessCard = /\*\*📄.*\*\*|I've created the invoice successfully|invoice.*created.*successfully/i.test(responseText);
+          const hasSuccessCard = /\*\*📄.*\*\*|I've created the invoice successfully|invoice.*created.*successfully|bill.*created.*successfully/i.test(responseText);
           if (hasSuccessCard && !hasSuccessfulWriteTool) {
-            // LLM hallucinated a success card without actual tool success — strip it
             console.warn(`[api] GUARDRAIL: Blocked fake success card (no successful write tool)`);
             const writeErrors = mcpResults.filter(r => isWriteTool(r.tool) && !r.success);
             if (writeErrors.length > 0) {
               responseText = "I wasn't able to complete this action right now. I've already retried automatically. Please check your HelloBooks connection and try again.";
             } else {
-              // No write tool was even called — LLM made up a card
               responseText = responseText.replace(/---[\s\S]*?---/g, '').replace(/I've created.*successfully\./gi, '').trim();
               if (!responseText) responseText = "I need to call the creation tool first. Could you please confirm the details so I can proceed?";
+            }
+          }
+
+          // ─── Guardrail: validate success card doc numbers against real tool output ───
+          if (hasSuccessfulWriteTool && hasSuccessCard) {
+            const successfulWrites = mcpResults.filter(r => isWriteTool(r.tool) && r.success && r.result);
+            const realDocNumbers: string[] = [];
+            for (const wr of successfulWrites) {
+              const doc = parseCreatedDoc(wr.tool, wr.result!);
+              if (doc?.docNumber) realDocNumbers.push(doc.docNumber);
+            }
+            // Check if card shows a doc number not in real results
+            const cardDocMatch = responseText.match(/\*\*📄\s*([A-Z0-9][\w\-]+)\*\*/);
+            if (cardDocMatch && realDocNumbers.length > 0) {
+              const cardRef = normalizeDocRef(cardDocMatch[1]);
+              const isReal = realDocNumbers.some(n => normalizeDocRef(n) === cardRef);
+              if (!isReal) {
+                console.warn(`[api] GUARDRAIL: Card shows "${cardDocMatch[1]}" but real doc numbers are: ${realDocNumbers.join(', ')}`);
+                // Replace the fake number with the real one
+                responseText = responseText.replace(cardDocMatch[1], realDocNumbers[0]);
+              }
+            }
+            // If write succeeded but no doc number was returned, add note
+            if (realDocNumbers.length === 0 && /INV-|BILL-/.test(responseText)) {
+              responseText = responseText.replace(/INV-\S+|BILL-\S+/g, '(auto-generated)');
+              responseText += "\n\n_Note: The reference number is being synced. Use 'show my latest invoice' to see it._";
             }
           }
           const chunkSize = 50;
@@ -1140,6 +1345,14 @@ serve(async (req) => {
           }
         }
 
+        // Build createdDocs from successful write tool results
+        let createdDocsForMeta: CreatedDoc[] = [];
+        const successfulWrites = allMcpResults.filter(r => isWriteTool(r.tool) && r.success && r.result);
+        for (const wr of successfulWrites) {
+          const doc = parseCreatedDoc(wr.tool, wr.result!);
+          if (doc) createdDocsForMeta.push(doc);
+        }
+
         // Build pagination state from REAL tool results
         let paginationStateForMeta: Record<string, PaginationState> | null = null;
         const listToolMcpResults = allMcpResults.filter(r => isListTool(r.tool) && r.success);
@@ -1149,7 +1362,6 @@ serve(async (req) => {
           for (const mcpRes of listToolMcpResults) {
             const toolName = mcpRes.tool;
             const prevState = prevPagState?.[toolName];
-            // Parse real pagination from actual tool response
             const pagMeta = extractPaginationMeta(toolName, mcpRes.result || '');
             paginationStateForMeta[toolName] = {
               toolName,
@@ -1184,6 +1396,9 @@ serve(async (req) => {
             } : {}),
             ...(paginationStateForMeta ? {
               pendingPagination: paginationStateForMeta,
+            } : {}),
+            ...(createdDocsForMeta.length > 0 ? {
+              createdDocs: createdDocsForMeta,
             } : {}),
           },
         };

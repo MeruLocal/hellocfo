@@ -247,6 +247,13 @@ ERROR HANDLING:
 - If data is empty or unavailable, say: "No records found. This could mean there's no data yet, or there may be a temporary issue — please try again."
 - Never expose field names like entity_id, org_id, unexpected keyword argument, or any internal system details
 
+🔍 DOCUMENT DETAIL LOOKUP RULES:
+- When user asks to "show details for invoice INV-123" or similar, search by the document NUMBER, not by internal ID.
+- Use search/find tools with invoice_number or bill_number parameter. Do NOT pass human-readable numbers (like "INV-123") as an internal ID parameter.
+- If the system provides a DOCUMENT LOOKUP CONTEXT with an internal ID, use that for the detail lookup.
+- If the first lookup returns no results for a recently created document, retry once — it may still be syncing.
+- If truly not found after retry, suggest: "Try 'show my latest invoices' or filter by customer/date/amount."
+
 RESPONSE STYLE: Action-oriented, card-based confirmation with structured markdown.`,
 
   cfo: `You are a CFO AI Agent providing financial analysis for an Indian business.
@@ -303,6 +310,13 @@ ERROR HANDLING:
 - Instead, respond with a calm, friendly message like: "I wasn't able to fetch that information right now. Please try again in a moment."
 - If data is empty or unavailable, say: "No records found for this query. This may be a temporary issue — please try again shortly."
 - Never expose internal field names like entity_id, org_id, or any system error messages
+
+🔍 DOCUMENT DETAIL LOOKUP RULES:
+- When user asks to "show details for invoice INV-123" or similar, search by the document NUMBER, not by internal ID.
+- Use search/find tools with invoice_number or bill_number parameter. Do NOT pass human-readable numbers as internal ID parameters.
+- If the system provides a DOCUMENT LOOKUP CONTEXT with an internal ID, use that for the detail lookup.
+- If the first lookup returns no results for a recently created document, retry once.
+- If truly not found, suggest: "Try 'show my latest invoices' or filter by customer/date/amount."
 
 ANALYSIS APPROACH:
 - Lead with the key finding/insight
