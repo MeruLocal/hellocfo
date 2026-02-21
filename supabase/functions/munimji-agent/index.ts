@@ -8,6 +8,7 @@ const corsHeaders = {
 };
 
 const MAX_TOOL_RESULT_CHARS = 50000;
+const DEFAULT_AZURE_OPENAI_ENDPOINT = "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,49 @@ function truncateResult(result: string, maxChars = MAX_TOOL_RESULT_CHARS): strin
     }
   } catch { /* not JSON */ }
   return result.slice(0, maxChars) + `\n[Truncated]`;
+}
+
+function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
+  const raw = (endpoint || "").trim();
+  if (!raw) return DEFAULT_AZURE_OPENAI_ENDPOINT;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (
+      host.endsWith(".supabase.co") ||
+      path.includes("/functions/v1") ||
+      path.endsWith("/v1/messages")
+    ) {
+      console.warn(`[munimji] LLM endpoint "${raw}" looks incompatible with chat/completions. Falling back to default endpoint.`);
+      return DEFAULT_AZURE_OPENAI_ENDPOINT;
+    }
+    return raw;
+  } catch {
+    console.warn(`[munimji] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
+    return DEFAULT_AZURE_OPENAI_ENDPOINT;
+  }
+}
+
+function getUserFacingErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("fetch failed")) {
+    return "I couldn't reach the AI service right now. Please try again in a moment.";
+  }
+  if (lower.includes("llm service unreachable")) {
+    return "I couldn't reach the AI service right now. Please verify endpoint and API key in settings.";
+  }
+  if (lower.includes("llm error: 401")) {
+    return "AI credentials look invalid. Please verify LLM API key and endpoint.";
+  }
+  if (lower.includes("llm error: 429")) {
+    return "The AI service is rate-limited right now. Please wait a moment and try again.";
+  }
+  if (lower.includes("llm error: 404")) {
+    return "LLM endpoint appears misconfigured. Please verify endpoint and model settings.";
+  }
+  return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
 // Auto-generate chat name from first message + route
@@ -238,18 +282,24 @@ async function callOpenAI(
   tools: unknown[],
   reqId: string,
 ): Promise<{ finish_reason: string; message: { role: string; content: string | null; tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[] }; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }> {
-  const endpoint = `${(config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/").replace(/\/$/, "")}/chat/completions`;
+  const endpoint = `${resolveLLMBaseEndpoint(config.endpoint).replace(/\/$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
     model: config.model,
     max_completion_tokens: config.max_tokens || 8192,
     messages: [{ role: "developer", content: systemPrompt }, ...messages],
   };
   if (tools.length > 0) body.tools = tools;
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "api-key": config.api_key || "" },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "api-key": config.api_key || "" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`LLM service unreachable: ${msg}`);
+  }
   if (!res.ok) throw new Error(`LLM error: ${res.status} ${(await res.text()).slice(0, 200)}`);
   const result = await res.json();
   const choice = result.choices?.[0];
@@ -648,7 +698,7 @@ Chat ID: ${chatDisplayId}`;
         const controller_send = (type: SSEEventType, data: unknown) => {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type, data, timestamp: new Date().toISOString() })}\n\n`));
         };
-        controller_send("error", { message: error instanceof Error ? error.message : "Internal server error" });
+        controller_send("error", { message: getUserFacingErrorMessage(error) });
       } finally {
         clearInterval(heartbeatInterval);
         if (mcpClient) mcpClient.close();

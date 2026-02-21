@@ -153,98 +153,6 @@ function detectDetailLookup(query: string): DetailLookupIntent | null {
   }
   return null;
 }
-
-
-
-interface CreatedDoc {
-  docType: string;          // 'invoice' | 'bill' | 'payment' | 'customer' | 'vendor'
-  docNumber: string | null; // e.g. "INV-46466" — human-readable ref
-  internalId: string | null;
-  party: string | null;     // customer or vendor name
-  amount: number | null;
-  createdAt: string;
-}
-
-/** Parse a write-tool result to extract canonical document metadata */
-function parseCreatedDoc(toolName: string, resultStr: string): CreatedDoc | null {
-  const docTypeMatch = toolName.match(/^(?:create|update)_(\w+)/);
-  if (!docTypeMatch) return null;
-  const docType = docTypeMatch[1];
-
-  let docNumber: string | null = null;
-  let internalId: string | null = null;
-  let party: string | null = null;
-  let amount: number | null = null;
-
-  try {
-    const parsed = JSON.parse(resultStr);
-    const obj = parsed?.data || parsed?.result || parsed || {};
-    // Normalize: could be wrapped in arrays
-    const record = Array.isArray(obj) ? obj[0] : obj;
-    if (!record || typeof record !== 'object') return null;
-
-    // Extract doc number variants
-    docNumber = record.invoice_number || record.invoiceNumber || record.bill_number ||
-      record.billNumber || record.number || record.document_number || record.reference_number ||
-      record.credit_note_number || record.payment_number || null;
-
-    // Internal ID
-    internalId = record.id || record.invoice_id || record.bill_id || record.payment_id ||
-      record.customer_id || record.vendor_id || record.contact_id || null;
-
-    // Party
-    party = record.customer_name || record.vendor_name || record.contact_name ||
-      record.party_name || record.name || null;
-
-    // Amount
-    amount = record.total || record.amount || record.grand_total || record.balance || null;
-    if (typeof amount === 'string') amount = parseFloat(amount) || null;
-  } catch { /* not JSON */ }
-
-  return { docType, docNumber, internalId, party, amount, createdAt: new Date().toISOString() };
-}
-
-/** Extract createdDocs from conversation history (recent messages only) */
-function extractCreatedDocs(conversationHistory: ChatMessage[]): CreatedDoc[] {
-  const docs: CreatedDoc[] = [];
-  for (let i = conversationHistory.length - 1; i >= Math.max(0, conversationHistory.length - 10); i--) {
-    const msg = conversationHistory[i];
-    if (msg.role !== 'assistant') continue;
-    const meta = msg.metadata || {};
-    if (meta.createdDocs && Array.isArray(meta.createdDocs)) {
-      docs.push(...(meta.createdDocs as CreatedDoc[]));
-    }
-  }
-  return docs;
-}
-
-/** Normalize an invoice/bill reference for comparison */
-function normalizeDocRef(ref: string): string {
-  return ref.replace(/[\s\-_]+/g, '').toUpperCase();
-}
-
-// ─── Invoice/Document Detail Lookup Patterns ─────────────────────────────────
-
-const DETAIL_LOOKUP_PATTERNS = [
-  /\b(?:show|get|view|display|find|fetch|details?\s+(?:of|for)?|info\s+(?:of|for)?)\b.*?\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
-  /\b(invoice|bill|credit.?note|payment)\b.*?\b([A-Z]{2,5}[\-\s]?\d{3,})\b/i,
-];
-
-interface DetailLookupIntent {
-  docType: string;
-  docRef: string;
-}
-
-function detectDetailLookup(query: string): DetailLookupIntent | null {
-  for (const pattern of DETAIL_LOOKUP_PATTERNS) {
-    const match = query.match(pattern);
-    if (match) {
-      return { docType: match[1].toLowerCase().replace(/\s+/g, '_'), docRef: match[2] };
-    }
-  }
-  return null;
-}
-
 // ─── Follow-up / Confirmation Detection ──────────────────────────────────────
 
 const CONFIRMATION_PATTERNS = [
@@ -532,6 +440,57 @@ function isToolResultError(result: string): boolean {
   return false;
 }
 
+const DEFAULT_AZURE_OPENAI_ENDPOINT = "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+
+function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
+  const raw = (endpoint || "").trim();
+  if (!raw) return DEFAULT_AZURE_OPENAI_ENDPOINT;
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+
+    if (
+      host.endsWith(".supabase.co") ||
+      path.includes("/functions/v1") ||
+      path.endsWith("/v1/messages")
+    ) {
+      console.warn(`[api] LLM endpoint "${raw}" looks incompatible with chat/completions. Falling back to default endpoint.`);
+      return DEFAULT_AZURE_OPENAI_ENDPOINT;
+    }
+    return raw;
+  } catch {
+    console.warn(`[api] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
+    return DEFAULT_AZURE_OPENAI_ENDPOINT;
+  }
+}
+
+function getUserFacingErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("fetch failed")) {
+    return "I couldn't reach the AI service right now. Please try again in a moment. If this keeps happening, check LLM endpoint and API key in settings.";
+  }
+  if (lower.includes("llm service unreachable")) {
+    return "I couldn't reach the AI service right now. Please verify LLM endpoint and API key in settings.";
+  }
+  if (lower.includes("openai api error") && lower.includes("401")) {
+    return "AI credentials look invalid. Please verify the LLM API key and endpoint in settings.";
+  }
+  if (lower.includes("openai api error") && lower.includes("429")) {
+    return "The AI service is rate-limited right now. Please wait a moment and try again.";
+  }
+  if (lower.includes("openai api error") && lower.includes("404")) {
+    return "LLM endpoint appears misconfigured. Please verify endpoint and model settings.";
+  }
+  if (lower.includes("mcp connection failed")) {
+    return "HelloBooks connection failed. Please reconnect and try again.";
+  }
+  return "I couldn't complete this request right now. Please try again in a moment.";
+}
+
 // ─── OpenAI Call ──────────────────────────────────────────────────────────────
 
 async function callOpenAI(
@@ -549,7 +508,7 @@ async function callOpenAI(
   };
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }> {
-  const baseEndpoint = config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+  const baseEndpoint = resolveLLMBaseEndpoint(config.endpoint);
   const endpoint = `${baseEndpoint.replace(/\/$/, "")}/chat/completions`;
 
   const headers: Record<string, string> = {
@@ -569,7 +528,13 @@ async function callOpenAI(
   };
   if (tools && tools.length > 0) body.tools = tools;
 
-  const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`LLM service unreachable: ${msg}`);
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -1309,7 +1274,20 @@ serve(async (req) => {
 
     } catch (error) {
       console.error('[Error]', error);
-      sendEvent('error', { message: error instanceof Error ? error.message : 'An unexpected error occurred', code: 'PROCESSING_ERROR' });
+      const safeMessage = getUserFacingErrorMessage(error);
+      feedbackPath = "error";
+      feedbackResponse = safeMessage;
+      sendEvent('error', { message: safeMessage, code: 'PROCESSING_ERROR' });
+      sendEvent('response_chunk', { text: safeMessage });
+      sendEvent('complete', {
+        success: false,
+        query,
+        path: 'error',
+        response: safeMessage,
+        matchedIntent: null,
+        reasoning: 'Processing failed',
+        executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+      });
     } finally {
       // Persist conversation to unified_conversations
       const effectiveConversationId = conversationId || apiMessageId;

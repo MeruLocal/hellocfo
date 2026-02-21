@@ -27,6 +27,8 @@ const corsHeaders = {
 
 const MAX_TOOL_RESULT_CHARS = 50000;
 
+const DEFAULT_AZURE_OPENAI_ENDPOINT = "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+
 interface LLMConfig {
   id: string;
   provider: string;
@@ -84,6 +86,49 @@ function truncateResult(result: string, maxChars: number = MAX_TOOL_RESULT_CHARS
   return result.slice(0, maxChars) + `\n[Truncated: ${result.length} chars total]`;
 }
 
+function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
+  const raw = (endpoint || "").trim();
+  if (!raw) return DEFAULT_AZURE_OPENAI_ENDPOINT;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (
+      host.endsWith(".supabase.co") ||
+      path.includes("/functions/v1") ||
+      path.endsWith("/v1/messages")
+    ) {
+      console.warn(`[realtime] LLM endpoint "${raw}" looks incompatible with chat/completions. Falling back to default endpoint.`);
+      return DEFAULT_AZURE_OPENAI_ENDPOINT;
+    }
+    return raw;
+  } catch {
+    console.warn(`[realtime] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
+    return DEFAULT_AZURE_OPENAI_ENDPOINT;
+  }
+}
+
+function getUserFacingErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("fetch failed")) {
+    return "I couldn't reach the AI service right now. Please try again in a moment.";
+  }
+  if (lower.includes("llm service unreachable")) {
+    return "I couldn't reach the AI service right now. Please verify endpoint and API key in settings.";
+  }
+  if (lower.includes("openai api error") && lower.includes("401")) {
+    return "AI credentials look invalid. Please verify the LLM API key and endpoint.";
+  }
+  if (lower.includes("openai api error") && lower.includes("429")) {
+    return "The AI service is rate-limited right now. Please wait a moment and try again.";
+  }
+  if (lower.includes("openai api error") && lower.includes("404")) {
+    return "LLM endpoint appears misconfigured. Please verify endpoint and model settings.";
+  }
+  return "I couldn't complete this request right now. Please try again in a moment.";
+}
+
 // MCPClient is now imported from mcp-client.ts (StreamableMCPClient)
 
 // Call Azure OpenAI API
@@ -104,7 +149,7 @@ async function callOpenAI(
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }> {
   // Build the endpoint URL for Azure OpenAI
-  const baseEndpoint = config.endpoint || "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
+  const baseEndpoint = resolveLLMBaseEndpoint(config.endpoint);
   const endpoint = `${baseEndpoint.replace(/\/$/, "")}/chat/completions`;
 
   const headers: Record<string, string> = {
@@ -126,7 +171,13 @@ async function callOpenAI(
   if (tools.length > 0) body.tools = tools;
 
   console.log(`[${reqId}] Calling OpenAI: ${config.model} (${tools.length} tools)`);
-  const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`LLM service unreachable: ${msg}`);
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -736,7 +787,7 @@ serve(async (req) => {
       } catch (error) {
         console.error(`[${reqId}] Error:`, error);
         mcpClientInstance?.close();
-        sendEvent("error", { message: String(error) });
+        sendEvent("error", { message: getUserFacingErrorMessage(error) });
         controller.close();
       }
     },
