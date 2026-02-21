@@ -180,6 +180,146 @@ function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction
   return null;
 }
 
+// ─── Pagination Helpers ──────────────────────────────────────────────────────
+
+const BULK_LIST_PATTERNS = [
+  /\b(all|every|list|show\s+all|show\s+me\s+all|get\s+all|fetch\s+all|sab|sabhi|saare)\b/i,
+  /\b(show|give|get|fetch|list)\s+(me\s+)?(all\s+)?(bills?|invoices?|customers?|vendors?|payments?|credit.?notes?|delivery.?challans?|transactions?)/i,
+];
+
+const PAGINATION_FOLLOW_PATTERNS = [
+  /\b(more|next|next\s+page|show\s+more|aur\s+dikhao|agla|agle|next\s+\d+)\b/i,
+  /\b(previous|prev|pichla|pehle\s+wale)\b/i,
+];
+
+const LIST_TOOL_PATTERNS = /^(get_|list_|fetch_|search_|find_)/i;
+
+function isBulkListQuery(query: string): boolean {
+  return BULK_LIST_PATTERNS.some(p => p.test(query));
+}
+
+function isPaginationFollowUp(query: string): boolean {
+  return PAGINATION_FOLLOW_PATTERNS.some(p => p.test(query));
+}
+
+function isListTool(toolName: string): boolean {
+  return LIST_TOOL_PATTERNS.test(toolName);
+}
+
+/** Detect which entity types the query asks for (bills, invoices, etc.) */
+function detectRequestedEntities(query: string): string[] {
+  const entities: string[] = [];
+  const q = query.toLowerCase();
+  if (/\bbills?\b/.test(q)) entities.push('bills');
+  if (/\binvoices?\b/.test(q)) entities.push('invoices');
+  if (/\bcustomers?\b/.test(q)) entities.push('customers');
+  if (/\bvendors?\b/.test(q)) entities.push('vendors');
+  if (/\bpayments?\b/.test(q)) entities.push('payments');
+  if (/\bcredit.?notes?\b/.test(q)) entities.push('credit_notes');
+  if (/\bdelivery.?challans?\b/.test(q)) entities.push('delivery_challans');
+  if (/\btransactions?\b/.test(q)) entities.push('transactions');
+  return entities;
+}
+
+const DEFAULT_PAGE_SIZE = 15;
+const MAX_PAGE_SIZE = 50;
+
+/** Inject pagination defaults into list tool args */
+function injectPaginationDefaults(
+  args: Record<string, unknown>,
+  schema: unknown,
+  requestedSize?: number
+): Record<string, unknown> {
+  const s = schema as { properties?: Record<string, unknown> } | undefined;
+  if (!s?.properties) return args;
+  const result = { ...args };
+  const pageSize = requestedSize ? Math.min(requestedSize, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+
+  // Try common pagination param names
+  const paginationKeys = ['limit', 'page_size', 'per_page', 'take', 'pageSize', 'perPage'];
+  for (const key of paginationKeys) {
+    if (key in s.properties && !(key in result)) {
+      result[key] = pageSize;
+      break;
+    }
+  }
+
+  // Inject page/offset defaults if schema supports
+  const offsetKeys = ['offset', 'skip', 'page', 'cursor', 'start'];
+  for (const key of offsetKeys) {
+    if (key in s.properties && !(key in result)) {
+      result[key] = key === 'page' ? 1 : 0;
+      break;
+    }
+  }
+
+  return result;
+}
+
+/** Extract pagination metadata from a tool result */
+function extractPaginationMeta(toolName: string, result: string): {
+  hasMore: boolean;
+  nextPage?: number;
+  nextCursor?: string;
+  totalCount?: number;
+  returnedCount: number;
+} {
+  let returnedCount = 0;
+  let hasMore = false;
+  let nextPage: number | undefined;
+  let nextCursor: string | undefined;
+  let totalCount: number | undefined;
+
+  try {
+    const parsed = JSON.parse(result);
+    // Handle array response
+    if (Array.isArray(parsed)) {
+      returnedCount = parsed.length;
+      hasMore = parsed.length >= DEFAULT_PAGE_SIZE;
+    }
+    // Handle object with data array
+    if (parsed?.data && Array.isArray(parsed.data)) {
+      returnedCount = parsed.data.length;
+    }
+    // Check pagination indicators
+    if (parsed?.has_more !== undefined) hasMore = !!parsed.has_more;
+    if (parsed?.hasMore !== undefined) hasMore = !!parsed.hasMore;
+    if (parsed?.next_page !== undefined) { nextPage = parsed.next_page; hasMore = true; }
+    if (parsed?.nextPage !== undefined) { nextPage = parsed.nextPage; hasMore = true; }
+    if (parsed?.next_cursor !== undefined) { nextCursor = parsed.next_cursor; hasMore = true; }
+    if (parsed?.nextCursor !== undefined) { nextCursor = parsed.nextCursor; hasMore = true; }
+    if (parsed?.total !== undefined) totalCount = parsed.total;
+    if (parsed?.total_count !== undefined) totalCount = parsed.total_count;
+    if (parsed?.totalCount !== undefined) totalCount = parsed.totalCount;
+    if (totalCount && returnedCount < totalCount) hasMore = true;
+  } catch { /* not JSON, estimate from text */ }
+
+  return { hasMore, nextPage, nextCursor, totalCount, returnedCount };
+}
+
+interface PaginationState {
+  toolName: string;
+  lastPage: number;
+  lastOffset: number;
+  nextCursor?: string;
+  totalCount?: number;
+  returnedSoFar: number;
+  hasMore: boolean;
+}
+
+/** Extract pagination state from conversation history */
+function extractPaginationState(conversationHistory: ChatMessage[]): Record<string, PaginationState> | null {
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg.role !== 'assistant') continue;
+    const meta = msg.metadata || {};
+    if (meta.pendingPagination) {
+      return meta.pendingPagination as Record<string, PaginationState>;
+    }
+  }
+  return null;
+}
+
 // ─── Tool Arg Helpers ────────────────────────────────────────────────────────
 
 function sanitizeToolArgs(
@@ -516,6 +656,12 @@ serve(async (req) => {
         let args = sanitizeToolArgs(rawArgs, schema);
         args = injectScopeIds(args, schema, effectiveEntityId, mcpOrgId || '');
 
+        // For list tools, inject pagination defaults if not already set
+        if (isListTool(toolName)) {
+          args = injectPaginationDefaults(args, schema);
+          console.log(`[api] List tool ${toolName} — injected pagination defaults:`, JSON.stringify(args));
+        }
+
         const maxAttempts = isWriteTool(toolName) ? 2 : 1;
         let lastError = '';
 
@@ -789,6 +935,26 @@ serve(async (req) => {
 
           const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
 
+          // ─── Pagination follow-up detection ───
+          const isPaginationRequest = isPaginationFollowUp(query);
+          const existingPaginationState = isPaginationRequest ? extractPaginationState(conversationHistory) : null;
+          let paginationContext = '';
+          if (isPaginationRequest && existingPaginationState) {
+            const stateEntries = Object.entries(existingPaginationState);
+            const stateDesc = stateEntries.map(([tool, state]) =>
+              `Tool "${tool}": returned ${state.returnedSoFar} so far, hasMore=${state.hasMore}, nextPage=${state.lastPage + 1}, offset=${state.lastOffset + DEFAULT_PAGE_SIZE}`
+            ).join('; ');
+            paginationContext = `\n\n📄 PAGINATION CONTEXT: The user wants the NEXT page of results. Previous state: ${stateDesc}. Call the same list tool(s) with the next page/offset. Do NOT repeat the first page.`;
+          }
+
+          // ─── Bulk list detection ───
+          const isBulkList = isBulkListQuery(query);
+          const requestedEntities = detectRequestedEntities(query);
+          let bulkListContext = '';
+          if (isBulkList && requestedEntities.length >= 2) {
+            bulkListContext = `\n\n📋 MULTI-LIST REQUEST: The user asked for ${requestedEntities.join(' AND ')}. You MUST call SEPARATE list tools for EACH entity type. Do NOT call just one tool. Call them all and present results in separate sections.`;
+          }
+
           // Build system prompt with confirmation context
           let confirmationContext = '';
           if (isConfirmation && pendingAction) {
@@ -800,7 +966,7 @@ serve(async (req) => {
             confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user said "${query}" which is a confirmation/retry. Look at the conversation history to find what action was being discussed and execute it immediately using the available tools. Extract all parameters (customer, items, amounts, dates, tax) from the conversation history. Do NOT ask for more details unless a truly required field (customer name, amount, items) is completely missing. Do NOT generate fake data. Call the tool NOW.`;
           }
 
-          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}`;
+          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}`;
 
           // For confirmations, include more history
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
@@ -947,6 +1113,27 @@ serve(async (req) => {
           }
         }
 
+        // Build pagination state for list tools
+        let paginationStateForMeta: Record<string, PaginationState> | null = null;
+        const listToolResults = feedbackToolsUsed.filter(t => isListTool(t));
+        if (listToolResults.length > 0) {
+          paginationStateForMeta = {};
+          // Merge with existing pagination state if this is a "show more" follow-up
+          const prevPagState = extractPaginationState(conversationHistory);
+          for (const toolName of listToolResults) {
+            const mcpResult = feedbackResponse || ''; // We don't have individual results here, use defaults
+            const prevState = prevPagState?.[toolName];
+            const returnedCount = DEFAULT_PAGE_SIZE; // Approximate
+            paginationStateForMeta[toolName] = {
+              toolName,
+              lastPage: (prevState?.lastPage ?? 0) + 1,
+              lastOffset: (prevState?.lastOffset ?? 0) + DEFAULT_PAGE_SIZE,
+              returnedSoFar: (prevState?.returnedSoFar ?? 0) + returnedCount,
+              hasMore: true, // Default optimistic — LLM will tell user if no more
+            };
+          }
+        }
+
         const agentMsg = {
           id: apiMessageId,
           role: "agent",
@@ -965,6 +1152,9 @@ serve(async (req) => {
               pendingTool: pendingToolForMeta,
               pendingArgs: pendingArgsForMeta || {},
               pendingSummary: pendingSummaryForMeta || '',
+            } : {}),
+            ...(paginationStateForMeta ? {
+              pendingPagination: paginationStateForMeta,
             } : {}),
           },
         };
