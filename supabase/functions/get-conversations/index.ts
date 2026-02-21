@@ -20,6 +20,10 @@ serve(async (req) => {
   let conversationId = url.searchParams.get("conversationId");
   let userId = url.searchParams.get("userId");
   let entityId = url.searchParams.get("entityId");
+  const limitRaw = url.searchParams.get("limit");
+  const offsetRaw = url.searchParams.get("offset");
+  const limit = Math.min(Math.max(Number.parseInt(limitRaw || "100", 10) || 100, 1), 1000);
+  const offset = Math.max(Number.parseInt(offsetRaw || "0", 10) || 0, 0);
 
   // Also support POST body
   if (req.method === "POST") {
@@ -34,13 +38,23 @@ serve(async (req) => {
   try {
     // Detail mode: return full conversation
     if (conversationId) {
-      const { data, error } = await supabase
+      let detailQuery = supabase
         .from("unified_conversations")
         .select("*")
-        .eq("conversation_id", conversationId)
-        .single();
+        .eq("conversation_id", conversationId);
+
+      if (userId) detailQuery = detailQuery.eq("user_id", userId);
+      if (entityId) detailQuery = detailQuery.eq("entity_id", entityId);
+
+      const { data, error } = await detailQuery.maybeSingle();
 
       if (error) throw error;
+      if (!data) {
+        return new Response(JSON.stringify({ error: "Conversation not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify(data), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -54,7 +68,7 @@ serve(async (req) => {
         .eq("user_id", userId)
         .eq("entity_id", entityId)
         .order("updated_at", { ascending: false })
-        .limit(50);
+        .range(offset, offset + limit - 1);
 
       if (error) throw error;
       return new Response(JSON.stringify(data || []), {

@@ -22,6 +22,7 @@ interface ConversationSidebarProps {
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  refreshKey?: number;
 }
 
 function groupByDate(conversations: ConversationSummary[]) {
@@ -52,6 +53,7 @@ export function ConversationSidebar({
   onNewChat,
   isCollapsed,
   onToggleCollapse,
+  refreshKey = 0,
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -62,18 +64,32 @@ export function ConversationSidebar({
     setIsLoading(true);
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const res = await fetch(
-        `${supabaseUrl}/functions/v1/get-conversations?userId=${encodeURIComponent(userId)}&entityId=${encodeURIComponent(entityId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-          },
-        }
-      );
-      if (res.ok) {
+      const pageSize = 100;
+      const maxPages = 20;
+      const all: ConversationSummary[] = [];
+
+      for (let page = 0; page < maxPages; page++) {
+        const offset = page * pageSize;
+        const res = await fetch(
+          `${supabaseUrl}/functions/v1/get-conversations?userId=${encodeURIComponent(userId)}&entityId=${encodeURIComponent(entityId)}&limit=${pageSize}&offset=${offset}`,
+          {
+            headers: {
+              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            },
+          }
+        );
+        if (!res.ok) break;
         const data = await res.json();
-        setConversations(data);
+        const pageItems: ConversationSummary[] = Array.isArray(data) ? data : [];
+        all.push(...pageItems);
+        if (pageItems.length < pageSize) break;
       }
+
+      const deduped = Array.from(
+        new Map(all.map((item) => [item.conversation_id, item])).values()
+      ).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+      setConversations(deduped);
     } catch (e) {
       console.error('Failed to fetch conversations:', e);
     } finally {
@@ -83,6 +99,13 @@ export function ConversationSidebar({
 
   useEffect(() => {
     fetchConversations();
+  }, [userId, entityId, refreshKey]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchConversations();
+    }, 30000);
+    return () => clearInterval(interval);
   }, [userId, entityId]);
 
   const filtered = searchQuery

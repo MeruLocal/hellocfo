@@ -53,6 +53,7 @@ export function RealtimeCFOAgent({
   const [currentPhase, setCurrentPhase] = useState('');
   const [conversationId, setConversationId] = useState<string>(crypto.randomUUID());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
   
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -238,6 +239,7 @@ export function RealtimeCFOAgent({
         });
         
         setIsProcessing(false);
+        setConversationRefreshKey((prev) => prev + 1);
         break;
 
       case 'error':
@@ -317,10 +319,13 @@ export function RealtimeCFOAgent({
             currency: businessContext.currency,
             fiscalYearEnd: businessContext.fiscalYearEnd
           },
-          conversationHistory: messages.slice(-10).map(m => ({
-            role: m.role === 'user' ? 'user' : 'assistant',
-            content: m.content
-          }))
+          conversationHistory: messages
+            .filter((m) => !m.isStreaming)
+            .map((m) => ({
+              role: m.role === 'user' ? 'user' : 'assistant',
+              content: m.content,
+              ...(m.timestamp ? { timestamp: m.timestamp.toISOString() } : {}),
+            }))
         }),
         signal: abortControllerRef.current.signal
       });
@@ -450,6 +455,7 @@ export function RealtimeCFOAgent({
         onNewChat={handleNewChat}
         isCollapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        refreshKey={conversationRefreshKey}
       />
 
       <div className="flex-1 flex flex-col">

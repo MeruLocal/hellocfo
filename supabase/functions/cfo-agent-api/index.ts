@@ -35,6 +35,8 @@ interface SSEEvent {
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  id?: string;
+  timestamp?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -78,6 +80,27 @@ function normalizeConversationHistory(history: ChatMessage[]): ChatMessage[] {
     ...m,
     role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
   }));
+}
+
+function parseConversationMessages(raw: unknown): ChatMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const parsed: ChatMessage[] = [];
+  for (const msg of raw) {
+    if (!msg || typeof msg !== 'object') continue;
+    const obj = msg as Record<string, unknown>;
+    const content = typeof obj.content === 'string' ? obj.content.trim() : '';
+    if (!content) continue;
+    const roleRaw = typeof obj.role === 'string' ? obj.role.toLowerCase() : 'assistant';
+    const role: 'user' | 'assistant' = roleRaw === 'user' ? 'user' : 'assistant';
+    parsed.push({
+      role,
+      content,
+      ...(typeof obj.id === 'string' ? { id: obj.id } : {}),
+      ...(typeof obj.timestamp === 'string' ? { timestamp: obj.timestamp } : {}),
+      ...(obj.metadata && typeof obj.metadata === 'object' ? { metadata: obj.metadata as Record<string, unknown> } : {}),
+    });
+  }
+  return parsed;
 }
 
 // ─── Created Document Tracking ───────────────────────────────────────────────
@@ -1107,7 +1130,7 @@ serve(async (req) => {
 
   const { query, conversationId, conversationHistory: rawConversationHistory = [], stream = true, entityId, orgId } = body;
   // Normalize roles: treat 'agent' as 'assistant'
-  const conversationHistory = normalizeConversationHistory(rawConversationHistory);
+  let conversationHistory = normalizeConversationHistory(rawConversationHistory);
   const hAuthHeader = req.headers.get('H-Authorization');
   const mcpAuthFromHeader = hAuthHeader?.startsWith('Bearer ') ? hAuthHeader.replace('Bearer ', '').trim() : null;
 
@@ -1115,6 +1138,25 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Query is required' }), {
       status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
+  }
+
+  // Prefer persisted conversation history from DB when available
+  if (conversationId) {
+    try {
+      const { data: existingConversation } = await supabase
+        .from("unified_conversations")
+        .select("messages")
+        .eq("conversation_id", conversationId)
+        .maybeSingle();
+
+      const persistedHistory = parseConversationMessages(existingConversation?.messages);
+      if (persistedHistory.length > 0) {
+        conversationHistory = persistedHistory;
+        console.log(`[api] Loaded ${persistedHistory.length} persisted messages for conversation ${conversationId}`);
+      }
+    } catch (historyError) {
+      console.warn('[api] Failed to load persisted conversation history, falling back to request history:', historyError);
+    }
   }
 
   // Get LLM config
@@ -2065,11 +2107,12 @@ serve(async (req) => {
 
         if (existing) {
           const existingMessages = (existing.messages as unknown[]) || [];
+          const updatedMessages = [...existingMessages, userMsg, agentMsg];
           await supabase
             .from("unified_conversations")
             .update({
-              messages: [...existingMessages, userMsg, agentMsg],
-              message_count: (existing.message_count || 0) + 2,
+              messages: updatedMessages,
+              message_count: updatedMessages.length,
               updated_at: new Date().toISOString(),
             })
             .eq("id", existing.id);

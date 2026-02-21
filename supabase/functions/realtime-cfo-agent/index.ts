@@ -129,6 +129,28 @@ function getUserFacingErrorMessage(error: unknown): string {
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function normalizeConversationMessages(history: unknown): ConversationMessage[] {
+  if (!Array.isArray(history)) return [];
+  const normalized: ConversationMessage[] = [];
+  for (const item of history) {
+    if (!item || typeof item !== "object") continue;
+    const msg = item as Record<string, unknown>;
+    const content = typeof msg.content === "string" ? msg.content.trim() : "";
+    if (!content) continue;
+    const roleRaw = typeof msg.role === "string" ? msg.role.toLowerCase() : "assistant";
+    normalized.push({
+      role: roleRaw === "user" ? "user" : "assistant",
+      content,
+    });
+  }
+  return normalized;
+}
+
 // MCPClient is now imported from mcp-client.ts (StreamableMCPClient)
 
 // Call Azure OpenAI API
@@ -214,7 +236,25 @@ serve(async (req) => {
       };
 
       try {
-        const { query, intents, businessContext, conversationHistory = [], conversationId: incomingConversationId } = await req.json();
+        const requestPayload = await req.json();
+        const {
+          query,
+          intents,
+          businessContext,
+          conversationHistory: incomingConversationHistory = [],
+          conversationId: incomingConversationId,
+          entityId: bodyEntityId,
+          orgId: bodyOrgId,
+        } = requestPayload as {
+          query: string;
+          intents?: Array<{ isActive: boolean }>;
+          businessContext?: Record<string, unknown>;
+          conversationHistory?: unknown[];
+          conversationId?: string;
+          entityId?: string;
+          orgId?: string;
+        };
+        let conversationHistory = normalizeConversationMessages(incomingConversationHistory);
         if (!query) {
           sendEvent("error", { message: "Query required" });
           controller.close();
@@ -245,8 +285,26 @@ serve(async (req) => {
         const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
         // Entity isolation — entityId from request body/headers, fallback to env
-        const body = await req.clone().json().catch(() => ({}));
-        const entityId = body?.entityId || req.headers.get("X-Entity-Id") || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
+        const entityId = bodyEntityId || req.headers.get("X-Entity-Id") || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
+        const orgIdFromPayload = bodyOrgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+
+        // Prefer persisted conversation history when available
+        if (incomingConversationId) {
+          try {
+            const { data: existingConversation } = await supabase
+              .from("unified_conversations")
+              .select("messages")
+              .eq("conversation_id", incomingConversationId)
+              .maybeSingle();
+            const persisted = normalizeConversationMessages(existingConversation?.messages);
+            if (persisted.length > 0) {
+              conversationHistory = persisted;
+              console.log(`[${reqId}] Loaded ${persisted.length} persisted history messages`);
+            }
+          } catch (historyError) {
+            console.warn(`[${reqId}] Failed to load persisted conversation history:`, historyError);
+          }
+        }
 
         const { data: llmConfig, error: llmError } = await supabase
           .from("llm_configs")
@@ -280,7 +338,7 @@ serve(async (req) => {
         // STEP 2: Connect to MCP using Streamable HTTP
         const hAuth = req.headers.get("H-Authorization") || req.headers.get("h-authorization");
         const authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth) || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-        const orgId = body?.orgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
+        const orgId = orgIdFromPayload;
         const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "";
 
         let mcpTools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
@@ -718,11 +776,12 @@ serve(async (req) => {
 
           if (existing) {
             const existingMessages = (existing.messages as unknown[]) || [];
+            const updatedMessages = [...existingMessages, userMsg, agentMsg];
             await supabase
               .from("unified_conversations")
               .update({
-                messages: [...existingMessages, userMsg, agentMsg],
-                message_count: (existing.message_count || 0) + 2,
+                messages: updatedMessages,
+                message_count: updatedMessages.length,
                 updated_at: new Date().toISOString(),
               })
               .eq("id", existing.id);
