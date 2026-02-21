@@ -53,7 +53,6 @@ function generateChatName(query: string, category: string, toolsUsed: string[]):
   const q = query.trim();
   const words = q.split(/\s+/);
 
-  // Priority 1: Action + entity (e.g. "Show Outstanding Invoices")
   const actionWords = ["show", "get", "fetch", "list", "create", "send", "export", "find"];
   const entityWords = ["invoice", "bill", "payment", "customer", "vendor", "report", "profit", "cash", "gst", "tax"];
   const action = words.find(w => actionWords.some(a => w.toLowerCase().startsWith(a)));
@@ -62,12 +61,10 @@ function generateChatName(query: string, category: string, toolsUsed: string[]):
     return `${action.charAt(0).toUpperCase() + action.slice(1).toLowerCase()} ${entity.charAt(0).toUpperCase() + entity.slice(1).toLowerCase()}`;
   }
 
-  // Priority 2: First 6 words of message
   if (words.length >= 3) {
     return words.slice(0, 6).join(" ").replace(/[?!]+$/, "");
   }
 
-  // Priority 3: Category-based
   if (category === "bookkeeper") return "Accounting Task";
   if (category === "cfo") return "Financial Query";
   return "New Chat";
@@ -75,11 +72,11 @@ function generateChatName(query: string, category: string, toolsUsed: string[]):
 
 // Simple keyword-based category classifier
 function classifyQuery(query: string): "bookkeeper" | "cfo" | "general_chat" {
-  const q = query.toLowerCase();
-  const generalPatterns = [/^(hi|hello|hey|thanks|bye|ok|yes|no)[\s!?.]*$/i];
-  if (generalPatterns.some(p => p.test(q.trim()))) return "general_chat";
+  const q = query.toLowerCase().trim();
+  const generalPatterns = [/^(hi|hello|hey|thanks|bye|ok|yes|no|namaste)[\s!?.]*$/i];
+  if (generalPatterns.some(p => p.test(q))) return "general_chat";
 
-  const bookkeeperKws = ["create", "add", "new", "edit", "update", "delete", "remove", "record", "send", "file", "submit", "void", "import", "clone", "reconcile"];
+  const bookkeeperKws = ["create", "add", "new", "edit", "update", "delete", "remove", "record", "send", "file", "submit", "void", "import", "clone", "reconcile", "banao", "bhejo"];
   const cfoKws = ["show", "get", "fetch", "list", "view", "report", "analyze", "compare", "revenue", "profit", "loss", "balance", "cash", "receivable", "payable", "gst", "tax", "inventory", "forecast", "aging", "overdue", "outstanding"];
 
   const bScore = bookkeeperKws.filter(k => q.includes(k)).length;
@@ -88,6 +85,49 @@ function classifyQuery(query: string): "bookkeeper" | "cfo" | "general_chat" {
   if (bScore > cScore) return "bookkeeper";
   if (cScore > 0) return "cfo";
   return "cfo"; // default
+}
+
+// ─── Follow-up Detection ──────────────────────────────────────────────────────
+// If user sends a short confirmation/retry message AND there is conversation history,
+// reuse the previous tool group instead of re-classifying.
+
+const FOLLOWUP_PATTERNS = [
+  /^(yes|yep|yeah|haan|ha|kar\s*do|ok|okay|sure|correct|sahi|theek|try\s*again|retry|do\s*it|go\s*ahead|proceed|confirm)/i,
+  /please\s+(try|create|do|make|send|retry)/i,
+  /try\s+again/i,
+  /correct\s*(info|information|details)?/i,
+];
+
+interface FollowUpResult {
+  isFollowUp: boolean;
+  previousCategory?: "bookkeeper" | "cfo" | "general_chat";
+  previousToolsUsed?: string[];
+}
+
+function detectFollowUp(query: string, conversationHistory: Message[]): FollowUpResult {
+  const words = query.trim().split(/\s+/);
+  // Only treat as follow-up if message is short (< 12 words) and matches patterns
+  if (words.length > 12) return { isFollowUp: false };
+  if (conversationHistory.length < 2) return { isFollowUp: false };
+
+  const isFollowUpMsg = FOLLOWUP_PATTERNS.some(p => p.test(query.trim()));
+  if (!isFollowUpMsg) return { isFollowUp: false };
+
+  // Find the last assistant message with metadata
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg.role === "assistant" && msg.metadata) {
+      const cat = msg.metadata.category as string | undefined;
+      const tools = msg.metadata.toolsUsed as string[] | undefined;
+      return {
+        isFollowUp: true,
+        previousCategory: (cat as "bookkeeper" | "cfo" | "general_chat") || "cfo",
+        previousToolsUsed: tools || [],
+      };
+    }
+  }
+
+  return { isFollowUp: false };
 }
 
 // Tool group keywords for filtering
@@ -137,7 +177,57 @@ function selectTools(query: string): string[] {
   return [...new Set(tools)];
 }
 
-// MCPClient replaced by StreamableMCPClient imported from mcp-client.ts
+// ─── System Prompts ──────────────────────────────────────────────────────────
+
+function getSystemPrompt(category: string, entityId: string, chatDisplayId: string): string {
+  const dateStr = new Date().toISOString().split("T")[0];
+  const base = `You are Munimji, an expert AI financial assistant for Indian businesses using HelloBooks accounting software.
+Category: ${category} | Entity: ${entityId} | Chat: ${chatDisplayId}
+Date: ${dateStr}
+
+CRITICAL RULES:
+- Use the available MCP tools to fetch REAL financial data
+- NEVER make up numbers or financial data
+- Format currency as ₹ with Indian number formatting (lakhs, crores)
+- Be concise and structured in responses`;
+
+  if (category === "bookkeeper") {
+    return base + `
+- For write queries (Bookkeeper mode): execute the action and confirm
+- When a user CONFIRMS a previously proposed action (says "yes", "correct", "do it", "try again", "haan", "kar do"), you MUST immediately execute the action using the tools. Do NOT ask for confirmation again.
+- If a previous message in the conversation contains all the details needed for an action, extract them and execute immediately.
+
+PROGRESSIVE FIELD COLLECTION:
+When creating records, apply these rules:
+- Customer/vendor name: ALWAYS required (cannot guess)
+- Amount: ALWAYS required (cannot guess)
+- Items/description: ALWAYS required (need at least one line)
+- Date: DEFAULT to today if not specified
+- Due date: DEFAULT to Net 30 if not specified
+- Tax rate: DEFAULT from HSN/SAC code or 18% GST
+- Invoice/bill number: DEFAULT auto-generate
+- Currency: DEFAULT to entity currency (INR/₹)
+Ask ONLY for what is missing. Never ask for fields you can default.
+
+DUPLICATE DETECTION:
+Before ANY create operation, check for duplicates:
+- Invoice: Search by invoice number, or same customer + amount + date
+- Customer/Vendor: Search by GSTIN, PAN, or fuzzy name match
+If a potential duplicate is found, WARN the user before proceeding.
+
+DANGEROUS ACTION TIERS:
+- LOW (edit, update): Execute immediately, show result
+- MEDIUM (reverse, cancel): Ask single confirmation with impact summary
+- HIGH (delete, void, merge): Show linked records affected, ask confirmation
+- CRITICAL (file GST, close FY, bulk delete): Show full checklist, require typed confirmation`;
+  }
+
+  return base + `
+- For read queries (CFO mode): fetch data then summarize
+- Always calculate and show % change vs previous period when time-series data is available
+- Use arrows: ▲ for increase, ▼ for decrease, ► for flat (<1% change)
+- Flag any expense item that is 2x+ higher than its historical average with ⚠`;
+}
 
 // ─── OpenAI Call ──────────────────────────────────────────────────────────────
 
@@ -175,7 +265,6 @@ async function getOrCreateConversation(
   entityId: string,
   userId: string,
 ): Promise<{ chatNumber: number; chatDisplayId: string; isNew: boolean; existingMessages: Message[] }> {
-  // Check if conversation exists
   const { data: existing } = await supabase
     .from("unified_conversations")
     .select("conversation_id, chat_number, chat_display_id, messages")
@@ -191,7 +280,6 @@ async function getOrCreateConversation(
     };
   }
 
-  // Generate sequential chat_number per entity
   const { data: maxRow } = await supabase
     .from("unified_conversations")
     .select("chat_number")
@@ -253,7 +341,6 @@ serve(async (req) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type, data, timestamp: new Date().toISOString() })}\n\n`));
       };
 
-      // Heartbeat every 15s to keep connection alive
       const heartbeatInterval = setInterval(() => {
         try { send("heartbeat", { ts: Date.now() }); } catch { /* ignore */ }
       }, 15000);
@@ -300,44 +387,30 @@ serve(async (req) => {
           supabase, conversationId, resolvedEntityId, userId
         );
 
+        // ── Follow-up Detection ──
+        const followUp = detectFollowUp(userMessage, existingMessages);
+        let category: "bookkeeper" | "cfo" | "general_chat";
+
+        if (followUp.isFollowUp) {
+          category = followUp.previousCategory || "bookkeeper";
+          console.log(`[${reqId}] Follow-up detected → reusing category=${category}, tools=${followUp.previousToolsUsed?.join(",")}`);
+        } else {
+          category = classifyQuery(userMessage);
+        }
+
+        send("route_info", { path: category, category, conversationId, chatDisplayId });
+
         // ── LLM Config ──
         const { data: llmConfig, error: llmError } = await supabase
           .from("llm_configs").select("*").eq("is_default", true).single();
         if (llmError || !llmConfig?.api_key) {
           send("error", { message: "LLM not configured" });
+          clearInterval(heartbeatInterval);
           controller.close(); return;
         }
 
-        // ── Cache check ──
-        const cacheKey = `munimji:${resolvedEntityId}:${btoa(userMessage).slice(0, 32)}`;
-        const { data: cached } = await supabase
-          .from("response_cache")
-          .select("content")
-          .eq("cache_key", cacheKey)
-          .eq("entity_id", resolvedEntityId)
-          .gte("created_at", new Date(Date.now() - 300000).toISOString())
-          .maybeSingle();
-
-        if (cached) {
-          send("route_info", { path: "cached", category: "cache" });
-          for (const chunk of cached.content.match(/.{1,100}/g) || [cached.content]) {
-            send("token", { text: chunk });
-          }
-          send("response", { text: cached.content });
-          send("done", {
-            conversationId, chatNumber, chatDisplayId,
-            auto_generated_name: null, chat_name: null,
-            path: "cached", executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          });
-          clearInterval(heartbeatInterval); controller.close(); return;
-        }
-
-        // ── Classify query ──
-        const category = classifyQuery(userMessage);
-        send("route_info", { path: category, category, conversationId, chatDisplayId });
-
-        // ── General Chat: skip MCP ──
-        if (category === "general_chat") {
+        // ── Handle general chat after LLM config is loaded ──
+        if (category === "general_chat" && !followUp.isFollowUp) {
           send("thinking", { phase: "responding", message: "Generating response..." });
           const systemPrompt = `You are Munimji, a friendly AI accounting assistant for Indian businesses. 
 Be warm, helpful, and concise. If users greet you, greet back and offer to help with their accounting needs.
@@ -364,11 +437,36 @@ Chat ID: ${chatDisplayId}`;
           clearInterval(heartbeatInterval); controller.close(); return;
         }
 
+        // ── Cache check (skip for follow-ups / confirmations) ──
+        if (!followUp.isFollowUp) {
+          const cacheKey = `munimji:${resolvedEntityId}:${btoa(userMessage).slice(0, 32)}`;
+          const { data: cached } = await supabase
+            .from("response_cache")
+            .select("content")
+            .eq("cache_key", cacheKey)
+            .eq("entity_id", resolvedEntityId)
+            .gte("created_at", new Date(Date.now() - 300000).toISOString())
+            .maybeSingle();
+
+          if (cached) {
+            send("route_info", { path: "cached", category: "cache" });
+            for (const chunk of cached.content.match(/.{1,100}/g) || [cached.content]) {
+              send("token", { text: chunk });
+            }
+            send("response", { text: cached.content });
+            send("done", {
+              conversationId, chatNumber, chatDisplayId,
+              auto_generated_name: null, chat_name: null,
+              path: "cached", executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+            });
+            clearInterval(heartbeatInterval); controller.close(); return;
+          }
+        }
+
         // ── Connect to MCP (Streamable HTTP) ──
         const hAuth = req.headers.get("h-authorization") || req.headers.get("H-Authorization");
         let authToken = (hAuth?.startsWith("Bearer ") ? hAuth.replace("Bearer ", "").trim() : hAuth)
           || Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN");
-        // Strip redundant Bearer prefix
         while (authToken?.toLowerCase().startsWith("bearer ")) authToken = authToken.substring(7).trim();
         const orgId = body?.org_id || body?.orgId || Deno.env.get("MCP_HELLOBOOKS_ORG_ID");
         const mcpBaseUrl = Deno.env.get("MCP_BASE_URL") || "";
@@ -396,7 +494,16 @@ Chat ID: ${chatDisplayId}`;
         }
 
         // ── Select & build tools ──
-        const selectedToolNames = selectTools(userMessage);
+        let selectedToolNames: string[];
+        
+        if (followUp.isFollowUp && followUp.previousToolsUsed && followUp.previousToolsUsed.length > 0) {
+          // Reuse the exact tools from the previous turn
+          selectedToolNames = followUp.previousToolsUsed;
+          console.log(`[${reqId}] Follow-up: reusing ${selectedToolNames.length} tools from previous turn`);
+        } else {
+          selectedToolNames = selectTools(userMessage);
+        }
+
         let filteredMcpTools = mcpTools.filter(t => selectedToolNames.includes(t.name));
         // Fallback: if keyword filtering yields no matches but MCP has tools, use all tools
         if (filteredMcpTools.length === 0 && mcpTools.length > 0) {
@@ -408,19 +515,12 @@ Chat ID: ${chatDisplayId}`;
         send("thinking", { phase: "planning", message: `Selected ${openAITools.length} tools for your query`, toolCount: openAITools.length });
 
         // ── Agent loop ──
-        const systemPrompt = `You are Munimji, an expert AI financial assistant for Indian businesses using HelloBooks accounting software.
-Category: ${category} | Entity: ${resolvedEntityId} | Chat: ${chatDisplayId}
-Date: ${new Date().toISOString().split("T")[0]}
+        const systemPrompt = getSystemPrompt(category, resolvedEntityId, chatDisplayId);
 
-CRITICAL RULES:
-- Use the available MCP tools to fetch REAL financial data
-- NEVER make up numbers or financial data
-- Format currency as ₹ with Indian number formatting (lakhs, crores)
-- Be concise and structured in responses
-- For read queries (CFO mode): fetch data then summarize
-- For write queries (Bookkeeper mode): execute the action and confirm`;
-
-        const convHistory = existingMessages.slice(-10).map(m => ({ role: m.role, content: m.content }));
+        // Build conversation context — for follow-ups, include more history so the LLM
+        // can see the previously proposed action and the user's confirmation
+        const historySliceCount = followUp.isFollowUp ? 20 : 10;
+        const convHistory = existingMessages.slice(-historySliceCount).map(m => ({ role: m.role, content: m.content }));
         const llmMessages: unknown[] = [...convHistory, { role: "user", content: userMessage }];
         const toolResults: { tool: string; success: boolean; data?: string }[] = [];
 
@@ -442,8 +542,7 @@ CRITICAL RULES:
               let args: Record<string, unknown> = {};
               try { args = JSON.parse(tc.function.arguments); } catch { /* empty */ }
 
-              // Always inject entity_id and org_id — HelloBooks MCP tools require these
-              // to scope data to the correct entity. The LLM may not always include them.
+              // Always inject entity_id and org_id
               const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;
               if (toolSchema?.properties) {
                 if ("entity_id" in toolSchema.properties && resolvedEntityId) args.entity_id = resolvedEntityId;
@@ -464,7 +563,7 @@ CRITICAL RULES:
                   send("tool_result", { tool: toolName, success: true, preview: toolResultStr.slice(0, 200) });
                 } catch (e) {
                   toolResultStr = `Error: ${String(e)}`;
-                  toolResults.push({ tool: toolName, success: false });
+                  toolResults.push({ tool: toolName, success: false, data: String(e) });
                   send("tool_result", { tool: toolName, success: false, error: String(e) });
                 }
               } else {
@@ -488,8 +587,9 @@ CRITICAL RULES:
           send("token", { text: chunk });
         }
 
-        // Save to cache for non-write queries
-        if (category === "cfo" && finalResponse.length > 50) {
+        // Save to cache for non-write queries (skip for bookkeeper / follow-ups)
+        if (category === "cfo" && !followUp.isFollowUp && finalResponse.length > 50) {
+          const cacheKey = `munimji:${resolvedEntityId}:${btoa(userMessage).slice(0, 32)}`;
           const queryHash = btoa(userMessage).slice(0, 32);
           await supabase.from("response_cache").upsert({
             cache_key: cacheKey, entity_id: resolvedEntityId,
@@ -528,7 +628,7 @@ CRITICAL RULES:
           tools_used: toolResults.map(t => t.tool),
           tools_loaded: openAITools.map(t => t.function.name),
           response_time_ms: Date.now() - startTime,
-          implicit_signals: { iterationCount },
+          implicit_signals: { iterationCount, isFollowUp: followUp.isFollowUp },
         });
 
         send("done", {
