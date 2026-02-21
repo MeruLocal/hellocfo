@@ -205,3 +205,124 @@ function simpleHash(str: string): string {
   }
   return Math.abs(hash).toString(36);
 }
+
+// ============================================================
+// Adaptive Confidence Thresholds (Task 14)
+// ============================================================
+
+/**
+ * Get an adaptive confidence threshold for an intent based on historical success rates.
+ * - Success rate > 90% & 20+ attempts → lower threshold by 0.05 (min 0.70)
+ * - Success rate < 70% & 10+ attempts → raise threshold by 0.05 (max 0.95)
+ * - Otherwise → return default
+ */
+export async function getAdaptiveThreshold(
+  supabase: ReturnType<typeof createClient>,
+  intentId: string,
+  defaultThreshold: number = 0.85,
+): Promise<number> {
+  try {
+    const { data: stats } = await supabase
+      .from("intent_routing_stats")
+      .select("total_attempts, successful_attempts")
+      .eq("intent_id", intentId);
+
+    if (!stats || stats.length === 0) return defaultThreshold;
+
+    // Aggregate across all confidence buckets for this intent
+    let totalAttempts = 0;
+    let successfulAttempts = 0;
+    for (const s of stats) {
+      totalAttempts += s.total_attempts || 0;
+      successfulAttempts += s.successful_attempts || 0;
+    }
+
+    if (totalAttempts === 0) return defaultThreshold;
+
+    const successRate = successfulAttempts / totalAttempts;
+
+    if (successRate > 0.9 && totalAttempts >= 20) {
+      return Math.max(0.70, defaultThreshold - 0.05);
+    }
+    if (successRate < 0.7 && totalAttempts >= 10) {
+      return Math.min(0.95, defaultThreshold + 0.05);
+    }
+
+    return defaultThreshold;
+  } catch (e) {
+    console.error("Adaptive threshold error:", e);
+    return defaultThreshold;
+  }
+}
+
+// ============================================================
+// Implicit Signal Detection (Task 15)
+// ============================================================
+
+export interface ImplicitSignals {
+  rephrase?: boolean;
+  followUp?: boolean;
+  actionTaken?: boolean;
+  signal: number; // -1 = negative, 0 = neutral, +1 = positive, +2 = strong positive
+  source?: string;
+}
+
+/**
+ * Detect implicit feedback signals from user behavior.
+ * - Rephrase: user repeats similar query → negative signal (-1)
+ * - Follow-up: user builds on previous response → positive signal (+1)
+ * - Action taken: user acts on read data → strong positive (+2)
+ */
+export function detectImplicitSignals(
+  query: string,
+  conversationHistory: { role: string; content: string }[],
+): ImplicitSignals {
+  if (conversationHistory.length < 2) {
+    return { signal: 0, source: "no_history" };
+  }
+
+  const queryLower = query.toLowerCase().trim();
+  const queryWords = new Set(queryLower.split(/\s+/).filter(w => w.length > 2));
+
+  // Find the last user message
+  let lastUserMsg = "";
+  let lastAssistantMsg = "";
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg.role === "user" && !lastUserMsg) lastUserMsg = msg.content.toLowerCase().trim();
+    if ((msg.role === "assistant" || msg.role === "agent") && !lastAssistantMsg) lastAssistantMsg = msg.content.toLowerCase().trim();
+    if (lastUserMsg && lastAssistantMsg) break;
+  }
+
+  if (!lastUserMsg) return { signal: 0, source: "no_prior_user_msg" };
+
+  // Rephrase detection: high keyword overlap with previous user message
+  const lastWords = new Set(lastUserMsg.split(/\s+/).filter(w => w.length > 2));
+  if (lastWords.size > 0 && queryWords.size > 0) {
+    let overlap = 0;
+    for (const w of queryWords) { if (lastWords.has(w)) overlap++; }
+    const overlapRatio = overlap / Math.max(queryWords.size, lastWords.size);
+    if (overlapRatio > 0.6 && queryLower !== lastUserMsg) {
+      return { rephrase: true, signal: -1, source: `rephrase_${(overlapRatio * 100).toFixed(0)}pct` };
+    }
+  }
+
+  // Action taken: write verbs after a read response
+  const actionVerbs = ["create", "add", "send", "update", "edit", "delete", "record", "pay", "file"];
+  const isAction = actionVerbs.some(v => queryLower.includes(v));
+  const lastWasRead = lastAssistantMsg && (
+    lastAssistantMsg.includes("₹") || lastAssistantMsg.includes("|") ||
+    lastAssistantMsg.includes("total") || lastAssistantMsg.includes("invoice") ||
+    lastAssistantMsg.includes("bill")
+  );
+  if (isAction && lastWasRead) {
+    return { actionTaken: true, signal: 2, source: "action_after_read" };
+  }
+
+  // Follow-up: short message building on context
+  if (queryWords.size <= 6 && lastAssistantMsg) {
+    return { followUp: true, signal: 1, source: "follow_up" };
+  }
+
+  return { signal: 0, source: "neutral" };
+}

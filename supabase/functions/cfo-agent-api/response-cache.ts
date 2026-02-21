@@ -137,20 +137,44 @@ export async function invalidateCacheForEntity(
   reqId: string,
 ): Promise<number> {
   const isWriteOp = toolsUsed.some(t =>
-    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_")
+    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_") ||
+    t.startsWith("edit_") || t.startsWith("file_") || t.startsWith("generate_") ||
+    t.startsWith("cancel_") || t.startsWith("reconcile_") || t.startsWith("import_") ||
+    t.startsWith("categorize_") || t.startsWith("match_") || t.startsWith("adjust_") ||
+    t.startsWith("stock_") || t.startsWith("record_")
   );
   if (!isWriteOp) return 0;
 
   try {
-    const { data } = await supabase
-      .from("response_cache")
-      .delete()
-      .eq("entity_id", entityId)
-      .select("id");
+    const { getInvalidationTargets } = await import("../_shared/tool-groups.ts");
+    const targets = getInvalidationTargets(toolsUsed);
 
-    const count = data?.length || 0;
-    if (count > 0) console.log(`[${reqId}] Cache INVALIDATED: ${count} entries for entity ${entityId}`);
-    return count;
+    if (targets === null || targets.length === 0) {
+      if (targets === null) {
+        const { data } = await supabase
+          .from("response_cache")
+          .delete()
+          .eq("entity_id", entityId)
+          .select("id");
+        const count = data?.length || 0;
+        if (count > 0) console.log(`[${reqId}] Cache INVALIDATED ALL: ${count} entries`);
+        return count;
+      }
+      return 0;
+    }
+
+    let totalDeleted = 0;
+    for (const target of targets) {
+      const { data } = await supabase
+        .from("response_cache")
+        .delete()
+        .eq("entity_id", entityId)
+        .ilike("path", `%${target}%`)
+        .select("id");
+      totalDeleted += data?.length || 0;
+    }
+    if (totalDeleted > 0) console.log(`[${reqId}] Cache TARGETED: ${totalDeleted} entries (${targets.join(", ")})`);
+    return totalDeleted;
   } catch (e) {
     console.error(`[${reqId}] Cache invalidation error:`, e);
     return 0;
@@ -159,6 +183,10 @@ export async function invalidateCacheForEntity(
 
 export function hasWriteOperations(toolsUsed: string[]): boolean {
   return toolsUsed.some(t =>
-    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_")
+    t.startsWith("update_") || t.startsWith("create_") || t.startsWith("delete_") ||
+    t.startsWith("edit_") || t.startsWith("file_") || t.startsWith("generate_") ||
+    t.startsWith("cancel_") || t.startsWith("reconcile_") || t.startsWith("import_") ||
+    t.startsWith("categorize_") || t.startsWith("match_") || t.startsWith("adjust_") ||
+    t.startsWith("stock_") || t.startsWith("record_")
   );
 }
