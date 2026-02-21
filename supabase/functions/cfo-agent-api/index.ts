@@ -581,6 +581,8 @@ serve(async (req) => {
     let feedbackResponse: string | null = null;
     let feedbackTokenCost: number | null = null;
     let mcpClientInstance: StreamableMCPClient | null = null;
+    // Hoisted so finally block can access real tool inputs/results
+    let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
 
     try {
       sendEvent('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id, messageId: apiMessageId });
@@ -978,6 +980,8 @@ serve(async (req) => {
           let response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
           let iterations = 0;
           const mcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
+          // Keep outer reference in sync
+          const syncMcpResults = () => { allMcpResults = mcpResults; };
 
           while (response.finish_reason === 'tool_calls' && iterations < 10) {
             iterations++;
@@ -1037,7 +1041,24 @@ serve(async (req) => {
             response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
           }
 
-          const responseText = response.message.content || '';
+          syncMcpResults();
+
+          // ─── Backend guardrail: block fake success cards ───
+          let responseText = response.message.content || '';
+          const hasSuccessfulWriteTool = mcpResults.some(r => isWriteTool(r.tool) && r.success);
+          const hasSuccessCard = /\*\*📄.*\*\*|I've created the invoice successfully|invoice.*created.*successfully/i.test(responseText);
+          if (hasSuccessCard && !hasSuccessfulWriteTool) {
+            // LLM hallucinated a success card without actual tool success — strip it
+            console.warn(`[api] GUARDRAIL: Blocked fake success card (no successful write tool)`);
+            const writeErrors = mcpResults.filter(r => isWriteTool(r.tool) && !r.success);
+            if (writeErrors.length > 0) {
+              responseText = "I wasn't able to complete this action right now. I've already retried automatically. Please check your HelloBooks connection and try again.";
+            } else {
+              // No write tool was even called — LLM made up a card
+              responseText = responseText.replace(/---[\s\S]*?---/g, '').replace(/I've created.*successfully\./gi, '').trim();
+              if (!responseText) responseText = "I need to call the creation tool first. Could you please confirm the details so I can proceed?";
+            }
+          }
           const chunkSize = 50;
           for (let i = 0; i < responseText.length; i += chunkSize) {
             sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
@@ -1098,10 +1119,13 @@ serve(async (req) => {
         let pendingToolForMeta: string | null = null;
         let pendingArgsForMeta: Record<string, unknown> | null = null;
         let pendingSummaryForMeta: string | null = null;
-        // If write tools were attempted (successful or not), persist them as pending for retry
-        const writeToolsUsed = feedbackToolsUsed.filter(t => isWriteTool(t));
-        if (writeToolsUsed.length > 0) {
-          pendingToolForMeta = writeToolsUsed[0];
+
+        // Use allMcpResults (hoisted) to capture REAL tool inputs for next-turn retry
+        const writeToolResults = allMcpResults.filter(r => isWriteTool(r.tool));
+        if (writeToolResults.length > 0) {
+          const lastWrite = writeToolResults[writeToolResults.length - 1];
+          pendingToolForMeta = lastWrite.tool;
+          pendingArgsForMeta = lastWrite.input || {};
           pendingSummaryForMeta = (feedbackResponse || '').slice(0, 300);
         }
         // If the response text suggests a pending creation (e.g., "shall I create", "confirm")
@@ -1110,26 +1134,31 @@ serve(async (req) => {
           if (proposalMatch) {
             pendingToolForMeta = `${proposalMatch[1].toLowerCase()}_${proposalMatch[2].toLowerCase()}`;
             pendingSummaryForMeta = feedbackResponse.slice(0, 300);
+            // Try to extract args from allMcpResults even if tool names don't exactly match
+            const relatedResult = allMcpResults.find(r => r.tool.toLowerCase().includes(proposalMatch[2].toLowerCase()));
+            if (relatedResult?.input) pendingArgsForMeta = relatedResult.input;
           }
         }
 
-        // Build pagination state for list tools
+        // Build pagination state from REAL tool results
         let paginationStateForMeta: Record<string, PaginationState> | null = null;
-        const listToolResults = feedbackToolsUsed.filter(t => isListTool(t));
-        if (listToolResults.length > 0) {
+        const listToolMcpResults = allMcpResults.filter(r => isListTool(r.tool) && r.success);
+        if (listToolMcpResults.length > 0) {
           paginationStateForMeta = {};
-          // Merge with existing pagination state if this is a "show more" follow-up
           const prevPagState = extractPaginationState(conversationHistory);
-          for (const toolName of listToolResults) {
-            const mcpResult = feedbackResponse || ''; // We don't have individual results here, use defaults
+          for (const mcpRes of listToolMcpResults) {
+            const toolName = mcpRes.tool;
             const prevState = prevPagState?.[toolName];
-            const returnedCount = DEFAULT_PAGE_SIZE; // Approximate
+            // Parse real pagination from actual tool response
+            const pagMeta = extractPaginationMeta(toolName, mcpRes.result || '');
             paginationStateForMeta[toolName] = {
               toolName,
-              lastPage: (prevState?.lastPage ?? 0) + 1,
-              lastOffset: (prevState?.lastOffset ?? 0) + DEFAULT_PAGE_SIZE,
-              returnedSoFar: (prevState?.returnedSoFar ?? 0) + returnedCount,
-              hasMore: true, // Default optimistic — LLM will tell user if no more
+              lastPage: pagMeta.nextPage ? pagMeta.nextPage - 1 : (prevState?.lastPage ?? 0) + 1,
+              lastOffset: (prevState?.lastOffset ?? 0) + pagMeta.returnedCount,
+              nextCursor: pagMeta.nextCursor,
+              totalCount: pagMeta.totalCount,
+              returnedSoFar: (prevState?.returnedSoFar ?? 0) + pagMeta.returnedCount,
+              hasMore: pagMeta.hasMore,
             };
           }
         }
