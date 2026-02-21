@@ -320,6 +320,51 @@ export type Database = {
         }
         Relationships: []
       }
+      intent_routing_stats: {
+        Row: {
+          avg_feedback_score: number | null
+          avg_response_time_ms: number | null
+          confidence_bucket: number
+          created_at: string
+          failed_attempts: number
+          id: string
+          intent_id: string
+          intent_name: string
+          last_attempt_at: string | null
+          successful_attempts: number
+          total_attempts: number
+          updated_at: string
+        }
+        Insert: {
+          avg_feedback_score?: number | null
+          avg_response_time_ms?: number | null
+          confidence_bucket: number
+          created_at?: string
+          failed_attempts?: number
+          id?: string
+          intent_id: string
+          intent_name: string
+          last_attempt_at?: string | null
+          successful_attempts?: number
+          total_attempts?: number
+          updated_at?: string
+        }
+        Update: {
+          avg_feedback_score?: number | null
+          avg_response_time_ms?: number | null
+          confidence_bucket?: number
+          created_at?: string
+          failed_attempts?: number
+          id?: string
+          intent_id?: string
+          intent_name?: string
+          last_attempt_at?: string | null
+          successful_attempts?: number
+          total_attempts?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       intents: {
         Row: {
           ai_confidence: number | null
@@ -430,6 +475,54 @@ export type Database = {
           total_output_tokens?: number | null
           total_requests?: number | null
           total_tokens_used?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      llm_path_patterns: {
+        Row: {
+          avg_feedback_score: number | null
+          avg_response_time_ms: number | null
+          created_at: string
+          entity_id: string | null
+          id: string
+          last_seen_at: string
+          occurrence_count: number
+          query_hash: string
+          query_text: string
+          suggested_intent_id: string | null
+          tool_selection_strategy: string | null
+          tools_used: string[] | null
+          updated_at: string
+        }
+        Insert: {
+          avg_feedback_score?: number | null
+          avg_response_time_ms?: number | null
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          last_seen_at?: string
+          occurrence_count?: number
+          query_hash: string
+          query_text: string
+          suggested_intent_id?: string | null
+          tool_selection_strategy?: string | null
+          tools_used?: string[] | null
+          updated_at?: string
+        }
+        Update: {
+          avg_feedback_score?: number | null
+          avg_response_time_ms?: number | null
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          last_seen_at?: string
+          occurrence_count?: number
+          query_hash?: string
+          query_text?: string
+          suggested_intent_id?: string | null
+          tool_selection_strategy?: string | null
+          tools_used?: string[] | null
           updated_at?: string
         }
         Relationships: []
@@ -856,6 +949,68 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      suggested_intents: {
+        Row: {
+          avg_feedback_score: number | null
+          created_at: string
+          id: string
+          occurrence_count: number
+          rejection_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_pattern_id: string | null
+          status: string
+          suggested_module: string | null
+          suggested_name: string
+          suggested_pipeline: Json | null
+          suggested_tools: string[] | null
+          suggested_training_phrases: Json
+          updated_at: string
+        }
+        Insert: {
+          avg_feedback_score?: number | null
+          created_at?: string
+          id?: string
+          occurrence_count?: number
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_pattern_id?: string | null
+          status?: string
+          suggested_module?: string | null
+          suggested_name: string
+          suggested_pipeline?: Json | null
+          suggested_tools?: string[] | null
+          suggested_training_phrases?: Json
+          updated_at?: string
+        }
+        Update: {
+          avg_feedback_score?: number | null
+          created_at?: string
+          id?: string
+          occurrence_count?: number
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_pattern_id?: string | null
+          status?: string
+          suggested_module?: string | null
+          suggested_name?: string
+          suggested_pipeline?: Json | null
+          suggested_tools?: string[] | null
+          suggested_training_phrases?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "suggested_intents_source_pattern_id_fkey"
+            columns: ["source_pattern_id"]
+            isOneToOne: false
+            referencedRelation: "llm_path_patterns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       template_notifications: {
         Row: {
