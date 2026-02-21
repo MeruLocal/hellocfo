@@ -308,3 +308,128 @@ export interface OpenAITool {
     parameters: Record<string, unknown>;
   };
 }
+
+// ============================================================
+// Follow-up Detection (Strategy 3)
+// Short messages (<5 words) with conversation history reuse
+// the previous tool group instead of re-classifying
+// ============================================================
+
+export interface FollowUpResult {
+  isFollowUp: boolean;
+  reuseToolGroup?: string[];
+  reason?: string;
+}
+
+/**
+ * Detect if a query is a follow-up to a previous conversation turn.
+ * If so, returns the tool names from the last assistant message metadata.
+ */
+export function detectFollowUp(
+  query: string,
+  conversationHistory: { role: string; content: string; metadata?: { toolsUsed?: string[]; toolsLoaded?: string[] } }[],
+): FollowUpResult {
+  const words = query.trim().split(/\s+/);
+  if (words.length >= 5) return { isFollowUp: false };
+  if (conversationHistory.length < 2) return { isFollowUp: false };
+
+  // Find the last assistant message with tool metadata
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if ((msg.role === "assistant" || msg.role === "agent") && msg.metadata) {
+      const tools = msg.metadata.toolsUsed || msg.metadata.toolsLoaded || [];
+      if (tools.length > 0) {
+        return {
+          isFollowUp: true,
+          reuseToolGroup: tools,
+          reason: `Short follow-up (${words.length} words), reusing ${tools.length} tools from last turn`,
+        };
+      }
+    }
+  }
+
+  return { isFollowUp: false };
+}
+
+// ============================================================
+// Cache Invalidation Map — Targeted invalidation per write op
+// ============================================================
+
+export const CACHE_INVALIDATION_MAP: Record<string, string[]> = {
+  // Invoice operations
+  create_invoice: ["profit", "revenue", "aging", "receivable", "balance", "trial", "cash", "kpi"],
+  update_invoice: ["profit", "revenue", "aging", "receivable", "balance", "trial", "cash", "kpi"],
+  create_invoice_line_item: ["profit", "revenue", "balance", "trial"],
+  // Bill operations
+  create_bill: ["profit", "expense", "aging", "payable", "balance", "trial", "cash", "kpi"],
+  update_bill: ["profit", "expense", "aging", "payable", "balance", "trial", "cash", "kpi"],
+  // Payment operations
+  create_payment: ["aging", "receivable", "payable", "balance", "cash", "bank", "kpi"],
+  update_payment: ["aging", "receivable", "payable", "balance", "cash", "bank", "kpi"],
+  record_payment: ["aging", "receivable", "payable", "balance", "cash", "bank", "kpi"],
+  // Expense operations
+  create_expense: ["profit", "expense", "balance", "trial", "cash", "kpi"],
+  edit_expense: ["profit", "expense", "balance", "trial", "cash", "kpi"],
+  delete_expense: ["profit", "expense", "balance", "trial", "cash", "kpi"],
+  // Journal entries
+  create_journal_entry: ["profit", "balance", "trial", "ledger"],
+  edit_journal_entry: ["profit", "balance", "trial", "ledger"],
+  delete_journal_entry: ["profit", "balance", "trial", "ledger"],
+  // Banking
+  import_bank_statement: ["bank", "cash", "balance", "reconcil"],
+  categorize_transaction: ["bank", "cash", "balance", "reconcil"],
+  match_transaction: ["bank", "cash", "balance", "reconcil"],
+  update_transactions: ["bank", "cash", "balance", "reconcil"],
+  update_transaction_line_item: ["bank", "cash", "balance"],
+  // Customer/vendor
+  create_customer: ["customer", "receivable"],
+  update_customer: ["customer", "receivable"],
+  create_vendor: ["vendor", "payable"],
+  update_vendor: ["vendor", "payable"],
+  // Credit notes
+  update_sales_credit_note: ["receivable", "aging", "balance"],
+  update_purchase_credit_note: ["payable", "aging", "balance"],
+  // GST
+  file_gstr1: ["gst", "tax", "itc", "filing"],
+  file_gstr3b: ["gst", "tax", "itc", "filing"],
+  generate_einvoice: ["gst", "invoice"],
+  cancel_einvoice: ["gst", "invoice"],
+  create_eway_bill: ["gst"],
+  reconcile_gst: ["gst", "tax", "itc"],
+  // Inventory
+  create_product: ["inventory", "stock"],
+  edit_product: ["inventory", "stock"],
+  adjust_stock: ["inventory", "stock"],
+  stock_transfer: ["inventory", "stock"],
+};
+
+/**
+ * Get the cache path patterns that should be invalidated for a given set of tools.
+ * Returns null to indicate "invalidate ALL" (safe fallback for unknown tools).
+ */
+export function getInvalidationTargets(toolsUsed: string[]): string[] | null {
+  const targets = new Set<string>();
+  let hasUnknown = false;
+
+  for (const tool of toolsUsed) {
+    if (!tool.startsWith("update_") && !tool.startsWith("create_") && !tool.startsWith("delete_") &&
+        !tool.startsWith("edit_") && !tool.startsWith("file_") && !tool.startsWith("generate_") &&
+        !tool.startsWith("cancel_") && !tool.startsWith("reconcile_") && !tool.startsWith("import_") &&
+        !tool.startsWith("categorize_") && !tool.startsWith("match_") && !tool.startsWith("adjust_") &&
+        !tool.startsWith("stock_") && !tool.startsWith("record_")) {
+      continue; // not a write op
+    }
+
+    const patterns = CACHE_INVALIDATION_MAP[tool];
+    if (patterns) {
+      for (const p of patterns) targets.add(p);
+    } else {
+      hasUnknown = true;
+    }
+  }
+
+  // If any unknown write op, invalidate everything (safe fallback)
+  if (hasUnknown) return null;
+  if (targets.size === 0) return [];
+  return [...targets];
+}
