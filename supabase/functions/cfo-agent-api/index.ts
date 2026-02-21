@@ -897,7 +897,7 @@ function extractPaginationMeta(toolName: string, result: string): {
     if (parsed?.total_count !== undefined) totalCount = parsed.total_count;
     if (parsed?.totalCount !== undefined) totalCount = parsed.totalCount;
     if (totalCount && returnedCount < totalCount) hasMore = true;
-  } catch { /* not JSON, estimate from text */ }
+  } catch (_e) { /* not JSON, estimate from text */ }
 
   return { hasMore, nextPage, nextCursor, totalCount, returnedCount };
 }
@@ -968,7 +968,7 @@ function isToolResultError(result: string): boolean {
   try {
     const parsed = JSON.parse(result);
     if (parsed.error || parsed.Error || parsed.message?.toLowerCase().includes('error')) return true;
-  } catch { /* not JSON */ }
+  } catch (_e) { /* not JSON */ }
   return false;
 }
 
@@ -992,7 +992,7 @@ function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
       return DEFAULT_AZURE_OPENAI_ENDPOINT;
     }
     return raw;
-  } catch {
+  } catch (_e) {
     console.warn(`[api] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
     return DEFAULT_AZURE_OPENAI_ENDPOINT;
   }
@@ -1125,7 +1125,7 @@ serve(async (req) => {
   };
   try {
     body = await req.json();
-  } catch {
+  } catch (_e) {
     return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
       status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
@@ -1248,11 +1248,11 @@ serve(async (req) => {
   const sendEvent = (type: string, data: unknown) => {
     const event: SSEEvent = { type, data, timestamp: new Date().toISOString() };
     const message = `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
-    try { streamController.enqueue(encoder.encode(message)); } catch { /* ignore */ }
+    try { streamController.enqueue(encoder.encode(message)); } catch (_e) { /* ignore */ }
   };
 
   const closeStream = () => {
-    try { streamController.close(); } catch { /* ignore */ }
+    try { streamController.close(); } catch (_e) { /* ignore */ }
   };
 
   // Process in background
@@ -1621,7 +1621,7 @@ serve(async (req) => {
             if (mcpTool) {
               const execResult = await executeToolCall(mcpTool.name, {}, 'fast-path');
               let recordCount = 1;
-              try { const p = JSON.parse(execResult.result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
+              try { const p = JSON.parse(execResult.result); if (Array.isArray(p)) recordCount = p.length; } catch (_e) { /* ok */ }
               toolResults.push({ tool: toolName, success: execResult.success, data: execResult.success ? execResult.result : undefined, error: execResult.failureReason });
               sendEvent('tool_result', { tool: toolName, success: execResult.success, recordCount, attempts: execResult.attempts });
             } else {
@@ -1848,7 +1848,7 @@ serve(async (req) => {
               const requestedToolName = toolCall.function.name;
               let toolName = requestedToolName;
               let toolInput: Record<string, unknown> = {};
-              try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
+              try { toolInput = JSON.parse(toolCall.function.arguments); } catch (_e) { /* ok */ }
 
               if (!SIMPLE_DIRECT_LLM_MODE && (queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
                 const requestedToolDef = mcpToolsByName.get(requestedToolName);
@@ -1887,7 +1887,7 @@ serve(async (req) => {
                 });
 
                 let recordCount = 1;
-                try { const p = JSON.parse(execResult.result); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
+                try { const p = JSON.parse(execResult.result); if (Array.isArray(p)) recordCount = p.length; } catch (_e) { /* ok */ }
 
                 sendEvent('tool_result', {
                   tool: toolName,

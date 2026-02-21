@@ -83,7 +83,7 @@ function truncateResult(result: string, maxChars: number = MAX_TOOL_RESULT_CHARS
       }
       return JSON.stringify(truncated) + `\n[Truncated: showing ${truncated.length} of ${parsed.length} items]`;
     }
-  } catch { /* not JSON */ }
+  } catch (_e) { /* not JSON */ }
   return result.slice(0, maxChars) + `\n[Truncated: ${result.length} chars total]`;
 }
 
@@ -103,7 +103,7 @@ function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
       return DEFAULT_AZURE_OPENAI_ENDPOINT;
     }
     return raw;
-  } catch {
+  } catch (_e) {
     console.warn(`[realtime] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
     return DEFAULT_AZURE_OPENAI_ENDPOINT;
   }
@@ -651,7 +651,7 @@ serve(async (req) => {
               for (const toolCall of toolCalls) {
                 const toolName = toolCall.function.name;
                 let toolInput: Record<string, unknown> = {};
-                try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
+                try { toolInput = JSON.parse(toolCall.function.arguments); } catch (_e) { /* ok */ }
 
                 if (mcpClientInstance) {
                   sendEvent("executing_tool", { tool: toolName, description: toolName });
@@ -663,7 +663,7 @@ serve(async (req) => {
                     mcpResults.push({ tool: toolName, input: toolInput, result: truncated, success: true });
 
                     let recordCount = 1;
-                    try { const p = JSON.parse(mcpResult); if (Array.isArray(p)) recordCount = p.length; } catch { /* ok */ }
+                    try { const p = JSON.parse(mcpResult); if (Array.isArray(p)) recordCount = p.length; } catch (_e) { /* ok */ }
                     sendEvent("tool_result", { tool: toolName, success: true, recordCount });
 
                     messages.push({ role: "tool", tool_call_id: toolCall.id, content: truncated });
