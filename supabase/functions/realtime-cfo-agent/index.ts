@@ -26,6 +26,7 @@ const corsHeaders = {
 };
 
 const MAX_TOOL_RESULT_CHARS = 50000;
+const SIMPLE_DIRECT_LLM_MODE = true;
 
 const DEFAULT_AZURE_OPENAI_ENDPOINT = "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/";
 
@@ -318,21 +319,23 @@ serve(async (req) => {
         // STEP 1.5: CACHE CHECK — skip MCP+LLM if cached
         // ============================
         const { cacheKey, queryHash } = generateCacheKey(query, entityId, "realtime");
-        const cachedResponse = await checkCache(supabase, entityId, cacheKey, reqId);
+        if (!SIMPLE_DIRECT_LLM_MODE) {
+          const cachedResponse = await checkCache(supabase, entityId, cacheKey, reqId);
 
-        if (cachedResponse) {
-          console.log(`[${reqId}] Serving from cache`);
-          sendEvent("route_classified", { path: "cached", reason: "Response served from cache" });
-          sendEvent("response_chunk", { text: cachedResponse.content });
-          sendEvent("complete", {
-            query, path: "cached", matchedIntent: null, extractedEntities: {},
-            reasoning: "Served from response cache", pipelineSteps: [], enrichments: [],
-            responseFormat: "", response: cachedResponse.content, mcpToolResults: [], dataSources: [],
-            llmModel: "cache", iterationCount: 0,
-            usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-          });
-          controller.close();
-          return;
+          if (cachedResponse) {
+            console.log(`[${reqId}] Serving from cache`);
+            sendEvent("route_classified", { path: "cached", reason: "Response served from cache" });
+            sendEvent("response_chunk", { text: cachedResponse.content });
+            sendEvent("complete", {
+              query, path: "cached", matchedIntent: null, extractedEntities: {},
+              reasoning: "Served from response cache", pipelineSteps: [], enrichments: [],
+              responseFormat: "", response: cachedResponse.content, mcpToolResults: [], dataSources: [],
+              llmModel: "cache", iterationCount: 0,
+              usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+            });
+            controller.close();
+            return;
+          }
         }
 
         // STEP 2: Connect to MCP using Streamable HTTP
@@ -403,7 +406,7 @@ serve(async (req) => {
         }
 
         const CONFIDENCE_THRESHOLD = 0.85;
-        const useFastPath = bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD;
+        const useFastPath = !SIMPLE_DIRECT_LLM_MODE && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD;
 
         console.log(`[${reqId}] Intent match: ${bestIntent?.name || "none"} (${bestIntent?.confidence?.toFixed(2) || 0}), fastPath: ${useFastPath}`);
 
@@ -521,10 +524,10 @@ serve(async (req) => {
           feedbackTokenCost = response.usage?.total_tokens || null;
           // Cache write — fast path (skip if write ops were used)
           const fastToolsUsed = mcpResults.map(r => r.tool);
-          if (!hasWriteOperations(fastToolsUsed)) {
+          if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(fastToolsUsed)) {
             const ttl = determineTTL("fast", "fast", fastToolsUsed);
             await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "fast", ttl, reqId);
-          } else {
+          } else if (hasWriteOperations(fastToolsUsed)) {
             await invalidateCacheForEntity(supabase, entityId, fastToolsUsed, reqId);
           }
           // ========== LLM PATH ==========
@@ -560,7 +563,7 @@ serve(async (req) => {
           }
 
           // Handle general chat — no tools needed
-          if (effectiveCategory === "general_chat") {
+          if (!SIMPLE_DIRECT_LLM_MODE && effectiveCategory === "general_chat") {
             sendEvent("tools_filtered", { category: "general_chat", toolCount: 0, reason: "General conversation" });
             sendEvent("response_generating", { path: "llm", category: "general_chat" });
 
@@ -580,8 +583,10 @@ serve(async (req) => {
             });
 
             // Cache write — general chat (long TTL)
-            const chatTTL = determineTTL("llm", "general_chat", []);
-            await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
+            if (!SIMPLE_DIRECT_LLM_MODE) {
+              const chatTTL = determineTTL("llm", "general_chat", []);
+              await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
+            }
 
             // Track for feedback
             feedbackPath = "general_chat";
@@ -592,7 +597,9 @@ serve(async (req) => {
 
           } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
-            const toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
+            const toolSelection = SIMPLE_DIRECT_LLM_MODE
+              ? { toolNames: mcpTools.map((t) => t.name), matchedCategories: ["all_mcp_tools"], strategy: "direct_llm_all_mcp_tools" }
+              : selectToolsForQuery(query, effectiveCategory, mcpTools);
             let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
             // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL of them.
@@ -617,7 +624,9 @@ serve(async (req) => {
             console.log(`[${reqId}] Model: ${modelSelection.tier} (${modelSelection.reason})`);
 
             // Build category-specific system prompt
-            const categoryPrompt = effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
+            const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
+              ? "You are a finance assistant connected to live MCP tools. For every user request, call MCP tools when data/action is needed. Do not invent data. Use tool results as source of truth."
+              : (effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo);
             let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.`;
 
             // Build messages
@@ -728,10 +737,10 @@ serve(async (req) => {
 
             // Cache write — LLM path (skip if write ops)
             const llmToolsUsed = mcpResults.map(r => r.tool);
-            if (!hasWriteOperations(llmToolsUsed)) {
+            if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(llmToolsUsed)) {
               const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
               await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, effectiveCategory, ttl, reqId);
-            } else {
+            } else if (hasWriteOperations(llmToolsUsed)) {
               await invalidateCacheForEntity(supabase, entityId, llmToolsUsed, reqId);
             }
           }

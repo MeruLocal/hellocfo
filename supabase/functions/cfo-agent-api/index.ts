@@ -66,6 +66,7 @@ interface Intent {
 }
 
 const MAX_TOOL_RESULT_CHARS = 50000;
+const SIMPLE_DIRECT_LLM_MODE = true;
 
 function truncateResult(result: unknown, maxLength = 8000): string {
   const str = typeof result === 'string' ? result : JSON.stringify(result);
@@ -1190,7 +1191,7 @@ serve(async (req) => {
   // ============================
   // CACHE CHECK — skip for confirmations and write intents
   // ============================
-  if (!isConfirmation) {
+  if (!SIMPLE_DIRECT_LLM_MODE && !isConfirmation) {
     const { cacheKey, queryHash } = generateCacheKey(query, effectiveEntityId, "api");
     const cachedResponse = await checkCache(supabase, effectiveEntityId, cacheKey, "api");
 
@@ -1477,7 +1478,7 @@ serve(async (req) => {
       const deterministicListEntities = queryRequestedEntities.length > 0
         ? queryRequestedEntities
         : [];
-      const useDeterministicListPath = !isConfirmation && queryIsBulkList && deterministicListEntities.length > 0;
+      const useDeterministicListPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && queryIsBulkList && deterministicListEntities.length > 0;
 
       if (useDeterministicListPath) {
         sendEvent('route_classified', {
@@ -1592,7 +1593,7 @@ serve(async (req) => {
           return mcpTools.some(t => t.name.toLowerCase() === name || t.name.toLowerCase().includes(name));
         });
         const fastPathEligibleQuery = !queryIsBulkList && !queryIsPaginationFollowUp && !queryIsOverdueList;
-        const useFastPath = !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline;
+        const useFastPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline;
 
       if (useFastPath && bestIntent) {
         // ========== FAST PATH ==========
@@ -1696,7 +1697,7 @@ serve(async (req) => {
           });
         }
 
-        if (effectiveCategory === 'general_chat' && !isConfirmation) {
+        if (!SIMPLE_DIRECT_LLM_MODE && effectiveCategory === 'general_chat' && !isConfirmation) {
           sendEvent('tools_filtered', { category: 'general_chat', toolCount: 0 });
           sendEvent('response_generating', { path: 'llm', category: 'general_chat' });
 
@@ -1720,9 +1721,11 @@ serve(async (req) => {
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
           });
 
-          const chatTTL = determineTTL("llm", "general_chat", []);
-          const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
-          await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, "general_chat", chatTTL, "api");
+          if (!SIMPLE_DIRECT_LLM_MODE) {
+            const chatTTL = determineTTL("llm", "general_chat", []);
+            const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
+            await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, "general_chat", chatTTL, "api");
+          }
 
           feedbackPath = "general_chat";
           feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
@@ -1732,21 +1735,27 @@ serve(async (req) => {
         } else {
           // Bookkeeper or CFO path with filtered tools
           let toolSelection: ReturnType<typeof selectToolsForQuery>;
+          let filteredTools: OpenAITool[];
 
-          if (isConfirmation && pendingAction && pendingAction.toolName) {
+          if (SIMPLE_DIRECT_LLM_MODE) {
+            toolSelection = {
+              toolNames: mcpTools.map(t => t.name),
+              matchedCategories: ['all_mcp_tools'],
+              strategy: 'direct_llm_all_mcp_tools',
+            };
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+          } else if (isConfirmation && pendingAction && pendingAction.toolName) {
             // For confirmations, load the tool group relevant to the pending action
-            const pendingToolLower = pendingAction.toolName.toLowerCase();
-            // Find which group contains this tool
             toolSelection = selectToolsForQuery(pendingAction.summary || query, 'bookkeeper', mcpTools);
             // Also ensure the specific pending tool is included
             if (!toolSelection.toolNames.includes(pendingAction.toolName)) {
               toolSelection.toolNames.push(pendingAction.toolName);
             }
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
             toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
-
-          let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
           // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL
           const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
@@ -1762,10 +1771,12 @@ serve(async (req) => {
             isConfirmation,
           });
 
-          const categoryPrompt = effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo;
+          const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
+            ? `You are a finance assistant connected to live MCP tools. For every user request, call MCP tools when data/action is needed. Do not invent data. Use tool results as the source of truth.`
+            : (effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo);
 
           // ─── Pagination follow-up detection ───
-          const isPaginationRequest = queryIsPaginationFollowUp;
+          const isPaginationRequest = !SIMPLE_DIRECT_LLM_MODE && queryIsPaginationFollowUp;
           const existingPaginationState = queryPaginationState;
           let paginationContext = '';
           if (isPaginationRequest && existingPaginationState) {
@@ -1777,7 +1788,7 @@ serve(async (req) => {
           }
 
           // ─── Bulk list detection ───
-          const isBulkList = queryIsBulkList;
+          const isBulkList = !SIMPLE_DIRECT_LLM_MODE && queryIsBulkList;
           const requestedEntities = queryRequestedEntities;
           let bulkListContext = '';
           if (isBulkList && requestedEntities.length >= 2) {
@@ -1796,7 +1807,7 @@ serve(async (req) => {
           }
 
           // ─── Detail lookup context (created-doc resolver) ───
-          const detailLookup = !isConfirmation ? detectDetailLookup(query) : null;
+          const detailLookup = (!SIMPLE_DIRECT_LLM_MODE && !isConfirmation) ? detectDetailLookup(query) : null;
           let detailLookupContext = '';
           if (detailLookup) {
             const createdDocs = extractCreatedDocs(conversationHistory);
@@ -1839,7 +1850,7 @@ serve(async (req) => {
               let toolInput: Record<string, unknown> = {};
               try { toolInput = JSON.parse(toolCall.function.arguments); } catch { /* ok */ }
 
-              if ((queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
+              if (!SIMPLE_DIRECT_LLM_MODE && (queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
                 const requestedToolDef = mcpToolsByName.get(requestedToolName);
                 const requestedEntity = inferEntityFromTool(
                   requestedToolName,
@@ -1973,7 +1984,7 @@ serve(async (req) => {
 
           // Cache write — LLM path (skip for write operations and confirmations)
           const llmToolsUsed = mcpResults.map(r => r.tool);
-          if (!hasWriteOperations(llmToolsUsed) && !isConfirmation && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
+          if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(llmToolsUsed) && !isConfirmation && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
             const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
             const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
             await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, effectiveCategory, ttl, "api");
