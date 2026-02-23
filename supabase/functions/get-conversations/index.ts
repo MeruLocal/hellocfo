@@ -94,7 +94,7 @@ serve(async (req) => {
         .limit(1);
 
       if (effectiveUserId) detailQuery = detailQuery.eq("user_id", effectiveUserId);
-      if (entityId) detailQuery = detailQuery.eq("entity_id", entityId);
+      // Don't filter by entityId in detail mode — conversation_id is unique enough
 
       const { data, error } = await detailQuery;
       if (error) throw error;
@@ -122,8 +122,13 @@ serve(async (req) => {
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
-      if (entityId) listQuery = listQuery.eq("entity_id", entityId);
-      if (orgId) listQuery = listQuery.eq("org_id", orgId);
+      // Include legacy records where entity_id/org_id may be NULL or "default"
+      if (entityId) {
+        listQuery = listQuery.or(`entity_id.eq.${entityId},entity_id.is.null,entity_id.eq.default`);
+      }
+      if (orgId) {
+        listQuery = listQuery.or(`org_id.eq.${orgId},org_id.is.null`);
+      }
 
       const { data, error } = await listQuery;
       if (error) throw error;

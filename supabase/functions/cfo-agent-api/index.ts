@@ -1240,7 +1240,6 @@ serve(async (req) => {
         .select("messages")
         .eq("conversation_id", effectiveConversationId)
         .eq("user_id", user.id)
-        .eq("entity_id", effectiveEntityId)
         .order("updated_at", { ascending: false })
         .limit(1);
 
@@ -2279,7 +2278,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           .select("id, messages, message_count")
           .eq("conversation_id", effectiveConversationId)
           .eq("user_id", user.id)
-          .eq("entity_id", effectiveEntityId)
           .order("updated_at", { ascending: false })
           .limit(1);
 
@@ -2297,6 +2295,8 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               updated_at: new Date().toISOString(),
               last_message_preview: (feedbackResponse || '').slice(0, 200),
               mode: feedbackCategory || 'cfo',
+              entity_id: effectiveEntityId,
+              org_id: mcpOrgId || null,
             })
             .eq("id", existing.id);
           if (updateError) {
