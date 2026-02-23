@@ -1,0 +1,1 @@
+ALTER TABLE public.unified_conversations ADD COLUMN IF NOT EXISTS org_id TEXT;
