@@ -1769,6 +1769,13 @@ serve(async (req) => {
           await new Promise(r => setTimeout(r, 20));
         }
 
+        // Build createdDocs for SSE so frontend can navigate to created records
+        const fastCreatedDocs: CreatedDoc[] = [];
+        for (const wr of toolResults.filter(r => isWriteTool(r.tool) && r.success && r.result)) {
+          const doc = parseCreatedDoc(wr.tool, wr.result!);
+          if (doc) fastCreatedDocs.push(doc);
+        }
+
         sendComplete({
           success: true, query, path: 'fast',
           matchedIntent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
@@ -1777,6 +1784,7 @@ serve(async (req) => {
           toolResults: toolResults.map(r => ({ tool: r.tool, success: r.success, error: r.error })),
           response: responseText,
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          ...(fastCreatedDocs.length > 0 ? { createdDocs: fastCreatedDocs } : {}),
         });
 
         // Cache write — fast path
@@ -2112,6 +2120,14 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           }
 
           const finalEnrichments = detectAutoEnrichments(mcpResults);
+
+          // Build createdDocs for SSE so frontend can navigate to created records
+          const createdDocsForComplete: CreatedDoc[] = [];
+          for (const wr of mcpResults.filter(r => isWriteTool(r.tool) && r.success && r.result)) {
+            const doc = parseCreatedDoc(wr.tool, wr.result!);
+            if (doc) createdDocsForComplete.push(doc);
+          }
+
           sendComplete({
             success: true, query, path: 'llm', category: effectiveCategory,
             matchedIntent: bestIntent ? { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence } : null,
@@ -2125,6 +2141,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
             isConfirmation,
+            ...(createdDocsForComplete.length > 0 ? { createdDocs: createdDocsForComplete } : {}),
           });
 
           // Cache write — LLM path (skip for write operations and confirmations)
