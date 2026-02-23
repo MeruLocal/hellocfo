@@ -114,7 +114,7 @@ serve(async (req) => {
     if (effectiveUserId) {
       let listQuery = supabase
         .from("unified_conversations")
-        .select("conversation_id, summary, message_count, created_at, updated_at")
+        .select("conversation_id, summary, message_count, created_at, updated_at, chat_name, auto_generated_name, mode, last_message_preview")
         .eq("user_id", effectiveUserId)
         .or("is_deleted.is.null,is_deleted.eq.false")
         .order("updated_at", { ascending: false })

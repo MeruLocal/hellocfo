@@ -966,6 +966,85 @@ function isWriteTool(toolName: string): boolean {
   return /^(create_|update_|delete_|void_|cancel_)/.test(toolName);
 }
 
+// ─── Extraction State for Pending/Applied UI ────────────────────────────────
+
+interface ExtractionField {
+  key: string;
+  label: string;
+  value?: unknown;
+  required: boolean;
+}
+
+interface ExtractionState {
+  toolName: string;
+  documentType: string;
+  appliedFields: ExtractionField[];
+  pendingFields: ExtractionField[];
+  totalRequired: number;
+  totalApplied: number;
+  totalPending: number;
+}
+
+const INTERNAL_SCHEMA_FIELDS = new Set([
+  'entity_id', 'entityId', 'org_id', 'orgId', 'id',
+  'created_by', 'updated_by', 'created_at', 'updated_at',
+  'entity', 'organization', 'user_id', 'userId',
+]);
+
+function formatFieldLabel(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/\b\w/g, s => s.toUpperCase())
+    .trim();
+}
+
+function computeExtractionState(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  toolSchema: unknown,
+): ExtractionState | null {
+  if (!isWriteTool(toolName)) return null;
+
+  const schema = toolSchema as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  } | null;
+  if (!schema?.properties) return null;
+
+  const requiredSet = new Set(schema.required || []);
+  const appliedFields: ExtractionField[] = [];
+  const pendingFields: ExtractionField[] = [];
+
+  for (const [key] of Object.entries(schema.properties)) {
+    if (INTERNAL_SCHEMA_FIELDS.has(key)) continue;
+
+    const isRequired = requiredSet.has(key);
+    const val = toolArgs[key];
+    const hasValue = val !== null && val !== undefined && val !== '' &&
+      !(Array.isArray(val) && val.length === 0);
+
+    if (hasValue) {
+      appliedFields.push({ key, label: formatFieldLabel(key), value: val, required: isRequired });
+    } else if (isRequired) {
+      pendingFields.push({ key, label: formatFieldLabel(key), required: true });
+    }
+  }
+
+  const docTypeMatch = toolName.match(/^(?:create|update|delete|void|cancel)_(.+)/);
+  const documentType = docTypeMatch ? docTypeMatch[1] : toolName;
+
+  return {
+    toolName,
+    documentType,
+    appliedFields,
+    pendingFields,
+    totalRequired: requiredSet.size,
+    totalApplied: appliedFields.length,
+    totalPending: pendingFields.length,
+  };
+}
+
 function isToolResultError(result: string): boolean {
   const lower = result.toLowerCase();
   if (lower.startsWith('error:') || lower.startsWith('{"error"')) return true;
@@ -1906,6 +1985,15 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               if (mcpClientInstance) {
                 sendEvent('executing_tool', { tool: toolName, requestedTool: requestedToolName, isWrite: isWriteTool(toolName) });
 
+                // Emit extraction state for write tools (Pending/Applied UI)
+                if (isWriteTool(toolName)) {
+                  const mcpToolDef = mcpToolsByName.get(toolName);
+                  if (mcpToolDef) {
+                    const extraction = computeExtractionState(toolName, toolInput, mcpToolDef.inputSchema);
+                    if (extraction) sendEvent('extraction_state', extraction);
+                  }
+                }
+
                 const execResult = await executeToolCall(toolName, toolInput, toolCall.id);
 
                 mcpResults.push({
@@ -2164,6 +2252,8 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               messages: updatedMessages,
               message_count: updatedMessages.length,
               updated_at: new Date().toISOString(),
+              last_message_preview: (feedbackResponse || '').slice(0, 200),
+              mode: effectiveCategory || 'cfo',
             })
             .eq("id", existing.id);
         } else {
@@ -2174,6 +2264,9 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             summary: query.slice(0, 100),
             messages: [userMsg, agentMsg],
             message_count: 2,
+            auto_generated_name: query.slice(0, 80),
+            mode: effectiveCategory || 'cfo',
+            last_message_preview: (feedbackResponse || '').slice(0, 200),
           });
         }
       } catch (convError) {
