@@ -67,6 +67,10 @@ interface Intent {
 
 const MAX_TOOL_RESULT_CHARS = 50000;
 const SIMPLE_DIRECT_LLM_MODE = true;
+const NO_DATABASE_ID_EXPOSURE_RULE = `⚠️ ABSOLUTE RULE — NO EXCEPTIONS:
+NEVER show database IDs, internal IDs, UUIDs, or numeric system IDs in any user-facing response.
+Never show internal fields like id, *_id, entity_id, org_id, customer_id, vendor_id, invoice_id, bill_id, payment_id, created_by, or updated_by.
+If tool data includes these fields or values, omit them entirely and only present human-readable references (invoice/bill numbers, names, dates, statuses, and amounts).`;
 
 function truncateResult(result: unknown, maxLength = 8000): string {
   const str = typeof result === 'string' ? result : JSON.stringify(result);
@@ -1772,7 +1776,10 @@ serve(async (req) => {
           });
 
           const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
-            ? `You are a finance assistant connected to live MCP tools. For every user request, call MCP tools when data/action is needed. Do not invent data. Use tool results as the source of truth.`
+            ? `You are a finance assistant connected to live MCP tools.
+For every user request, call MCP tools when data/action is needed.
+Do not invent data. Use tool results as the source of truth.
+${NO_DATABASE_ID_EXPOSURE_RULE}`
             : (effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo);
 
           // ─── Pagination follow-up detection ───
@@ -1822,7 +1829,7 @@ serve(async (req) => {
             }
           }
 
-          let systemPrompt = `${categoryPrompt}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}`;
+          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}`;
 
           // For confirmations, include more history
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
