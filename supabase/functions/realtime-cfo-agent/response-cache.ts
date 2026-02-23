@@ -1,7 +1,8 @@
 // Response Cache Layer — Phase 2
 // Provides aggressive caching with entity isolation and TTL-based invalidation
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore no-explicit-any
+type AnySupabaseClient = any;
 
 export interface CacheEntry {
   id: string;
@@ -92,7 +93,7 @@ export function determineTTL(
  * Check cache for a matching entry. Returns null if miss or expired.
  */
 export async function checkCache(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AnySupabaseClient,
   entityId: string,
   cacheKey: string,
   reqId: string,
@@ -131,7 +132,7 @@ export async function checkCache(
  * Write a response to cache. Uses upsert to handle concurrent writes.
  */
 export async function writeCache(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AnySupabaseClient,
   entityId: string,
   cacheKey: string,
   queryHash: string,
@@ -172,7 +173,7 @@ export async function writeCache(
  * Call this when tools like update_invoice, create_customer etc. are used.
  */
 export async function invalidateCacheForEntity(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AnySupabaseClient,
   entityId: string,
   toolsUsed: string[],
   reqId: string,
