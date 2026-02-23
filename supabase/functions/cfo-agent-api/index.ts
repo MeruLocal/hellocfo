@@ -8,14 +8,6 @@ import {
 import { classifyQuery, type QueryCategory } from "./classifier.ts";
 import { SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
-import {
-  generateCacheKey,
-  checkCache,
-  writeCache,
-  determineTTL,
-  invalidateCacheForEntity,
-  hasWriteOperations,
-} from "./response-cache.ts";
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
@@ -327,18 +319,6 @@ function detectRequestedEntities(query: string): string[] {
   if (/\bdelivery.?challans?\b/.test(q)) entities.push('delivery_challans');
   if (/\btransactions?\b/.test(q)) entities.push('transactions');
   return entities;
-}
-
-function hasUnresolvedTemplatePlaceholders(text: string): boolean {
-  return /\{[a-zA-Z0-9_.-]+\}/.test(text);
-}
-
-function isLikelyTransientNoDataResponse(text: string): boolean {
-  const t = text.toLowerCase();
-  return (
-    t.includes('no records found') &&
-    (t.includes('temporary issue') || t.includes('try again') || t.includes('right now'))
-  );
 }
 
 const ENTITY_KEYWORDS: Record<string, string[]> = {
@@ -1199,55 +1179,6 @@ serve(async (req) => {
   }
 
   // ============================
-  // CACHE CHECK — skip for confirmations and write intents
-  // ============================
-  if (!SIMPLE_DIRECT_LLM_MODE && !isConfirmation) {
-    const { cacheKey, queryHash } = generateCacheKey(query, effectiveEntityId, "api");
-    const cachedResponse = await checkCache(supabase, effectiveEntityId, cacheKey, "api");
-
-    if (cachedResponse) {
-      const cachedText = cachedResponse.content || '';
-      const ignoreCachedListNoData = isBulkListQuery(query) && isLikelyTransientNoDataResponse(cachedText);
-      if (hasUnresolvedTemplatePlaceholders(cachedText) || ignoreCachedListNoData) {
-        console.warn('[api] Ignoring cached response due to invalid placeholder/transient-empty content');
-      } else {
-      if (!stream) {
-        return new Response(JSON.stringify({
-          conversationId: effectiveConversationId,
-          success: true, query, path: "cached", response: cachedResponse.content,
-          matchedIntent: null, reasoning: "Served from cache",
-          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
-
-      const encoder = new TextEncoder();
-      const cacheStream = new ReadableStream({
-        start(controller) {
-          const send = (type: string, data: unknown) => {
-            const event: SSEEvent = { type, data, timestamp: new Date().toISOString() };
-            controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
-          };
-          send('connected', { sessionId: effectiveConversationId, conversationId: effectiveConversationId, userId: user.id });
-          send('route_classified', { path: 'cached', reason: 'Response served from cache' });
-          send('response_chunk', { text: cachedResponse.content });
-          send('complete', {
-            conversationId: effectiveConversationId,
-            success: true, query, path: 'cached', response: cachedResponse.content,
-            matchedIntent: null, reasoning: 'Served from cache',
-            usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          });
-          controller.close();
-        }
-      });
-      return new Response(cacheStream, {
-        headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
-      });
-      }
-    }
-  }
-
   // Setup SSE stream
   const encoder = new TextEncoder();
   let streamController: ReadableStreamDefaultController<Uint8Array>;
@@ -1596,12 +1527,6 @@ serve(async (req) => {
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
         });
 
-        if (anySuccess && toolsUsed.length > 0 && !hasUnresolvedTemplatePlaceholders(responseText)) {
-          const ttl = determineTTL("llm", effectiveCategory, toolsUsed);
-          const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
-          await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, effectiveCategory, ttl, "api");
-        }
-
         feedbackPath = "deterministic_list";
         feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
         feedbackToolsLoaded = mcpTools.map(t => t.name);
@@ -1649,12 +1574,6 @@ serve(async (req) => {
             pipelineSteps: [], enrichments: [], response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
           });
-
-          if (!SIMPLE_DIRECT_LLM_MODE) {
-            const chatTTL = determineTTL("llm", "general_chat", []);
-            const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
-            await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, "general_chat", chatTTL, "api");
-          }
 
           feedbackPath = "general_chat";
           feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
@@ -1938,16 +1857,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             isConfirmation,
             ...(createdDocsForComplete.length > 0 ? { createdDocs: createdDocsForComplete } : {}),
           });
-
-          // Cache write — LLM path (skip for write operations and confirmations)
-          const llmToolsUsed = mcpResults.map(r => r.tool);
-          if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(llmToolsUsed) && !isConfirmation && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
-            const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
-            const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
-            await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, effectiveCategory, ttl, "api");
-          } else if (hasWriteOperations(llmToolsUsed)) {
-            await invalidateCacheForEntity(supabase, effectiveEntityId, llmToolsUsed, "api");
-          }
 
           feedbackPath = "llm";
           feedbackIntent = bestIntent?.name || null;
