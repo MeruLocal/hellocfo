@@ -58,7 +58,7 @@ interface Intent {
 }
 
 const MAX_TOOL_RESULT_CHARS = 50000;
-const SIMPLE_DIRECT_LLM_MODE = true;
+const SIMPLE_DIRECT_LLM_MODE = false;
 const NO_DATABASE_ID_EXPOSURE_RULE = `⚠️ ABSOLUTE RULE — NO EXCEPTIONS:
 NEVER show database IDs, internal IDs, UUIDs, or numeric system IDs in any user-facing response.
 Never show internal fields like id, *_id, entity_id, org_id, customer_id, vendor_id, invoice_id, bill_id, payment_id, created_by, or updated_by.
