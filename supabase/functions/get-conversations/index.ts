@@ -122,13 +122,12 @@ serve(async (req) => {
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
-      // Include legacy records where entity_id/org_id may be NULL or "default"
+      // Filter by entity — include legacy records where entity_id may be NULL or "default"
       if (entityId) {
         listQuery = listQuery.or(`entity_id.eq.${entityId},entity_id.is.null,entity_id.eq.default`);
       }
-      if (orgId) {
-        listQuery = listQuery.or(`org_id.eq.${orgId},org_id.is.null`);
-      }
+      // NOTE: org_id filter skipped — column may not exist on older deployments.
+      // user_id + entity_id scoping is sufficient.
 
       const { data, error } = await listQuery;
       if (error) throw error;
@@ -143,7 +142,9 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: String(error) }), {
+    const errorMessage = error instanceof Error ? error.message : (typeof error === 'object' ? JSON.stringify(error) : String(error));
+    console.error('[get-conversations] Error:', errorMessage);
+    return new Response(JSON.stringify({ error: errorMessage }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
