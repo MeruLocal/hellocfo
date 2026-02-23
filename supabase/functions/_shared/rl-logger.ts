@@ -1,14 +1,15 @@
 // RL Logger — Logs to intent_routing_stats and llm_path_patterns
 // for the reinforcement learning pipeline
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 /**
  * Log intent routing outcome for adaptive threshold tuning.
  * Called after every fast-path (intent-matched) execution.
  */
 export async function logIntentRouting(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   params: {
     intentId: string;
     intentName: string;
@@ -82,7 +83,7 @@ export async function logIntentRouting(
  * Called after every LLM-path (non-intent-matched) execution.
  */
 export async function logLLMPathPattern(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   params: {
     queryText: string;
     entityId: string;
@@ -148,7 +149,7 @@ export async function logLLMPathPattern(
  * Returns patterns with 10+ occurrences that haven't been suggested yet.
  */
 export async function checkForSuggestedIntents(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   reqId: string,
 ): Promise<void> {
   try {
@@ -217,7 +218,7 @@ function simpleHash(str: string): string {
  * - Otherwise → return default
  */
 export async function getAdaptiveThreshold(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   intentId: string,
   defaultThreshold: number = 0.85,
 ): Promise<number> {
