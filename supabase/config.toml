@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.cfo-agent-mcp]
 verify_jwt = false
+
+[functions.audio-transcribe]
+verify_jwt = false
