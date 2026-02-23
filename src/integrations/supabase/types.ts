@@ -1117,6 +1117,7 @@ export type Database = {
           message_count: number | null
           messages: Json
           mode: string | null
+          org_id: string | null
           summary: string | null
           updated_at: string
           user_id: string
@@ -1135,6 +1136,7 @@ export type Database = {
           message_count?: number | null
           messages?: Json
           mode?: string | null
+          org_id?: string | null
           summary?: string | null
           updated_at?: string
           user_id: string
@@ -1153,6 +1155,7 @@ export type Database = {
           message_count?: number | null
           messages?: Json
           mode?: string | null
+          org_id?: string | null
           summary?: string | null
           updated_at?: string
           user_id?: string
