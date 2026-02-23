@@ -5,7 +5,7 @@ import {
   buildOpenAIToolsFromMcp,
   type OpenAITool,
 } from "./tool-groups.ts";
-import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
+import { classifyQuery, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import {
@@ -237,10 +237,10 @@ function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction
       };
     }
 
-    // Check if metadata has category=bookkeeper and toolsUsed
+    // Check if metadata has toolsUsed with write tools
     const prevCategory = meta.category as string | undefined;
     const prevToolsUsed = (meta.toolsUsed as string[]) || [];
-    if (prevCategory === 'bookkeeper' && prevToolsUsed.length > 0) {
+    if ((prevCategory === 'unified' || prevCategory === 'bookkeeper') && prevToolsUsed.length > 0) {
       const writeTools = prevToolsUsed.filter(t => /^(create_|update_|delete_|void_|cancel_)/.test(t));
       if (writeTools.length > 0) {
         return {
@@ -1526,22 +1526,20 @@ serve(async (req) => {
       let effectiveCategory: QueryCategory;
 
       if (isConfirmation && pendingAction) {
-        // Confirmation with pending action → force bookkeeper category
-        effectiveCategory = 'bookkeeper';
+        // Confirmation with pending action → unified
+        effectiveCategory = 'unified';
         console.log(`[api] Confirmation detected with pending action: ${pendingAction.toolName}`);
         sendEvent('route_classified', {
-          path: 'llm', category: 'bookkeeper',
+          path: 'llm', category: 'unified',
           confidence: 1.0, isConfirmation: true,
           pendingAction: pendingAction.toolName,
         });
       } else if (isConfirmation && !pendingAction) {
-        // Confirmation but no pending action found — use previous category from history
-        const lastAssistantMeta = conversationHistory.slice().reverse().find(m => m.role === 'assistant')?.metadata;
-        const prevCategory = lastAssistantMeta?.category as QueryCategory | undefined;
-        effectiveCategory = prevCategory || 'cfo';
-        console.log(`[api] Confirmation without pending action, using previous category: ${effectiveCategory}`);
+        // Confirmation but no pending action found — use unified
+        effectiveCategory = 'unified';
+        console.log(`[api] Confirmation without pending action, using unified category`);
         sendEvent('route_classified', {
-          path: 'llm', category: effectiveCategory,
+          path: 'llm', category: 'unified',
           confidence: 0.8, isConfirmation: true, noPendingAction: true,
         });
       } else {
@@ -1824,8 +1822,8 @@ serve(async (req) => {
         }
 
         if (!SIMPLE_DIRECT_LLM_MODE && effectiveCategory === 'general_chat' && !isConfirmation) {
-          sendEvent('tools_filtered', { category: 'general_chat', toolCount: 0 });
-          sendEvent('response_generating', { path: 'llm', category: 'general_chat' });
+          sendEvent('tools_filtered', { category: effectiveCategory, toolCount: 0 });
+          sendEvent('response_generating', { path: 'llm', category: effectiveCategory });
 
           const response = await callOpenAI(llmConfig as LLMConfig,
             SYSTEM_PROMPTS.general_chat,
@@ -1872,14 +1870,14 @@ serve(async (req) => {
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else if (isConfirmation && pendingAction && pendingAction.toolName) {
             // For confirmations, load the tool group relevant to the pending action
-            toolSelection = selectToolsForQuery(pendingAction.summary || query, 'bookkeeper', mcpTools);
+            toolSelection = selectToolsForQuery(pendingAction.summary || query, 'unified', mcpTools);
             // Also ensure the specific pending tool is included
             if (!toolSelection.toolNames.includes(pendingAction.toolName)) {
               toolSelection.toolNames.push(pendingAction.toolName);
             }
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
-            toolSelection = selectToolsForQuery(query, effectiveCategory as "bookkeeper" | "cfo", mcpTools);
+            toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
 
@@ -1902,7 +1900,7 @@ serve(async (req) => {
 For every user request, call MCP tools when data/action is needed.
 Do not invent data. Use tool results as the source of truth.
 ${NO_DATABASE_ID_EXPOSURE_RULE}`
-            : (effectiveCategory === 'bookkeeper' ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo);
+            : SYSTEM_PROMPTS.unified;
 
           // ─── Pagination follow-up detection ───
           const isPaginationRequest = !SIMPLE_DIRECT_LLM_MODE && queryIsPaginationFollowUp;
@@ -2294,7 +2292,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               message_count: updatedMessages.length,
               updated_at: new Date().toISOString(),
               last_message_preview: (feedbackResponse || '').slice(0, 200),
-              mode: feedbackCategory || 'cfo',
+              mode: feedbackCategory || 'unified',
               entity_id: effectiveEntityId,
               org_id: mcpOrgId || null,
             })
@@ -2313,7 +2311,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             messages: [userMsg, agentMsg],
             message_count: 2,
             auto_generated_name: query.slice(0, 80),
-            mode: feedbackCategory || 'cfo',
+            mode: feedbackCategory || 'unified',
             last_message_preview: (feedbackResponse || '').slice(0, 200),
           });
           if (insertError) {

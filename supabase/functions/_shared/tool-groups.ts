@@ -204,12 +204,13 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
 // ============================================================
 
 /**
- * Given a query and category (bookkeeper/cfo), returns the set of
- * actual MCP tool names that should be provided to the LLM.
+ * Given a query, returns the set of actual MCP tool names that should
+ * be provided to the LLM. Category parameter is kept for backward
+ * compat but ignored — all queries get the same unified tool selection.
  */
 export function selectToolsForQuery(
   query: string,
-  category: "bookkeeper" | "cfo",
+  _category?: string,
   mcpTools?: Array<{ name: string; description: string; inputSchema: unknown }>,
 ): { toolNames: string[]; matchedCategories: string[]; strategy: string } {
   const queryLower = query.toLowerCase();
@@ -227,25 +228,18 @@ export function selectToolsForQuery(
     }
   }
 
-  // If no specific match, provide broad defaults based on category
+  // If no specific match, provide broad defaults covering both transactional and analytical
   if (matchedCategories.length === 0) {
-    const defaultCategories = category === "bookkeeper"
-      ? ["invoices", "bills", "payments", "transactions", "customers", "vendors"]
-      : ["aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "invoices", "bills", "payments", "accounts"];
+    const defaultCategories = [
+      "invoices", "bills", "payments", "transactions", "customers", "vendors",
+      "aging_reports", "reports_pnl", "reports_balance", "reports_cashflow", "kpi_dashboard", "accounts",
+    ];
 
-    if (category === "bookkeeper") {
-      return {
-        toolNames: resolveToolNames(defaultCategories, mcpTools),
-        matchedCategories: defaultCategories,
-        strategy: mcpTools?.length ? "default_bookkeeper_dynamic" : "default_bookkeeper",
-      };
-    } else {
-      return {
-        toolNames: resolveToolNames(defaultCategories, mcpTools),
-        matchedCategories: defaultCategories,
-        strategy: mcpTools?.length ? "default_cfo_dynamic" : "default_cfo",
-      };
-    }
+    return {
+      toolNames: resolveToolNames(defaultCategories, mcpTools),
+      matchedCategories: defaultCategories,
+      strategy: mcpTools?.length ? "default_unified_dynamic" : "default_unified",
+    };
   }
 
   // Add related categories for better context

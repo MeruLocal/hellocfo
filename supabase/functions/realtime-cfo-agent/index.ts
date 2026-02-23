@@ -5,7 +5,7 @@ import {
   buildOpenAIToolsFromMcp,
   type OpenAITool,
 } from "./tool-groups.ts";
-import { classifyQuery, detectCrossOver, type QueryCategory } from "./classifier.ts";
+import { classifyQuery, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import {
@@ -534,11 +534,7 @@ serve(async (req) => {
 
           // LAYER 1: Classify via keywords
           const classification = classifyQuery(query);
-
-          // Check cross-over from previous conversation
-          const lastCategory = conversationHistory.length > 0 ? "cfo" : undefined;
-          const isCrossOver = lastCategory && detectCrossOver(query, lastCategory as QueryCategory);
-          const effectiveCategory = isCrossOver ? "bookkeeper" : classification.category;
+          const effectiveCategory = classification.category;
 
           sendEvent("route_classified", {
             path: "llm",
@@ -546,13 +542,8 @@ serve(async (req) => {
             confidence: classification.confidence,
             subCategory: classification.subCategory,
             matchedKeywords: classification.matchedKeywords,
-            crossOver: isCrossOver || false,
             intentAttempted: bestIntent ? { name: bestIntent.name, confidence: bestIntent.confidence } : null,
           });
-
-          if (isCrossOver) {
-            sendEvent("mode_switch", { from: lastCategory, to: "bookkeeper", reason: "Action keywords detected in CFO context" });
-          }
 
           if (bestIntent) {
             sendEvent("intent_detected", {
@@ -626,7 +617,7 @@ serve(async (req) => {
             // Build category-specific system prompt
             const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
               ? "You are a finance assistant connected to live MCP tools. For every user request, call MCP tools when data/action is needed. Do not invent data. Use tool results as source of truth."
-              : (effectiveCategory === "bookkeeper" ? SYSTEM_PROMPTS.bookkeeper : SYSTEM_PROMPTS.cfo);
+              : SYSTEM_PROMPTS.unified;
             let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.`;
 
             // Build messages
