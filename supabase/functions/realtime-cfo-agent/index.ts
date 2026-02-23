@@ -371,7 +371,7 @@ serve(async (req) => {
         // ============================
         // STEP 3: LAYER 1 — Intent matching against DB (free)
         // ============================
-        const activeIntents = (intents || []).filter((i: { isActive: boolean }) => i.isActive);
+        const activeIntents = (intents || []).filter((i: Record<string, unknown>) => i.isActive);
 
         sendEvent("route_started", { query, intentCount: activeIntents.length, mcpToolCount: mcpTools.length });
 
