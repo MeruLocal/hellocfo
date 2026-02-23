@@ -1771,8 +1771,8 @@ serve(async (req) => {
 
         // Build createdDocs for SSE so frontend can navigate to created records
         const fastCreatedDocs: CreatedDoc[] = [];
-        for (const wr of toolResults.filter(r => isWriteTool(r.tool) && r.success && r.result)) {
-          const doc = parseCreatedDoc(wr.tool, wr.result!);
+        for (const wr of toolResults.filter(r => isWriteTool(r.tool) && r.success && r.data)) {
+          const doc = parseCreatedDoc(wr.tool, wr.data!);
           if (doc) fastCreatedDocs.push(doc);
         }
 
@@ -1880,7 +1880,7 @@ serve(async (req) => {
             }
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
-            toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
+            toolSelection = selectToolsForQuery(query, effectiveCategory as "bookkeeper" | "cfo", mcpTools);
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
 
@@ -2296,7 +2296,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               message_count: updatedMessages.length,
               updated_at: new Date().toISOString(),
               last_message_preview: (feedbackResponse || '').slice(0, 200),
-              mode: effectiveCategory || 'cfo',
+              mode: feedbackCategory || 'cfo',
             })
             .eq("id", existing.id);
           if (updateError) {
@@ -2313,7 +2313,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             messages: [userMsg, agentMsg],
             message_count: 2,
             auto_generated_name: query.slice(0, 80),
-            mode: effectiveCategory || 'cfo',
+            mode: feedbackCategory || 'cfo',
             last_message_preview: (feedbackResponse || '').slice(0, 200),
           });
           if (insertError) {
