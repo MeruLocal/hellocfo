@@ -1136,10 +1136,16 @@ serve(async (req) => {
   }
 
   const { query, conversationId, conversationHistory: rawConversationHistory = [], stream = true, entityId, orgId } = body;
+  const normalizedConversationId = typeof conversationId === 'string' ? conversationId.trim() : '';
+  const effectiveConversationId = normalizedConversationId || crypto.randomUUID();
   // Normalize roles: treat 'agent' as 'assistant'
   let conversationHistory = normalizeConversationHistory(rawConversationHistory);
   const hAuthHeader = req.headers.get('H-Authorization');
   const mcpAuthFromHeader = hAuthHeader?.startsWith('Bearer ') ? hAuthHeader.replace('Bearer ', '').trim() : null;
+  const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
+  const mcpEntityId = entityId || Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
+  const mcpOrgId = orgId || Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
+  const effectiveEntityId = mcpEntityId || "default";
 
   if (!query || typeof query !== 'string') {
     return new Response(JSON.stringify({ error: 'Query is required' }), {
@@ -1148,18 +1154,23 @@ serve(async (req) => {
   }
 
   // Prefer persisted conversation history from DB when available
-  if (conversationId) {
+  if (normalizedConversationId) {
     try {
-      const { data: existingConversation } = await supabase
+      const { data: existingRows, error: historyLoadError } = await supabase
         .from("unified_conversations")
         .select("messages")
-        .eq("conversation_id", conversationId)
-        .maybeSingle();
+        .eq("conversation_id", effectiveConversationId)
+        .eq("user_id", user.id)
+        .eq("entity_id", effectiveEntityId)
+        .order("updated_at", { ascending: false })
+        .limit(1);
 
-      const persistedHistory = parseConversationMessages(existingConversation?.messages);
+      if (historyLoadError) throw historyLoadError;
+
+      const persistedHistory = parseConversationMessages(existingRows?.[0]?.messages);
       if (persistedHistory.length > 0) {
         conversationHistory = persistedHistory;
-        console.log(`[api] Loaded ${persistedHistory.length} persisted messages for conversation ${conversationId}`);
+        console.log(`[api] Loaded ${persistedHistory.length} persisted messages for conversation ${effectiveConversationId}`);
       }
     } catch (historyError) {
       console.warn('[api] Failed to load persisted conversation history, falling back to request history:', historyError);
@@ -1176,10 +1187,6 @@ serve(async (req) => {
     });
   }
 
-  const mcpAuthToken = mcpAuthFromHeader || Deno.env.get('MCP_HELLOBOOKS_AUTH_TOKEN');
-  const mcpEntityId = entityId || Deno.env.get('MCP_HELLOBOOKS_ENTITY_ID');
-  const mcpOrgId = orgId || Deno.env.get('MCP_HELLOBOOKS_ORG_ID');
-  const effectiveEntityId = mcpEntityId || "default";
   const startTime = Date.now();
 
   // ─── Confirmation Detection ─────────────────────────────────────────────
@@ -1207,6 +1214,7 @@ serve(async (req) => {
       } else {
       if (!stream) {
         return new Response(JSON.stringify({
+          conversationId: effectiveConversationId,
           success: true, query, path: "cached", response: cachedResponse.content,
           matchedIntent: null, reasoning: "Served from cache",
           usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
@@ -1221,10 +1229,11 @@ serve(async (req) => {
             const event: SSEEvent = { type, data, timestamp: new Date().toISOString() };
             controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`));
           };
-          send('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id });
+          send('connected', { sessionId: effectiveConversationId, conversationId: effectiveConversationId, userId: user.id });
           send('route_classified', { path: 'cached', reason: 'Response served from cache' });
           send('response_chunk', { text: cachedResponse.content });
           send('complete', {
+            conversationId: effectiveConversationId,
             success: true, query, path: 'cached', response: cachedResponse.content,
             matchedIntent: null, reasoning: 'Served from cache',
             usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
@@ -1255,6 +1264,13 @@ serve(async (req) => {
     try { streamController.enqueue(encoder.encode(message)); } catch (_e) { /* ignore */ }
   };
 
+  const sendComplete = (data: Record<string, unknown>) => {
+    sendEvent('complete', {
+      conversationId: effectiveConversationId,
+      ...data,
+    });
+  };
+
   const closeStream = () => {
     try { streamController.close(); } catch (_e) { /* ignore */ }
   };
@@ -1271,12 +1287,18 @@ serve(async (req) => {
     let feedbackStrategy: string | null = null;
     let feedbackResponse: string | null = null;
     let feedbackTokenCost: number | null = null;
+    let feedbackCategory: QueryCategory | 'unknown' = 'unknown';
     let mcpClientInstance: StreamableMCPClient | null = null;
     // Hoisted so finally block can access real tool inputs/results
     let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
 
     try {
-      sendEvent('connected', { sessionId: conversationId || crypto.randomUUID(), userId: user.id, messageId: apiMessageId });
+      sendEvent('connected', {
+        sessionId: effectiveConversationId,
+        conversationId: effectiveConversationId,
+        userId: user.id,
+        messageId: apiMessageId,
+      });
       sendEvent('understanding_started', { message: 'Analyzing your query...' });
 
       // ─── MCP Connection ──────────────────────────────────────────────
@@ -1309,6 +1331,7 @@ serve(async (req) => {
 
       // ─── Check: if MCP not connected and query needs tools, return clear message ──
       const classification = classifyQuery(query);
+      feedbackCategory = classification.category;
       const needsTools = classification.category !== 'general_chat';
 
       if (needsTools && !mcpClientInstance && !isConfirmation) {
@@ -1325,7 +1348,7 @@ serve(async (req) => {
 
         sendEvent('route_classified', { path: 'error', category: 'mcp_unavailable' });
         sendEvent('response_chunk', { text: errorMsg });
-        sendEvent('complete', {
+        sendComplete({
           success: false, query, path: 'error', response: errorMsg,
           matchedIntent: null, reasoning: 'MCP not connected',
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
@@ -1446,6 +1469,7 @@ serve(async (req) => {
       } else {
         effectiveCategory = classification.category;
       }
+      feedbackCategory = effectiveCategory;
 
       // ============================
       // LAYER 1: Intent matching against DB (skip for confirmations)
@@ -1498,7 +1522,7 @@ serve(async (req) => {
         if (listPicks.length === 0) {
           const msg = "I couldn't find matching list tools from your connected data source. Please reconnect HelloBooks and try again.";
           sendEvent('response_chunk', { text: msg });
-          sendEvent('complete', {
+          sendComplete({
             success: false, query, path: 'deterministic_list',
             matchedIntent: null, reasoning: 'No matching dynamic list tools',
             response: msg,
@@ -1563,7 +1587,7 @@ serve(async (req) => {
           await new Promise(r => setTimeout(r, 20));
         }
 
-        sendEvent('complete', {
+        sendComplete({
           success: anySuccess,
           query,
           path: 'deterministic_list',
@@ -1654,7 +1678,7 @@ serve(async (req) => {
           await new Promise(r => setTimeout(r, 20));
         }
 
-        sendEvent('complete', {
+        sendComplete({
           success: true, query, path: 'fast',
           matchedIntent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
           extractedEntities: {}, reasoning: `Fast path: ${(bestIntent.confidence * 100).toFixed(0)}% confidence`,
@@ -1718,7 +1742,7 @@ serve(async (req) => {
             await new Promise(r => setTimeout(r, 20));
           }
 
-          sendEvent('complete', {
+          sendComplete({
             success: true, query, path: 'llm', category: 'general_chat',
             matchedIntent: null, extractedEntities: {}, reasoning: 'General conversation',
             pipelineSteps: [], enrichments: [], response: responseText,
@@ -1974,7 +1998,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           }
 
           const finalEnrichments = detectAutoEnrichments(mcpResults);
-          sendEvent('complete', {
+          sendComplete({
             success: true, query, path: 'llm', category: effectiveCategory,
             matchedIntent: bestIntent ? { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence } : null,
             extractedEntities: {},
@@ -2018,7 +2042,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
       feedbackResponse = safeMessage;
       sendEvent('error', { message: safeMessage, code: 'PROCESSING_ERROR' });
       sendEvent('response_chunk', { text: safeMessage });
-      sendEvent('complete', {
+      sendComplete({
         success: false,
         query,
         path: 'error',
@@ -2029,7 +2053,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
       });
     } finally {
       // Persist conversation to unified_conversations
-      const effectiveConversationId = conversationId || apiMessageId;
       try {
         const userMsg = {
           id: crypto.randomUUID(),
@@ -2099,7 +2122,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           timestamp: new Date().toISOString(),
           metadata: {
             route: feedbackPath,
-            category: isConfirmation ? 'bookkeeper' : (classification?.category || 'unknown'),
+            category: feedbackCategory,
             intent: feedbackIntent ? { name: feedbackIntent, confidence: feedbackIntentConfidence } : null,
             toolsUsed: feedbackToolsUsed,
             toolsLoaded: feedbackToolsLoaded,
@@ -2120,11 +2143,17 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           },
         };
 
-        const { data: existing } = await supabase
+        const { data: existingRows, error: existingLookupError } = await supabase
           .from("unified_conversations")
           .select("id, messages, message_count")
           .eq("conversation_id", effectiveConversationId)
-          .single();
+          .eq("user_id", user.id)
+          .eq("entity_id", effectiveEntityId)
+          .order("updated_at", { ascending: false })
+          .limit(1);
+
+        if (existingLookupError) throw existingLookupError;
+        const existing = existingRows?.[0];
 
         if (existing) {
           const existingMessages = (existing.messages as unknown[]) || [];
