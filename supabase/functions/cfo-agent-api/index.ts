@@ -32,6 +32,12 @@ interface ChatMessage {
   metadata?: Record<string, unknown>;
 }
 
+interface Attachment {
+  name: string;
+  url: string;
+  type: string;
+}
+
 interface LLMConfig {
   id: string;
   provider: string;
@@ -1007,6 +1013,87 @@ function getUserFacingErrorMessage(error: unknown): string {
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
+// ─── Attachment Processing ────────────────────────────────────────────────────
+
+async function buildUserContent(query: string, attachments?: Attachment[]): Promise<string | unknown[]> {
+  if (!attachments || attachments.length === 0) return query;
+
+  const contentParts: unknown[] = [];
+  let textContext = query;
+
+  for (const att of attachments) {
+    const isImage = att.type?.startsWith("image/");
+
+    if (isImage && att.url) {
+      // Images: pass as image_url for GPT-4o vision
+      contentParts.push({ type: "image_url", image_url: { url: att.url, detail: "auto" } });
+      console.log(`[api] Attachment image: ${att.name}`);
+    } else if (att.url) {
+      // Documents (PDF, Excel, CSV, etc.): fetch and extract text content
+      try {
+        console.log(`[api] Fetching document: ${att.name} (${att.type})`);
+        const res = await fetch(att.url);
+        if (!res.ok) {
+          textContext += `\n\n[Attached file: ${att.name} — could not fetch content (HTTP ${res.status})]`;
+          continue;
+        }
+
+        if (att.type === "text/csv" || att.name.endsWith(".csv")) {
+          // CSV: include raw text
+          const csvText = await res.text();
+          const preview = csvText.length > 8000 ? csvText.slice(0, 8000) + "\n... (truncated)" : csvText;
+          textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
+        } else {
+          // PDF / other binary: try to extract readable text from raw bytes
+          const buffer = await res.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          // Extract text streams from PDF (between parentheses after Tj/TJ operators)
+          let extracted = "";
+          const text = new TextDecoder("latin1").decode(bytes);
+          // Method 1: Extract text between BT...ET blocks with Tj/TJ operators
+          const tjMatches = text.matchAll(/\(([^)]{1,500})\)\s*Tj/g);
+          for (const m of tjMatches) extracted += m[1];
+          // Method 2: Extract TJ array strings
+          const tjArrayMatches = text.matchAll(/\[([^\]]{1,2000})\]\s*TJ/g);
+          for (const m of tjArrayMatches) {
+            const innerStrings = m[1].matchAll(/\(([^)]{1,500})\)/g);
+            for (const s of innerStrings) extracted += s[1];
+          }
+
+          if (extracted.length > 50) {
+            // Clean up common PDF encoding artifacts
+            const cleaned = extracted
+              .replace(/\\n/g, "\n")
+              .replace(/\\r/g, "")
+              .replace(/\\t/g, " ")
+              .replace(/\\\(/g, "(")
+              .replace(/\\\)/g, ")")
+              .replace(/\s{3,}/g, "  ")
+              .trim();
+            const preview = cleaned.length > 8000 ? cleaned.slice(0, 8000) + "\n... (truncated)" : cleaned;
+            textContext += `\n\n--- Content extracted from ${att.name} ---\n${preview}\n--- End of file ---`;
+            console.log(`[api] Extracted ${cleaned.length} chars from ${att.name}`);
+          } else {
+            textContext += `\n\n[Attached file: ${att.name} (${att.type}) — content could not be extracted as text. The user may need to share a screenshot or image of the document for visual analysis.]`;
+            console.log(`[api] Could not extract text from ${att.name}, only got ${extracted.length} chars`);
+          }
+        }
+      } catch (err) {
+        console.error(`[api] Error processing attachment ${att.name}:`, err);
+        textContext += `\n\n[Attached file: ${att.name} — error processing: ${err instanceof Error ? err.message : "unknown"}]`;
+      }
+    }
+  }
+
+  // If we have image parts, build a multimodal content array
+  if (contentParts.length > 0) {
+    return [{ type: "text", text: textContext }, ...contentParts];
+  }
+
+  // Text-only (documents were injected into textContext)
+  return textContext;
+}
+
 // ─── OpenAI Call ──────────────────────────────────────────────────────────────
 
 async function callOpenAI(
@@ -1106,6 +1193,7 @@ serve(async (req) => {
     stream?: boolean;
     entityId?: string;
     orgId?: string;
+    attachments?: Attachment[];
   };
   try {
     body = await req.json();
@@ -1115,7 +1203,7 @@ serve(async (req) => {
     });
   }
 
-  const { query, conversationId, conversationHistory: rawConversationHistory = [], stream = true, entityId, orgId } = body;
+  const { query, conversationId, conversationHistory: rawConversationHistory = [], stream = true, entityId, orgId, attachments } = body;
   const normalizedConversationId = typeof conversationId === 'string' ? conversationId.trim() : '';
   const effectiveConversationId = normalizedConversationId || crypto.randomUUID();
   // Normalize roles: treat 'agent' as 'assistant'
@@ -1260,6 +1348,9 @@ serve(async (req) => {
       }
 
       // ─── Check: if MCP not connected and query needs tools, return clear message ──
+      if (attachments?.length) {
+        console.log(`[api] Received ${attachments.length} attachment(s): ${attachments.map(a => `${a.name} (${a.type})`).join(', ')}`);
+      }
       const classification = classifyQuery(query);
       feedbackCategory = classification.category;
       const needsTools = classification.category !== 'general_chat';
@@ -1555,9 +1646,10 @@ serve(async (req) => {
           sendEvent('tools_filtered', { category: effectiveCategory, toolCount: 0 });
           sendEvent('response_generating', { path: 'llm', category: effectiveCategory });
 
+          const chatUserContent = await buildUserContent(query, attachments);
           const response = await callOpenAI(llmConfig as LLMConfig,
             SYSTEM_PROMPTS.general_chat,
-            [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: query }],
+            [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: chatUserContent }],
             [], 512
           );
 
@@ -1677,9 +1769,10 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
 
           // For confirmations, include more history
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
+          const userContent = await buildUserContent(query, attachments);
           const messages: unknown[] = [
             ...conversationHistory.slice(-historySlice).map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: query }
+            { role: 'user', content: userContent }
           ];
 
           let response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
