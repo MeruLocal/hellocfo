@@ -6,7 +6,7 @@ import {
   type OpenAITool,
 } from "./tool-groups.ts";
 import { classifyQuery, type QueryCategory } from "./classifier.ts";
-import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
+import { SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import {
   generateCacheKey,
@@ -966,85 +966,6 @@ function isWriteTool(toolName: string): boolean {
   return /^(create_|update_|delete_|void_|cancel_)/.test(toolName);
 }
 
-// ─── Extraction State for Pending/Applied UI ────────────────────────────────
-
-interface ExtractionField {
-  key: string;
-  label: string;
-  value?: unknown;
-  required: boolean;
-}
-
-interface ExtractionState {
-  toolName: string;
-  documentType: string;
-  appliedFields: ExtractionField[];
-  pendingFields: ExtractionField[];
-  totalRequired: number;
-  totalApplied: number;
-  totalPending: number;
-}
-
-const INTERNAL_SCHEMA_FIELDS = new Set([
-  'entity_id', 'entityId', 'org_id', 'orgId', 'id',
-  'created_by', 'updated_by', 'created_at', 'updated_at',
-  'entity', 'organization', 'user_id', 'userId',
-]);
-
-function formatFieldLabel(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/\b\w/g, s => s.toUpperCase())
-    .trim();
-}
-
-function computeExtractionState(
-  toolName: string,
-  toolArgs: Record<string, unknown>,
-  toolSchema: unknown,
-): ExtractionState | null {
-  if (!isWriteTool(toolName)) return null;
-
-  const schema = toolSchema as {
-    properties?: Record<string, unknown>;
-    required?: string[];
-  } | null;
-  if (!schema?.properties) return null;
-
-  const requiredSet = new Set(schema.required || []);
-  const appliedFields: ExtractionField[] = [];
-  const pendingFields: ExtractionField[] = [];
-
-  for (const [key] of Object.entries(schema.properties)) {
-    if (INTERNAL_SCHEMA_FIELDS.has(key)) continue;
-
-    const isRequired = requiredSet.has(key);
-    const val = toolArgs[key];
-    const hasValue = val !== null && val !== undefined && val !== '' &&
-      !(Array.isArray(val) && val.length === 0);
-
-    if (hasValue) {
-      appliedFields.push({ key, label: formatFieldLabel(key), value: val, required: isRequired });
-    } else if (isRequired) {
-      pendingFields.push({ key, label: formatFieldLabel(key), required: true });
-    }
-  }
-
-  const docTypeMatch = toolName.match(/^(?:create|update|delete|void|cancel)_(.+)/);
-  const documentType = docTypeMatch ? docTypeMatch[1] : toolName;
-
-  return {
-    toolName,
-    documentType,
-    appliedFields,
-    pendingFields,
-    totalRequired: requiredSet.size,
-    totalApplied: appliedFields.length,
-    totalPending: pendingFields.length,
-  };
-}
-
 function isToolResultError(result: string): boolean {
   const lower = result.toLowerCase();
   if (lower.startsWith('error:') || lower.startsWith('{"error"')) return true;
@@ -1578,7 +1499,6 @@ serve(async (req) => {
         }
       }
 
-      const CONFIDENCE_THRESHOLD = 0.85;
       const deterministicListEntities = queryRequestedEntities.length > 0
         ? queryRequestedEntities
         : [];
@@ -1688,121 +1608,6 @@ serve(async (req) => {
         feedbackToolsUsed = toolsUsed;
         feedbackStrategy = "deterministic_list";
         feedbackResponse = responseText;
-      } else {
-        const fastPipeline = bestIntent?.resolution_flow?.dataPipeline || [];
-        const hasExecutableFastPipeline = fastPipeline.some(step => {
-          if (step.nodeType && step.nodeType !== 'api_call') return false;
-          const name = (step.mcpTool || step.tool || '').toLowerCase();
-          if (!name) return false;
-          return mcpTools.some(t => t.name.toLowerCase() === name || t.name.toLowerCase().includes(name));
-        });
-        const fastPathEligibleQuery = !queryIsBulkList && !queryIsPaginationFollowUp && !queryIsOverdueList;
-        // Skip fast path for create/write operations — they need the agentic loop for multi-turn field collection + extraction state tracking
-        const queryIsCreateOperation = /\b(?:create|make|record|raise|add|new)\s+(?:an?\s+)?(?:invoice|bill|payment|credit.?note|expense|journal|quote|estimate|purchase.?order|customer|vendor|item)\b/i.test(query);
-        const useFastPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline && !queryIsCreateOperation;
-
-      if (useFastPath && bestIntent) {
-        // ========== FAST PATH ==========
-        sendEvent('route_classified', { path: 'fast', intent: { name: bestIntent.name, confidence: bestIntent.confidence } });
-        sendEvent('intent_detected', { intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence, description: bestIntent.description }, reasoning: `Matched with ${(bestIntent.confidence * 100).toFixed(0)}% confidence` });
-
-        const resolutionFlow = bestIntent.resolution_flow || {};
-        const pipeline = resolutionFlow.dataPipeline || [];
-        const enrichments = resolutionFlow.enrichments || [];
-        const responseConfig = resolutionFlow.responseConfig;
-
-        if (pipeline.length > 0) sendEvent('pipeline_planned', { steps: pipeline.map(s => ({ tool: s.mcpTool || s.tool, description: s.description })) });
-        if (enrichments.length > 0) sendEvent('enrichments_planned', { enrichments });
-
-        // Execute pipeline
-        const toolResults: { tool: string; success: boolean; data?: string; error?: string }[] = [];
-        if (mcpClientInstance && pipeline.length > 0) {
-          sendEvent('pipeline_executing', { stepCount: pipeline.length });
-          for (const step of pipeline) {
-            if (step.nodeType && step.nodeType !== 'api_call') continue;
-            const toolName = step.mcpTool || step.tool;
-            if (!toolName) continue;
-            sendEvent('executing_tool', { tool: toolName });
-            const mcpTool = mcpTools.find(t => t.name === toolName || t.name.toLowerCase().includes(toolName.toLowerCase()));
-            if (mcpTool) {
-              const execResult = await executeToolCall(mcpTool.name, {}, 'fast-path');
-              let recordCount = 1;
-              try { const p = JSON.parse(execResult.result); if (Array.isArray(p)) recordCount = p.length; } catch (_e) { /* ok */ }
-              toolResults.push({ tool: toolName, success: execResult.success, data: execResult.success ? execResult.result : undefined, error: execResult.failureReason });
-              sendEvent('tool_result', { tool: toolName, success: execResult.success, recordCount, attempts: execResult.attempts });
-            } else {
-              toolResults.push({ tool: toolName, success: false, error: 'Tool not found' });
-              sendEvent('tool_result', { tool: toolName, success: false, error: 'Tool not available' });
-            }
-          }
-        }
-
-        // Format with LLM
-        sendEvent('response_generating', { path: 'fast' });
-
-        const dataContext = toolResults.filter(r => r.success).map(r => `[${r.tool}]: ${r.data}`).join('\n\n');
-        const fastSystemPrompt = SYSTEM_PROMPTS.fast_path;
-
-        const response = await callOpenAI(llmConfig as LLMConfig, fastSystemPrompt, [
-          ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
-          { role: 'user', content: `Query: ${query}\n\nData:\n${dataContext}\n\n${responseConfig?.template ? `Format: ${responseConfig.template}` : ''}` }
-        ], [], 2048);
-
-        let responseText = response.message.content || '';
-
-        // Parse AI-driven params block (if present in fast path)
-        const fpParamsMatch = responseText.match(/```params\s*\n?([\s\S]*?)\n?\s*```/);
-        if (fpParamsMatch) {
-          try {
-            const paramsData = JSON.parse(fpParamsMatch[1].trim());
-            sendEvent('extraction_state', paramsData);
-          } catch (_e) { /* ignore malformed block */ }
-          responseText = responseText.replace(/```params\s*\n?[\s\S]*?\n?\s*```/, '').trim();
-        }
-
-        const chunkSize = 50;
-        for (let i = 0; i < responseText.length; i += chunkSize) {
-          sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
-          await new Promise(r => setTimeout(r, 20));
-        }
-
-        // Build createdDocs for SSE so frontend can navigate to created records
-        const fastCreatedDocs: CreatedDoc[] = [];
-        for (const wr of toolResults.filter(r => isWriteTool(r.tool) && r.success && r.data)) {
-          const doc = parseCreatedDoc(wr.tool, wr.data!);
-          if (doc) fastCreatedDocs.push(doc);
-        }
-
-        sendComplete({
-          success: true, query, path: 'fast',
-          matchedIntent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
-          extractedEntities: {}, reasoning: `Fast path: ${(bestIntent.confidence * 100).toFixed(0)}% confidence`,
-          pipelineSteps: pipeline, enrichments,
-          toolResults: toolResults.map(r => ({ tool: r.tool, success: r.success, error: r.error })),
-          response: responseText,
-          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          ...(fastCreatedDocs.length > 0 ? { createdDocs: fastCreatedDocs } : {}),
-        });
-
-        // Cache write — fast path
-        const fastToolsUsed = toolResults.map(r => r.tool);
-        if (!hasWriteOperations(fastToolsUsed) && !hasUnresolvedTemplatePlaceholders(responseText) && !isLikelyTransientNoDataResponse(responseText)) {
-          const ttl = determineTTL("fast", "fast", fastToolsUsed);
-          const { cacheKey: ck, queryHash: qh } = generateCacheKey(query, effectiveEntityId, "api");
-          await writeCache(supabase, effectiveEntityId, ck, qh, query, responseText, "fast", ttl, "api");
-        } else {
-          await invalidateCacheForEntity(supabase, effectiveEntityId, fastToolsUsed, "api");
-        }
-
-        feedbackPath = "fast";
-        feedbackIntent = bestIntent.name;
-        feedbackIntentConfidence = bestIntent.confidence;
-        feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
-        feedbackToolsLoaded = mcpTools.map(t => t.name);
-        feedbackToolsUsed = toolResults.filter(r => r.success).map(r => r.tool);
-        feedbackStrategy = "fast_path";
-        feedbackResponse = responseText;
-
       } else {
         // ========== LLM PATH ==========
         if (!isConfirmation) {
@@ -2153,7 +1958,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           feedbackStrategy = isConfirmation ? 'confirmation_retry' : toolSelection.strategy;
           feedbackResponse = responseText;
         }
-      }
       }
 
     } catch (error) {
