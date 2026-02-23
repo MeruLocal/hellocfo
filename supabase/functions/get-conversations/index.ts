@@ -32,6 +32,7 @@ serve(async (req) => {
   let conversationId = normalizeOptionalString(url.searchParams.get("conversationId"));
   let userId = normalizeOptionalString(url.searchParams.get("userId"));
   let entityId = normalizeOptionalString(url.searchParams.get("entityId"));
+  let orgId = normalizeOptionalString(url.searchParams.get("orgId"));
   let limitRaw = url.searchParams.get("limit");
   let offsetRaw = url.searchParams.get("offset");
 
@@ -42,6 +43,7 @@ serve(async (req) => {
       conversationId = conversationId || normalizeOptionalString(body.conversationId);
       userId = userId || normalizeOptionalString(body.userId);
       entityId = entityId || normalizeOptionalString(body.entityId);
+      orgId = orgId || normalizeOptionalString(body.orgId);
 
       if (!limitRaw && body.limit !== undefined && body.limit !== null) {
         limitRaw = String(body.limit);
@@ -121,6 +123,7 @@ serve(async (req) => {
         .range(offset, offset + limit - 1);
 
       if (entityId) listQuery = listQuery.eq("entity_id", entityId);
+      if (orgId) listQuery = listQuery.eq("org_id", orgId);
 
       const { data, error } = await listQuery;
       if (error) throw error;

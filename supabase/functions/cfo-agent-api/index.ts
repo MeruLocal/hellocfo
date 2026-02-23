@@ -2272,7 +2272,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
         if (existing) {
           const existingMessages = (existing.messages as unknown[]) || [];
           const updatedMessages = [...existingMessages, userMsg, agentMsg];
-          await supabase
+          const { error: updateError } = await supabase
             .from("unified_conversations")
             .update({
               messages: updatedMessages,
@@ -2282,10 +2282,15 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               mode: effectiveCategory || 'cfo',
             })
             .eq("id", existing.id);
+          if (updateError) {
+            console.error('[Error] Failed to UPDATE conversation:', updateError);
+            sendEvent('conversation_save_error', { error: 'update_failed' });
+          }
         } else {
-          await supabase.from("unified_conversations").insert({
+          const { error: insertError } = await supabase.from("unified_conversations").insert({
             conversation_id: effectiveConversationId,
             entity_id: effectiveEntityId,
+            org_id: mcpOrgId || null,
             user_id: user.id,
             summary: query.slice(0, 100),
             messages: [userMsg, agentMsg],
@@ -2294,9 +2299,14 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             mode: effectiveCategory || 'cfo',
             last_message_preview: (feedbackResponse || '').slice(0, 200),
           });
+          if (insertError) {
+            console.error('[Error] Failed to INSERT conversation:', JSON.stringify(insertError));
+            sendEvent('conversation_save_error', { error: 'insert_failed', detail: insertError.message || String(insertError) });
+          }
         }
       } catch (convError) {
         console.error('[Error] Failed to persist conversation:', convError);
+        try { sendEvent('conversation_save_error', { error: String(convError) }); } catch (_) { /* stream may be closed */ }
       }
 
       // Non-blocking feedback log
