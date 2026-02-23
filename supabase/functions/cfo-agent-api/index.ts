@@ -1700,7 +1700,9 @@ serve(async (req) => {
           return mcpTools.some(t => t.name.toLowerCase() === name || t.name.toLowerCase().includes(name));
         });
         const fastPathEligibleQuery = !queryIsBulkList && !queryIsPaginationFollowUp && !queryIsOverdueList;
-        const useFastPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline;
+        // Skip fast path for create/write operations — they need the agentic loop for multi-turn field collection + extraction state tracking
+        const queryIsCreateOperation = /\b(?:create|make|record|raise|add|new)\s+(?:an?\s+)?(?:invoice|bill|payment|credit.?note|expense|journal|quote|estimate|purchase.?order|customer|vendor|item)\b/i.test(query);
+        const useFastPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && bestIntent !== null && bestIntent.confidence >= CONFIDENCE_THRESHOLD && fastPathEligibleQuery && hasExecutableFastPipeline && !queryIsCreateOperation;
 
       if (useFastPath && bestIntent) {
         // ========== FAST PATH ==========
@@ -1749,7 +1751,17 @@ serve(async (req) => {
           { role: 'user', content: `Query: ${query}\n\nData:\n${dataContext}\n\n${responseConfig?.template ? `Format: ${responseConfig.template}` : ''}` }
         ], [], 2048);
 
-        const responseText = response.message.content || '';
+        let responseText = response.message.content || '';
+
+        // Parse AI-driven extraction state block (if present in fast path)
+        const fpExtractionMatch = responseText.match(/<<EXTRACTION_STATE>>([\s\S]*?)<<EXTRACTION_STATE>>/);
+        if (fpExtractionMatch) {
+          try {
+            const extractionData = JSON.parse(fpExtractionMatch[1].trim());
+            sendEvent('extraction_state', extractionData);
+          } catch (_e) { /* ignore malformed block */ }
+          responseText = responseText.replace(/<<EXTRACTION_STATE>>[\s\S]*?<<EXTRACTION_STATE>>/, '').trim();
+        }
 
         const chunkSize = 50;
         for (let i = 0; i < responseText.length; i += chunkSize) {
