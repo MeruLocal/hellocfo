@@ -2002,14 +2002,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               if (mcpClientInstance) {
                 sendEvent('executing_tool', { tool: toolName, requestedTool: requestedToolName, isWrite: isWriteTool(toolName) });
 
-                // Emit extraction state for write tools (Pending/Applied UI)
-                if (isWriteTool(toolName)) {
-                  const mcpToolDef = mcpToolsByName.get(toolName);
-                  if (mcpToolDef) {
-                    const extraction = computeExtractionState(toolName, toolInput, mcpToolDef.inputSchema);
-                    if (extraction) sendEvent('extraction_state', extraction);
-                  }
-                }
+                // Note: extraction_state is emitted from AI-driven ```params blocks only (post-loop parsing)
 
                 const execResult = await executeToolCall(toolName, toolInput, toolCall.id);
 
