@@ -1,7 +1,8 @@
 // Conversation Summarizer — Trims long conversations
 // After 20 messages, summarizes older ones and keeps last 10
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 const SUMMARIZE_THRESHOLD = 20;
 const KEEP_RECENT = 10;
@@ -31,7 +32,7 @@ interface Message {
  * Updates unified_conversations.summary in the background.
  */
 export async function summarizeHistory(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   conversationId: string,
   messages: Message[],
   llmConfig: LLMConfig,
@@ -90,7 +91,7 @@ Keep it under 300 words. Output only the summary, no preamble.`,
         .update({ summary })
         .eq("conversation_id", conversationId)
         .then(() => console.log(`[${reqId}] Conversation summary saved`))
-        .catch((e: Error) => console.error(`[${reqId}] Summary save failed:`, e));
+        .then(undefined, (e: Error) => console.error(`[${reqId}] Summary save failed:`, e));
 
       // Return summary as a system context message + recent messages
       const summaryMessage: Message = {

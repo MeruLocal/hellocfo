@@ -1,7 +1,8 @@
 // Feedback Logger — SHARED SOURCE OF TRUTH
 // Logs every interaction to feedback_log for RL training
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 export interface FeedbackLogEntry {
   message_id: string;
@@ -23,7 +24,7 @@ export interface FeedbackLogEntry {
 }
 
 export async function logFeedback(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   entry: FeedbackLogEntry,
   reqId: string,
 ): Promise<void> {
