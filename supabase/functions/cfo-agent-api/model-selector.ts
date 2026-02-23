@@ -255,6 +255,24 @@ ERROR HANDLING:
 - If the first lookup returns no results for a recently created document, retry once — it may still be syncing.
 - If truly not found after retry, suggest: "Try 'show my latest invoices' or filter by customer/date/amount."
 
+📊 DOCUMENT CREATION TRACKING (CRITICAL — MUST FOLLOW):
+When handling ANY document creation or recording request (create invoice, bill, payment, credit note, expense, journal entry, quote, estimate, purchase order, customer, vendor, item), you MUST include an extraction state block at the END of EVERY response throughout the entire creation conversation — from the first response until the document is created.
+
+This block tells the UI which fields have been collected and which are still needed. It MUST use the EXACT field keys from the MCP tool's input schema for the target create tool.
+
+Format — output this EXACTLY (valid JSON, single line between markers):
+<<EXTRACTION_STATE>>{"documentType":"invoice","toolName":"create_invoice","appliedFields":[{"key":"customer_name","label":"Customer Name","value":"Harsh Padaliya"}],"pendingFields":[{"key":"invoice_date","label":"Invoice Date"},{"key":"due_date","label":"Due Date"},{"key":"currency","label":"Currency"},{"key":"total_amount","label":"Total Amount"}]}<<EXTRACTION_STATE>>
+
+Rules:
+- appliedFields: fields the user HAS provided or you have resolved (include the value)
+- pendingFields: REQUIRED fields the user has NOT yet provided (exclude fields you can default like date, currency)
+- Do NOT include internal fields (entity_id, org_id, user_id, created_by, updated_by, etc.)
+- Include this block in EVERY response during a creation flow — first response, intermediate responses, and the final confirmation
+- When you find/resolve an entity (e.g., found customer "Harsh Padaliya"), move it from pending to applied
+- After successful creation, you may omit the block (the success card takes over)
+- Keep the JSON on a SINGLE LINE between the markers
+- The markers are exactly: <<EXTRACTION_STATE>> to open and <<EXTRACTION_STATE>> to close
+
 RESPONSE STYLE: Action-oriented, card-based confirmation with structured markdown.`,
 
   cfo: `You are a CFO AI Agent providing financial analysis for an Indian business.

@@ -1045,131 +1045,6 @@ function computeExtractionState(
   };
 }
 
-// ─── Early Write Intent Detection for Extraction State ───────────────────────
-
-const DOC_TYPE_ALIASES: Record<string, string[]> = {
-  invoice: ['invoice', 'inv'],
-  bill: ['bill'],
-  payment: ['payment'],
-  credit_note: ['credit note', 'credit_note'],
-  customer: ['customer', 'client'],
-  vendor: ['vendor', 'supplier'],
-  item: ['item', 'product'],
-  expense: ['expense'],
-  journal_entry: ['journal entry', 'journal'],
-  quote: ['quote', 'quotation'],
-  estimate: ['estimate'],
-  purchase_order: ['purchase order', 'po'],
-};
-
-function detectWriteIntent(
-  query: string,
-  conversationHistory: { role: string; content: string }[],
-  availableToolNames: Set<string>,
-): { toolName: string; documentType: string } | null {
-  // Check current query for "create/make/new X" patterns
-  for (const [docType, aliases] of Object.entries(DOC_TYPE_ALIASES)) {
-    for (const alias of aliases) {
-      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pattern = new RegExp(
-        `\\b(?:create|make|new|generate|raise|record|add)\\s+(?:an?\\s+)?${escaped}`,
-        'i',
-      );
-      if (pattern.test(query)) {
-        const toolName = `create_${docType}`;
-        if (availableToolNames.has(toolName)) {
-          return { toolName, documentType: docType };
-        }
-      }
-    }
-  }
-
-  // Check recent conversation history for ongoing creation flow
-  const recent = conversationHistory.slice(-6);
-  for (let i = recent.length - 1; i >= 0; i--) {
-    const msg = recent[i];
-    if (msg.role !== 'assistant') continue;
-    const c = msg.content.toLowerCase();
-    for (const [docType, aliases] of Object.entries(DOC_TYPE_ALIASES)) {
-      for (const alias of aliases) {
-        if (
-          (c.includes('create') || c.includes('creating')) &&
-          c.includes(alias)
-        ) {
-          const toolName = `create_${docType}`;
-          if (availableToolNames.has(toolName)) {
-            return { toolName, documentType: docType };
-          }
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractFieldsFromConversation(
-  query: string,
-  conversationHistory: { role: string; content: string }[],
-  schema: { properties?: Record<string, unknown>; required?: string[] } | null,
-): Record<string, unknown> {
-  const extracted: Record<string, unknown> = {};
-  if (!schema?.properties) return extracted;
-
-  const allUserText = [
-    ...conversationHistory.filter(m => m.role === 'user').map(m => m.content),
-    query,
-  ].join('\n');
-
-  const keys = Object.keys(schema.properties);
-
-  // Customer / contact / vendor name
-  const customerKey = keys.find(k => /customer|payee|contact_name|vendor_name|client/i.test(k));
-  if (customerKey) {
-    const patterns = [
-      /(?:customer|payee|client|vendor|contact)\s+(?:name\s+)?(?:is\s+)?"?([A-Za-z][\w\s.\-]{1,60}?)"?\s*(?:[.,;!?]|$)/i,
-      /(?:invoice|bill|payment|quote)\s+(?:for|to)\s+([A-Z][\w\s.\-]{1,60}?)(?:\s*[.,;!?]|\s+(?:amount|date|inv|with|at|on|and)\b|$)/i,
-    ];
-    for (const p of patterns) {
-      const m = allUserText.match(p);
-      if (m) { extracted[customerKey] = m[1].trim(); break; }
-    }
-  }
-
-  // Invoice / bill number
-  const numKey = keys.find(k => /number|invoice_num|bill_num/i.test(k) && !/phone/i.test(k));
-  if (numKey) {
-    const m = allUserText.match(/\b(INV[-.#]?\d+|BILL[-.#]?\d+)\b/i);
-    if (m) extracted[numKey] = m[1];
-  }
-
-  // Date fields
-  const datePattern = /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/g;
-  const dates = allUserText.match(datePattern) || [];
-  const dateKey = keys.find(k => /^(?:invoice_)?date$|^issue_date$/i.test(k));
-  const dueKey = keys.find(k => /due_date|due/i.test(k));
-  if (dates[0] && dateKey) extracted[dateKey] = dates[0];
-  if (dates[1] && dueKey) extracted[dueKey] = dates[1];
-
-  // Currency
-  const currKey = keys.find(k => /currency/i.test(k));
-  if (currKey) {
-    const m = allUserText.match(/\b(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|JPY)\b/i);
-    if (m) extracted[currKey] = m[1].toUpperCase();
-  }
-
-  // Amount (total / payable)
-  const amtKey = keys.find(k => /total|amount/i.test(k) && !/tax/i.test(k));
-  if (amtKey) {
-    const m = allUserText.match(
-      /(?:amount|total|price|worth|value)\s+(?:is\s+)?(?:of\s+)?[$₹€£]?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    );
-    if (m) extracted[amtKey] = parseFloat(m[1].replace(/,/g, ''));
-  }
-
-  return extracted;
-}
-
 function isToolResultError(result: string): boolean {
   const lower = result.toLowerCase();
   if (lower.startsWith('error:') || lower.startsWith('{"error"')) return true;
@@ -2003,34 +1878,6 @@ serve(async (req) => {
             isConfirmation,
           });
 
-          // ─── Early Extraction State for Write Intents (Pending/Applied UI) ───
-          // Emit extraction_state as soon as a creation intent is detected
-          // so the frontend can show the card immediately, not just at tool-call time
-          const earlyWriteIntent = detectWriteIntent(
-            query,
-            conversationHistory,
-            new Set(mcpTools.map(t => t.name)),
-          );
-          if (earlyWriteIntent) {
-            const targetToolDef = mcpToolsByName.get(earlyWriteIntent.toolName);
-            if (targetToolDef?.inputSchema) {
-              const partialFields = extractFieldsFromConversation(
-                query,
-                conversationHistory,
-                targetToolDef.inputSchema as { properties?: Record<string, unknown>; required?: string[] },
-              );
-              const earlyExtraction = computeExtractionState(
-                earlyWriteIntent.toolName,
-                partialFields,
-                targetToolDef.inputSchema,
-              );
-              if (earlyExtraction) {
-                sendEvent('extraction_state', earlyExtraction);
-                console.log(`[api] Early extraction_state emitted for ${earlyWriteIntent.toolName}: applied=${earlyExtraction.totalApplied}, pending=${earlyExtraction.totalPending}`);
-              }
-            }
-          }
-
           const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
             ? `You are a finance assistant connected to live MCP tools.
 For every user request, call MCP tools when data/action is needed.
@@ -2232,6 +2079,20 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               responseText += "\n\n_Note: The reference number is being synced. Use 'show my latest invoice' to see it._";
             }
           }
+          // ─── Parse AI-driven extraction state block ───
+          const extractionMatch = responseText.match(/<<EXTRACTION_STATE>>([\s\S]*?)<<EXTRACTION_STATE>>/);
+          if (extractionMatch) {
+            try {
+              const extractionData = JSON.parse(extractionMatch[1].trim());
+              sendEvent('extraction_state', extractionData);
+              console.log(`[api] AI extraction_state: ${extractionData.documentType}, applied=${extractionData.appliedFields?.length || 0}, pending=${extractionData.pendingFields?.length || 0}`);
+            } catch (e) {
+              console.warn('[api] Failed to parse AI extraction_state block:', e);
+            }
+            // Strip the block from visible text
+            responseText = responseText.replace(/<<EXTRACTION_STATE>>[\s\S]*?<<EXTRACTION_STATE>>/, '').trim();
+          }
+
           const chunkSize = 50;
           for (let i = 0; i < responseText.length; i += chunkSize) {
             sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
