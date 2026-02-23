@@ -45,7 +45,7 @@ function truncateResult(result: string, maxChars = MAX_TOOL_RESULT_CHARS): strin
       }
       return JSON.stringify(truncated) + `\n[Truncated: ${truncated.length}/${parsed.length}]`;
     }
-  } catch { /* not JSON */ }
+  } catch (_e) { /* not JSON */ }
   return result.slice(0, maxChars) + `\n[Truncated]`;
 }
 
@@ -65,7 +65,7 @@ function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
       return DEFAULT_AZURE_OPENAI_ENDPOINT;
     }
     return raw;
-  } catch {
+  } catch (_e) {
     console.warn(`[munimji] Invalid LLM endpoint "${raw}". Falling back to default endpoint.`);
     return DEFAULT_AZURE_OPENAI_ENDPOINT;
   }
@@ -309,8 +309,11 @@ async function callOpenAI(
 
 // ─── Conversation Persistence ─────────────────────────────────────────────────
 
+// deno-lint-ignore no-explicit-any
+type AnySupabaseClient = any;
+
 async function getOrCreateConversation(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AnySupabaseClient,
   conversationId: string,
   entityId: string,
   userId: string,
@@ -356,7 +359,7 @@ async function getOrCreateConversation(
 }
 
 async function saveConversation(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AnySupabaseClient,
   conversationId: string,
   messages: Message[],
   chatName: string,
@@ -392,7 +395,7 @@ serve(async (req) => {
       };
 
       const heartbeatInterval = setInterval(() => {
-        try { send("heartbeat", { ts: Date.now() }); } catch { /* ignore */ }
+        try { send("heartbeat", { ts: Date.now() }); } catch (_e) { /* ignore */ }
       }, 15000);
 
       try {
@@ -590,7 +593,7 @@ Chat ID: ${chatDisplayId}`;
             for (const tc of llmRes.message.tool_calls) {
               const toolName = tc.function.name;
               let args: Record<string, unknown> = {};
-              try { args = JSON.parse(tc.function.arguments); } catch { /* empty */ }
+              try { args = JSON.parse(tc.function.arguments); } catch (_e) { /* empty */ }
 
               // Always inject entity_id and org_id
               const toolSchema = mcpTools.find(t => t.name === toolName)?.inputSchema as { properties?: Record<string, unknown> } | undefined;

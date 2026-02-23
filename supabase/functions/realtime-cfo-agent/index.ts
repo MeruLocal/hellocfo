@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// deno-lint-ignore no-explicit-any
+type AnySupabaseClient = any;
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
@@ -248,7 +250,8 @@ serve(async (req) => {
           orgId: bodyOrgId,
         } = requestPayload as {
           query: string;
-          intents?: Array<{ isActive: boolean }>;
+          // deno-lint-ignore no-explicit-any
+          intents?: Array<Record<string, any>>;
           businessContext?: Record<string, unknown>;
           conversationHistory?: unknown[];
           conversationId?: string;
@@ -283,7 +286,7 @@ serve(async (req) => {
         // ============================
         // STEP 1: Get LLM config + entity context
         // ============================
-        const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const supabase: AnySupabaseClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
         // Entity isolation — entityId from request body/headers, fallback to env
         const entityId = bodyEntityId || req.headers.get("X-Entity-Id") || Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "default";
@@ -307,7 +310,7 @@ serve(async (req) => {
           }
         }
 
-        const { data: llmConfig, error: llmError } = await supabase
+        const { data: llmConfig, error: llmError } = await (supabase as AnySupabaseClient)
           .from("llm_configs")
           .select("*")
           .eq("is_default", true)
@@ -320,7 +323,7 @@ serve(async (req) => {
         // ============================
         const { cacheKey, queryHash } = generateCacheKey(query, entityId, "realtime");
         if (!SIMPLE_DIRECT_LLM_MODE) {
-          const cachedResponse = await checkCache(supabase, entityId, cacheKey, reqId);
+          const cachedResponse = await checkCache(supabase as AnySupabaseClient, entityId, cacheKey, reqId);
 
           if (cachedResponse) {
             console.log(`[${reqId}] Serving from cache`);
@@ -526,9 +529,9 @@ serve(async (req) => {
           const fastToolsUsed = mcpResults.map(r => r.tool);
           if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(fastToolsUsed)) {
             const ttl = determineTTL("fast", "fast", fastToolsUsed);
-            await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "fast", ttl, reqId);
+            await writeCache(supabase as AnySupabaseClient, entityId, cacheKey, queryHash, query, finalResponse, "fast", ttl, reqId);
           } else if (hasWriteOperations(fastToolsUsed)) {
-            await invalidateCacheForEntity(supabase, entityId, fastToolsUsed, reqId);
+            await invalidateCacheForEntity(supabase as AnySupabaseClient, entityId, fastToolsUsed, reqId);
           }
           // ========== LLM PATH ==========
 
@@ -576,7 +579,7 @@ serve(async (req) => {
             // Cache write — general chat (long TTL)
             if (!SIMPLE_DIRECT_LLM_MODE) {
               const chatTTL = determineTTL("llm", "general_chat", []);
-              await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
+              await writeCache(supabase as AnySupabaseClient, entityId, cacheKey, queryHash, query, finalResponse, "general_chat", chatTTL, reqId);
             }
 
             // Track for feedback
@@ -706,7 +709,7 @@ serve(async (req) => {
                 : `No intent match, classified as ${effectiveCategory} via keywords`,
               pipelineSteps: mcpResults.map((r) => ({ tool: r.tool, description: r.success ? "Completed" : `Error: ${r.error}` })),
               enrichments: finalEnrichments.map((e) => ({ type: e.type, description: e.description })),
-              responseFormat: effectiveCategory === "cfo" ? "analytical" : "action-oriented",
+              responseFormat: (effectiveCategory as string) === "unified" ? "analytical" : "action-oriented",
               response: finalResponse,
               mcpToolResults: mcpResults,
               dataSources: mcpResults.filter((r) => r.success).map((r) => r.tool),
@@ -730,9 +733,9 @@ serve(async (req) => {
             const llmToolsUsed = mcpResults.map(r => r.tool);
             if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(llmToolsUsed)) {
               const ttl = determineTTL("llm", effectiveCategory, llmToolsUsed);
-              await writeCache(supabase, entityId, cacheKey, queryHash, query, finalResponse, effectiveCategory, ttl, reqId);
+              await writeCache(supabase as AnySupabaseClient, entityId, cacheKey, queryHash, query, finalResponse, effectiveCategory, ttl, reqId);
             } else if (hasWriteOperations(llmToolsUsed)) {
-              await invalidateCacheForEntity(supabase, entityId, llmToolsUsed, reqId);
+              await invalidateCacheForEntity(supabase as AnySupabaseClient, entityId, llmToolsUsed, reqId);
             }
           }
         }
@@ -845,7 +848,6 @@ serve(async (req) => {
 
       } catch (error) {
         console.error(`[${reqId}] Error:`, error);
-        mcpClientInstance?.close();
         sendEvent("error", { message: getUserFacingErrorMessage(error) });
         controller.close();
       }
