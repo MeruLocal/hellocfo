@@ -1752,14 +1752,14 @@ serve(async (req) => {
 
         let responseText = response.message.content || '';
 
-        // Parse AI-driven extraction state block (if present in fast path)
-        const fpExtractionMatch = responseText.match(/<<EXTRACTION_STATE>>([\s\S]*?)<<EXTRACTION_STATE>>/);
-        if (fpExtractionMatch) {
+        // Parse AI-driven params block (if present in fast path)
+        const fpParamsMatch = responseText.match(/```params\s*\n?([\s\S]*?)\n?\s*```/);
+        if (fpParamsMatch) {
           try {
-            const extractionData = JSON.parse(fpExtractionMatch[1].trim());
-            sendEvent('extraction_state', extractionData);
+            const paramsData = JSON.parse(fpParamsMatch[1].trim());
+            sendEvent('extraction_state', paramsData);
           } catch (_e) { /* ignore malformed block */ }
-          responseText = responseText.replace(/<<EXTRACTION_STATE>>[\s\S]*?<<EXTRACTION_STATE>>/, '').trim();
+          responseText = responseText.replace(/```params\s*\n?[\s\S]*?\n?\s*```/, '').trim();
         }
 
         const chunkSize = 50;
@@ -2098,18 +2098,18 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               responseText += "\n\n_Note: The reference number is being synced. Use 'show my latest invoice' to see it._";
             }
           }
-          // ─── Parse AI-driven extraction state block ───
-          const extractionMatch = responseText.match(/<<EXTRACTION_STATE>>([\s\S]*?)<<EXTRACTION_STATE>>/);
-          if (extractionMatch) {
+          // ─── Parse AI-driven params block ───
+          const paramsMatch = responseText.match(/```params\s*\n?([\s\S]*?)\n?\s*```/);
+          if (paramsMatch) {
             try {
-              const extractionData = JSON.parse(extractionMatch[1].trim());
-              sendEvent('extraction_state', extractionData);
-              console.log(`[api] AI extraction_state: ${extractionData.documentType}, applied=${extractionData.appliedFields?.length || 0}, pending=${extractionData.pendingFields?.length || 0}`);
+              const paramsData = JSON.parse(paramsMatch[1].trim());
+              sendEvent('extraction_state', paramsData);
+              console.log(`[api] params block: ${paramsData.operation}, applied=${paramsData.applied?.length || 0}, pending=${paramsData.pending?.length || 0}`);
             } catch (e) {
-              console.warn('[api] Failed to parse AI extraction_state block:', e);
+              console.warn('[api] Failed to parse params block:', e);
             }
             // Strip the block from visible text
-            responseText = responseText.replace(/<<EXTRACTION_STATE>>[\s\S]*?<<EXTRACTION_STATE>>/, '').trim();
+            responseText = responseText.replace(/```params\s*\n?[\s\S]*?\n?\s*```/, '').trim();
           }
 
           const chunkSize = 50;
