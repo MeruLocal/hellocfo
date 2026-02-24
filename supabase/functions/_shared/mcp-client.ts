@@ -27,26 +27,33 @@ async function readSSEForResult(reqId: string, label: string, response: Response
   if (!reader) return null;
   const decoder = new TextDecoder();
   let buffer = "";
+  const chunkTimeout = Math.min(5000, timeoutMs); // per-chunk read timeout
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await readWithTimeout(reader, 3000);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const result = await readWithTimeout(reader, Math.min(chunkTimeout, remaining));
     if (!result) continue;
     if (result.done) break;
     buffer += decoder.decode(result.value, { stream: true });
-    const { events, remaining } = parseSSEBuffer(buffer);
-    buffer = remaining;
+    const { events, remaining: leftover } = parseSSEBuffer(buffer);
+    buffer = leftover;
     for (const ev of events) {
       if (ev.type === "message") {
         try {
           const parsed = JSON.parse(ev.data);
-          if (parsed.error) { reader.cancel(); return null; }
+          if (parsed.error) {
+            console.log(`[${reqId}] [${label}] SSE error response: ${JSON.stringify(parsed.error).slice(0, 200)}`);
+            reader.cancel();
+            return null;
+          }
           if (parsed.result !== undefined) { reader.cancel(); return parsed.result; }
-        } catch { /* keep reading */ }
+        } catch (_e) { /* keep reading */ }
       }
     }
   }
   reader.cancel();
-  console.log(`[${reqId}] [${label}] SSE read timeout`);
+  console.log(`[${reqId}] [${label}] SSE read timeout after ${timeoutMs}ms`);
   return null;
 }
 
@@ -107,9 +114,21 @@ export class StreamableMCPClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     console.log(`[${this.reqId}] MCP: call tool ${name}`);
     const id = Date.now() + Math.floor(Math.random() * 1000);
-    const result = await this.postAndReadResult(id, "tools/call", { name, arguments: args }, 30000) as {
+    // Write tools get longer timeout (60s) and one automatic retry
+    const isWrite = /^(create|update|delete|edit|file|generate|cancel|reconcile|import|adjust|stock|record)_/.test(name);
+    const timeout = isWrite ? 60000 : 30000;
+    const result = await this.postAndReadResult(id, "tools/call", { name, arguments: args }, timeout) as {
       content?: Array<{ type: string; text?: string }>;
     } | null;
+    if (!result && isWrite) {
+      console.log(`[${this.reqId}] MCP: retrying write tool ${name} (timeout on first attempt)`);
+      const retryId = Date.now() + Math.floor(Math.random() * 1000);
+      const retryResult = await this.postAndReadResult(retryId, "tools/call", { name, arguments: args }, timeout) as {
+        content?: Array<{ type: string; text?: string }>;
+      } | null;
+      if (!retryResult) return `Tool ${name} timed out after retry`;
+      return retryResult.content?.filter(c => c.type === "text").map(c => c.text || "").join("\n") || JSON.stringify(retryResult);
+    }
     if (!result) return `Tool ${name} returned no result`;
     return result.content?.filter(c => c.type === "text").map(c => c.text || "").join("\n") || JSON.stringify(result);
   }
