@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any
 import { Agent, run, MCPServerStreamableHttp, OpenAIChatCompletionsModel } from 'https://esm.sh/@openai/agents@0.4.2?target=denonext';
 import OpenAI from 'https://esm.sh/openai@4.104.0?target=denonext';
 import { SYSTEM_PROMPTS } from './model-selector.ts';
@@ -29,7 +30,7 @@ export interface AgentBuildContext {
 }
 
 export interface AgentExecutionResult {
-  runResult: AsyncIterable<unknown> & Record<string, unknown>;
+  runResult: any;
   close: () => Promise<void>;
 }
 
@@ -99,7 +100,7 @@ export async function executeMasterAgent(
     },
   });
 
-  const model = new OpenAIChatCompletionsModel(llmConfig.model, openaiClient);
+  const model = new OpenAIChatCompletionsModel(llmConfig.model, openaiClient as any);
 
   let mcpServer: MCPServerStreamableHttp | null = null;
   const selectedSet = new Set(context.selectedToolNames);
@@ -119,7 +120,7 @@ export async function executeMasterAgent(
           'User-Agent': 'Munimji-Chat-Agent/1.0',
         },
       },
-      toolFilter: (_runContext, tool) => {
+      toolFilter: async (_runContext: any, tool: any) => {
         if (selectedSet.size === 0) return true;
         return selectedSet.has(tool.name);
       },
@@ -137,7 +138,7 @@ export async function executeMasterAgent(
     name: 'Accounting Agent',
     instructions: buildAccountingInstructions(context),
     model,
-    tools: mcpServer ? [mcpServer] : [],
+    tools: mcpServer ? [mcpServer as any] : [],
   });
 
   const masterAgent = new Agent({
@@ -156,9 +157,9 @@ export async function executeMasterAgent(
     ],
   });
 
-  const runResult = await run(masterAgent, input, {
+  const runResult = await run(masterAgent, input as any, {
     stream: true,
-  }) as AsyncIterable<unknown> & Record<string, unknown>;
+  }) as any;
 
   return {
     runResult,
