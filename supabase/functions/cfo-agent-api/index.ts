@@ -1209,14 +1209,14 @@ function normalizeResponsesOutput(result: Record<string, unknown>): NormalizedLL
   };
 }
 
-function pushInputPart(parts: Array<Record<string, unknown>>, part: unknown) {
+function pushInputPart(parts: Array<Record<string, unknown>>, part: unknown, textType: string = "input_text") {
   if (!part || typeof part !== "object") return;
   const p = part as Record<string, unknown>;
   const rawType = typeof p.type === "string" ? p.type : "";
 
-  if (rawType === "input_text" || rawType === "text") {
+  if (rawType === "input_text" || rawType === "output_text" || rawType === "text") {
     const text = typeof p.text === "string" ? p.text : "";
-    if (text.trim()) parts.push({ type: "input_text", text });
+    if (text.trim()) parts.push({ type: textType, text });
     return;
   }
 
@@ -1242,21 +1242,22 @@ function pushInputPart(parts: Array<Record<string, unknown>>, part: unknown) {
   }
 }
 
-function toResponsesMessageContent(content: unknown): Array<Record<string, unknown>> {
+function toResponsesMessageContent(content: unknown, role?: string): Array<Record<string, unknown>> {
   const parts: Array<Record<string, unknown>> = [];
+  const textType = role === "assistant" ? "output_text" : "input_text";
 
   if (typeof content === "string") {
-    if (content.trim()) parts.push({ type: "input_text", text: content });
+    if (content.trim()) parts.push({ type: textType, text: content });
     return parts;
   }
 
   if (Array.isArray(content)) {
-    for (const part of content) pushInputPart(parts, part);
+    for (const part of content) pushInputPart(parts, part, textType);
     return parts;
   }
 
   if (content && typeof content === "object") {
-    pushInputPart(parts, content);
+    pushInputPart(parts, content, textType);
     return parts;
   }
 
@@ -1306,7 +1307,7 @@ function toResponsesInputFromMessages(messages: unknown[]): unknown[] {
     }
 
     if (role === "user" || role === "assistant" || role === "developer") {
-      const content = toResponsesMessageContent(msg.content);
+      const content = toResponsesMessageContent(msg.content, role);
       if (content.length > 0) {
         input.push({ role, content });
       }
