@@ -22,7 +22,7 @@ function analyzeData(toolResults: { tool: string; result?: string; success: bool
     const text = result.result || "";
     if (/\b(month|quarter|year|week|period|date|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(text)) hasTimeSeries = true;
     if (/[₹$]|amount|total|balance|value|revenue|cost|price/i.test(text)) hasAmounts = true;
-    try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) { hasList = true; totalRecords += parsed.length; } } catch { if ((text.match(/\n/g) || []).length > 3) hasList = true; }
+    try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) { hasList = true; totalRecords += parsed.length; } } catch (_e) { if ((text.match(/\n/g) || []).length > 3) hasList = true; }
     if (/overdue|aging|outstanding|limit|threshold|alert|warning|critical/i.test(text)) hasThresholds = true;
   }
   return { hasTimeSeries, hasAmounts, hasList, hasThresholds, recordCount: totalRecords };

@@ -2096,6 +2096,9 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             responseText = responseText.replace(/```params\s*\n?[\s\S]*?\n?\s*```/, '').trim();
           }
 
+          // ─── Strip raw card blocks (```card ... ```) — these are for structured rendering, not display ───
+          responseText = responseText.replace(/[`~]{2,3}card\s*\n?[\s\S]*?\n?\s*[`~]{2,3}/g, '').trim();
+
           const chunkSize = 50;
           for (let i = 0; i < responseText.length; i += chunkSize) {
             sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
