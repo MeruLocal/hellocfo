@@ -1013,122 +1013,31 @@ function getUserFacingErrorMessage(error: unknown): string {
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
-// ─── PDF Text Extraction Helpers ──────────────────────────────────────────────
+// ─── Base64 Encoding Helper ──────────────────────────────────────────────────
 
-/** Extract text from PDF text-showing operators in a (decompressed) content stream.
- *  Handles: Tj, TJ, ' (single-quote), " (double-quote) operators per PDF spec. */
-function extractTjText(content: string): string {
-  let extracted = "";
-  // Tj operator: (text) Tj
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*Tj/g)) {
-    extracted += m[1] + " ";
-  }
-  // ' operator (move to next line + show text): (text) '
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*'/g)) {
-    extracted += m[1] + " ";
-  }
-  // " operator (set spacing + move + show text): num num (text) "
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*"/g)) {
-    extracted += m[1] + " ";
-  }
-  // TJ operator (array of strings/kerning): [(text) -100 (text)] TJ
-  for (const m of content.matchAll(/\[([^\]]{1,4000})\]\s*TJ/g)) {
-    for (const s of m[1].matchAll(/\(([^)]{1,500})\)/g)) {
-      extracted += s[1];
-    }
-    extracted += " ";
-  }
-  return extracted;
-}
-
-/** Clean up common PDF encoding artifacts in extracted text. */
-function cleanPdfText(raw: string): string {
-  return raw
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "")
-    .replace(/\\t/g, " ")
-    .replace(/\\\(/g, "(")
-    .replace(/\\\)/g, ")")
-    .replace(/\\(\d{3})/g, (_m, octal) => {
-      const code = parseInt(octal, 8);
-      return code >= 32 && code < 127 ? String.fromCharCode(code) : " ";
-    })
-    .replace(/[^\x20-\x7E\n\r\t₹$€£¥%°©®™…–—''""•·±×÷≤≥≠∞√]/g, " ")
-    .replace(/\s{3,}/g, "  ")
-    .trim();
-}
-
-/** Decompress a FlateDecode (zlib) stream from a PDF. */
-async function decompressFlate(data: Uint8Array): Promise<Uint8Array | null> {
-  // Try "deflate" (zlib wrapper — most common in PDFs), then "deflate-raw"
-  for (const fmt of ["deflate", "deflate-raw"] as const) {
-    try {
-      const ds = new DecompressionStream(fmt);
-      const writer = ds.writable.getWriter();
-      const reader = ds.readable.getReader();
-      writer.write(data as unknown as BufferSource);
-      writer.close();
-
-      const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-      }
-      const totalLen = chunks.reduce((s, c) => s + c.length, 0);
-      const result = new Uint8Array(totalLen);
-      let off = 0;
-      for (const c of chunks) { result.set(c, off); off += c.length; }
-      return result;
-    } catch {
-      // try next format
+/** Convert a Uint8Array to a base64 string (safe for large files). */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
     }
   }
-  return null;
-}
-
-/** Full PDF text extraction: handles both compressed and uncompressed streams. */
-async function extractPdfTextFull(bytes: Uint8Array): Promise<string> {
-  const raw = new TextDecoder("latin1").decode(bytes);
-  let allText = "";
-
-  // Pass 1: extract from uncompressed content (works on simple PDFs)
-  allText += extractTjText(raw);
-
-  // Pass 2: find and decompress FlateDecode streams, then extract text
-  // PDF structure: << /Filter /FlateDecode ... >> stream\r?\n ... \r?\nendstream
-  const streamStartRe = /stream\r?\n/g;
-  let match;
-  while ((match = streamStartRe.exec(raw)) !== null) {
-    const dataStart = match.index + match[0].length;
-    const endIdx = raw.indexOf("endstream", dataStart);
-    if (endIdx === -1) continue;
-
-    // Check if this stream uses FlateDecode (look at preceding dictionary)
-    const preCtx = raw.substring(Math.max(0, match.index - 300), match.index);
-    if (!preCtx.includes("/FlateDecode")) continue;
-
-    try {
-      const streamBytes = bytes.subarray(dataStart, endIdx);
-      // Trim trailing whitespace/CR/LF that PDF writers sometimes add before endstream
-      let trimEnd = streamBytes.length;
-      while (trimEnd > 0 && (streamBytes[trimEnd - 1] === 0x0A || streamBytes[trimEnd - 1] === 0x0D)) trimEnd--;
-      const cleanBytes = streamBytes.subarray(0, trimEnd);
-
-      const decompressed = await decompressFlate(cleanBytes);
-      if (decompressed && decompressed.length > 0) {
-        const decompText = new TextDecoder("latin1").decode(decompressed);
-        allText += extractTjText(decompText);
-      }
-    } catch {
-      // skip streams that fail
-    }
-  }
-
-  return allText.length > 30 ? cleanPdfText(allText) : "";
+  return btoa(binary);
 }
 
 // ─── Attachment Processing ────────────────────────────────────────────────────
+
+// MIME types that should be sent as native file content parts (base64) to the LLM.
+// The model extracts text + renders pages visually for full understanding.
+const FILE_CONTENT_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",   // .xlsx
+  "application/vnd.ms-excel",                                            // .xls
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+]);
 
 async function buildUserContent(query: string, attachments?: Attachment[]): Promise<string | unknown[]> {
   if (!attachments || attachments.length === 0) return query;
@@ -1138,46 +1047,51 @@ async function buildUserContent(query: string, attachments?: Attachment[]): Prom
 
   for (const att of attachments) {
     const isImage = att.type?.startsWith("image/");
+    const mimeType = att.type || "application/octet-stream";
+    const isFileType = FILE_CONTENT_TYPES.has(mimeType) || att.name?.toLowerCase().endsWith(".pdf");
 
     if (isImage && att.url) {
-      // Images: pass as image_url for GPT-4o vision
+      // Images: pass as image_url for vision
       contentParts.push({ type: "image_url", image_url: { url: att.url, detail: "auto" } });
       console.log(`[api] Attachment image: ${att.name}`);
-    } else if (att.url) {
-      // Documents (PDF, Excel, CSV, etc.): fetch and extract text content
+    } else if (isFileType && att.url) {
+      // PDF / Office docs: fetch, base64-encode, send as native file content part.
+      // The LLM extracts text + renders each page visually — no manual parsing needed.
       try {
-        console.log(`[api] Fetching document: ${att.name} (${att.type})`);
+        console.log(`[api] Fetching file for base64 encoding: ${att.name} (${mimeType})`);
         const res = await fetch(att.url);
         if (!res.ok) {
           textContext += `\n\n[Attached file: ${att.name} — could not fetch content (HTTP ${res.status})]`;
           continue;
         }
-
-        if (att.type === "text/csv" || att.name.endsWith(".csv")) {
-          const csvText = await res.text();
-          const preview = csvText.length > 8000 ? csvText.slice(0, 8000) + "\n... (truncated)" : csvText;
-          textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
-        } else if (att.type === "text/plain" || att.name.endsWith(".txt")) {
-          const plainText = await res.text();
-          const preview = plainText.length > 8000 ? plainText.slice(0, 8000) + "\n... (truncated)" : plainText;
-          textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
-        } else {
-          // PDF / other binary: decompress streams + extract text
-          const buffer = await res.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-
-          const extracted = await extractPdfTextFull(bytes);
-
-          if (extracted.length > 30) {
-            const preview = extracted.length > 8000 ? extracted.slice(0, 8000) + "\n... (truncated)" : extracted;
-            textContext += `\n\n--- Content extracted from ${att.name} ---\n${preview}\n--- End of file ---`;
-            console.log(`[api] Extracted ${extracted.length} chars from ${att.name}`);
-          } else {
-            // Text extraction failed — PDF may be scanned/image-based or have non-standard encoding
-            console.log(`[api] Text extraction failed for ${att.name} (${extracted.length} chars)`);
-            textContext += `\n\n[Attached file: ${att.name} (${att.type}) — this appears to be a scanned or image-based document whose text could not be extracted. Ask the user to upload a screenshot/photo of the relevant page, or to provide the key details (like bill number, amount, vendor name) manually so you can look it up in HelloBooks.]`;
-          }
+        const buffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const base64 = uint8ArrayToBase64(bytes);
+        contentParts.push({
+          type: "file",
+          file: {
+            filename: att.name || "document.pdf",
+            file_data: `data:${mimeType};base64,${base64}`,
+          },
+        });
+        console.log(`[api] Encoded ${att.name} as base64 file (${bytes.length} bytes)`);
+      } catch (err) {
+        console.error(`[api] Error encoding attachment ${att.name}:`, err);
+        textContext += `\n\n[Attached file: ${att.name} — error processing: ${err instanceof Error ? err.message : "unknown"}]`;
+      }
+    } else if (att.url) {
+      // Text-based files (CSV, TXT): extract text content directly
+      try {
+        console.log(`[api] Fetching text document: ${att.name} (${mimeType})`);
+        const res = await fetch(att.url);
+        if (!res.ok) {
+          textContext += `\n\n[Attached file: ${att.name} — could not fetch content (HTTP ${res.status})]`;
+          continue;
         }
+        const fileText = await res.text();
+        const preview = fileText.length > 8000 ? fileText.slice(0, 8000) + "\n... (truncated)" : fileText;
+        textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
+        console.log(`[api] Extracted ${preview.length} chars text from ${att.name}`);
       } catch (err) {
         console.error(`[api] Error processing attachment ${att.name}:`, err);
         textContext += `\n\n[Attached file: ${att.name} — error processing: ${err instanceof Error ? err.message : "unknown"}]`;
@@ -1185,7 +1099,7 @@ async function buildUserContent(query: string, attachments?: Attachment[]): Prom
     }
   }
 
-  // If we have image/file parts, build a multimodal content array
+  // If we have file/image parts, build a multimodal content array
   if (contentParts.length > 0) {
     return [{ type: "text", text: textContext }, ...contentParts];
   }
