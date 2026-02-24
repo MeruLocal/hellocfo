@@ -767,13 +767,8 @@ function injectAllRecordsDefaults(
     if (result[key] === undefined || result[key] === null || result[key] === '') {
       const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
       const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum : [];
-      // Only inject 'all' if the enum explicitly lists it; otherwise omit status so API returns everything
-      if (enumValues.length > 0) {
-        const allValue = enumValues.find(v => String(v).toLowerCase() === 'all');
-        if (allValue) result[key] = allValue;
-        // else: leave status unset
-      }
-      // If no enum defined: leave status unset (don't inject 'all')
+      const enumAllowsAll = enumValues.length === 0 || enumValues.some(v => String(v).toLowerCase() === 'all');
+      if (enumAllowsAll) result[key] = 'all';
     }
   }
 
@@ -1603,7 +1598,6 @@ serve(async (req) => {
               return { result: truncated, success: false, attempts: attempt, failureReason: lastError };
             }
 
-            console.log(`[api] Tool ${toolName} result preview (${attempt}/${maxAttempts}): ${typeof result === 'string' ? result.slice(0, 500) : JSON.stringify(result).slice(0, 500)}`);
             return { result: truncated, success: true, attempts: attempt };
           } catch (e) {
             lastError = e instanceof Error ? e.message : String(e);
@@ -1718,7 +1712,6 @@ serve(async (req) => {
 
         for (const pick of listPicks) {
           sendEvent('executing_tool', { tool: pick.toolName, entity: pick.entity, isWrite: false });
-          console.log(`[api] Deterministic list ${pick.toolName} — calling with empty args for entity=${pick.entity}`);
           const execResult = await executeToolCall(pick.toolName, {}, `det-list-${pick.entity}`);
 
           deterministicMcpResults.push({
