@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.audio-transcribe]
 verify_jwt = false
+
+[functions.chat-agent-api]
+verify_jwt = false
