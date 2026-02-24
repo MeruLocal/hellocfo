@@ -1052,9 +1052,10 @@ async function buildResponsesInput(
 
   // Add conversation history
   for (const msg of conversationHistory) {
+    const contentType = msg.role === "assistant" ? "output_text" : "input_text";
     input.push({
       role: msg.role,
-      content: [{ type: "input_text", text: msg.content }]
+      content: [{ type: contentType, text: msg.content }]
     });
   }
 
