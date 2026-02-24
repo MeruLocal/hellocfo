@@ -1523,8 +1523,9 @@ serve(async (req) => {
 
       const persistedHistory = parseConversationMessages(existingRows?.[0]?.messages);
       if (persistedHistory.length > 0) {
-        conversationHistory = persistedHistory;
-        console.log(`[api] Loaded ${persistedHistory.length} persisted messages for conversation ${effectiveConversationId}`);
+        // Cap persisted history to last 20 messages to prevent token overflow
+        conversationHistory = persistedHistory.length > 20 ? persistedHistory.slice(-20) : persistedHistory;
+        console.log(`[api] Loaded ${conversationHistory.length}/${persistedHistory.length} persisted messages for conversation ${effectiveConversationId}`);
       }
     } catch (historyError) {
       console.warn('[api] Failed to load persisted conversation history, falling back to request history:', historyError);
@@ -2062,7 +2063,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}`;
 
           // For confirmations, include more history
-          const historySlice = isConfirmation ? 20 : conversationHistory.length;
+          const historySlice = Math.min(isConfirmation ? 20 : 15, conversationHistory.length);
           const useResponsesApi = hasDocumentAttachments(attachments);
 
           // Build canonical message history for the Responses API tool-call loop
@@ -2131,6 +2132,11 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
 
                 const execResult = await executeToolCall(toolName, toolInput, toolCall.id);
 
+                // Log failed write tools with full detail for diagnostics
+                if (isWriteTool(toolName) && !execResult.success) {
+                  console.error(`[api] Write tool ${toolName} FAILED: ${execResult.failureReason || 'unknown'}, result: ${(execResult.result || '').slice(0, 500)}`);
+                }
+
                 mcpResults.push({
                   tool: toolName,
                   input: toolInput,
@@ -2169,20 +2175,41 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               systemPrompt += `\n\n${enrichmentContext}`;
             }
 
-            response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+            try {
+              response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+            } catch (llmError) {
+              console.error(`[api] LLM call failed in tool loop iteration ${iterations}:`, llmError);
+              // Break out with what we have — generate fallback from tool results
+              break;
+            }
           }
 
           syncMcpResults();
 
-          // ─── Backend guardrail: block fake success cards ───
-          let responseText = response.message.content || '';
+          // If LLM call failed mid-loop, generate fallback from tool results
+          let responseText = '';
+          if (!response?.message?.content && mcpResults.length > 0) {
+            const successResults = mcpResults.filter(r => r.success);
+            const failedResults = mcpResults.filter(r => !r.success);
+            if (successResults.length > 0) {
+              responseText = `Here are the results from your request:\n\n${successResults.map(r => r.result?.slice(0, 500)).join('\n\n')}`;
+            } else if (failedResults.length > 0) {
+              const failedTools = failedResults.map(r => r.tool.replace('create_', '').replace('update_', '')).join(', ');
+              responseText = `I wasn't able to complete the ${failedTools} operation right now. Please try again in a moment.`;
+            } else {
+              responseText = "I couldn't complete this request right now. Please try again.";
+            }
+          } else {
+            responseText = response?.message?.content || "I couldn't complete this request right now. Please try again.";
+          }
           const hasSuccessfulWriteTool = mcpResults.some(r => isWriteTool(r.tool) && r.success);
           const hasSuccessCard = /\*\*📄.*\*\*|I've created the invoice successfully|invoice.*created.*successfully|bill.*created.*successfully/i.test(responseText);
           if (hasSuccessCard && !hasSuccessfulWriteTool) {
             console.warn(`[api] GUARDRAIL: Blocked fake success card (no successful write tool)`);
             const writeErrors = mcpResults.filter(r => isWriteTool(r.tool) && !r.success);
             if (writeErrors.length > 0) {
-              responseText = "I wasn't able to complete this action right now. I've already retried automatically. Please check your HelloBooks connection and try again.";
+              const failedTools = writeErrors.map(r => r.tool.replace('create_', '').replace('update_', '')).join(', ');
+              responseText = `I wasn't able to create the ${failedTools} right now due to a temporary issue. Please try again in a moment, or check if the ${failedTools} already exists in HelloBooks.`;
             } else {
               responseText = responseText.replace(/---[\s\S]*?---/g, '').replace(/I've created.*successfully\./gi, '').trim();
               if (!responseText) responseText = "I need to call the creation tool first. Could you please confirm the details so I can proceed?";
@@ -2274,7 +2301,10 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
       }
 
     } catch (error) {
-      console.error('[Error]', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const errStack = error instanceof Error ? error.stack : '';
+      console.error(`[api] Processing error: ${errMsg}`);
+      if (errStack) console.error(`[api] Stack: ${errStack}`);
       const safeMessage = getUserFacingErrorMessage(error);
       feedbackPath = "error";
       feedbackResponse = safeMessage;
