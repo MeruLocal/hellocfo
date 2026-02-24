@@ -1152,7 +1152,16 @@ async function callOpenAIResponses(
     input,
     max_output_tokens: maxTokens || config.max_tokens || 4096,
   };
-  if (tools && tools.length > 0) body.tools = tools;
+  if (tools && tools.length > 0) {
+    // Responses API expects {type:"function", name, description, parameters}
+    // but buildOpenAIToolsFromMcp produces Chat Completions format {type:"function", function:{name,...}}
+    body.tools = tools.map(t => ({
+      type: "function" as const,
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
+  }
 
   console.log(`[api] Calling Responses API: ${endpoint} (model: ${config.model})`);
 
