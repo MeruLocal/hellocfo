@@ -1013,6 +1013,121 @@ function getUserFacingErrorMessage(error: unknown): string {
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
+// ─── PDF Text Extraction Helpers ──────────────────────────────────────────────
+
+/** Extract text from PDF text-showing operators in a (decompressed) content stream.
+ *  Handles: Tj, TJ, ' (single-quote), " (double-quote) operators per PDF spec. */
+function extractTjText(content: string): string {
+  let extracted = "";
+  // Tj operator: (text) Tj
+  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*Tj/g)) {
+    extracted += m[1] + " ";
+  }
+  // ' operator (move to next line + show text): (text) '
+  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*'/g)) {
+    extracted += m[1] + " ";
+  }
+  // " operator (set spacing + move + show text): num num (text) "
+  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*"/g)) {
+    extracted += m[1] + " ";
+  }
+  // TJ operator (array of strings/kerning): [(text) -100 (text)] TJ
+  for (const m of content.matchAll(/\[([^\]]{1,4000})\]\s*TJ/g)) {
+    for (const s of m[1].matchAll(/\(([^)]{1,500})\)/g)) {
+      extracted += s[1];
+    }
+    extracted += " ";
+  }
+  return extracted;
+}
+
+/** Clean up common PDF encoding artifacts in extracted text. */
+function cleanPdfText(raw: string): string {
+  return raw
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "")
+    .replace(/\\t/g, " ")
+    .replace(/\\\(/g, "(")
+    .replace(/\\\)/g, ")")
+    .replace(/\\(\d{3})/g, (_m, octal) => {
+      const code = parseInt(octal, 8);
+      return code >= 32 && code < 127 ? String.fromCharCode(code) : " ";
+    })
+    .replace(/[^\x20-\x7E\n\r\t₹$€£¥%°©®™…–—''""•·±×÷≤≥≠∞√]/g, " ")
+    .replace(/\s{3,}/g, "  ")
+    .trim();
+}
+
+/** Decompress a FlateDecode (zlib) stream from a PDF. */
+async function decompressFlate(data: Uint8Array): Promise<Uint8Array | null> {
+  // Try "deflate" (zlib wrapper — most common in PDFs), then "deflate-raw"
+  for (const fmt of ["deflate", "deflate-raw"] as const) {
+    try {
+      const ds = new DecompressionStream(fmt);
+      const writer = ds.writable.getWriter();
+      const reader = ds.readable.getReader();
+      writer.write(data as unknown as BufferSource);
+      writer.close();
+
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+      const result = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) { result.set(c, off); off += c.length; }
+      return result;
+    } catch {
+      // try next format
+    }
+  }
+  return null;
+}
+
+/** Full PDF text extraction: handles both compressed and uncompressed streams. */
+async function extractPdfTextFull(bytes: Uint8Array): Promise<string> {
+  const raw = new TextDecoder("latin1").decode(bytes);
+  let allText = "";
+
+  // Pass 1: extract from uncompressed content (works on simple PDFs)
+  allText += extractTjText(raw);
+
+  // Pass 2: find and decompress FlateDecode streams, then extract text
+  // PDF structure: << /Filter /FlateDecode ... >> stream\r?\n ... \r?\nendstream
+  const streamStartRe = /stream\r?\n/g;
+  let match;
+  while ((match = streamStartRe.exec(raw)) !== null) {
+    const dataStart = match.index + match[0].length;
+    const endIdx = raw.indexOf("endstream", dataStart);
+    if (endIdx === -1) continue;
+
+    // Check if this stream uses FlateDecode (look at preceding dictionary)
+    const preCtx = raw.substring(Math.max(0, match.index - 300), match.index);
+    if (!preCtx.includes("/FlateDecode")) continue;
+
+    try {
+      const streamBytes = bytes.subarray(dataStart, endIdx);
+      // Trim trailing whitespace/CR/LF that PDF writers sometimes add before endstream
+      let trimEnd = streamBytes.length;
+      while (trimEnd > 0 && (streamBytes[trimEnd - 1] === 0x0A || streamBytes[trimEnd - 1] === 0x0D)) trimEnd--;
+      const cleanBytes = streamBytes.subarray(0, trimEnd);
+
+      const decompressed = await decompressFlate(cleanBytes);
+      if (decompressed && decompressed.length > 0) {
+        const decompText = new TextDecoder("latin1").decode(decompressed);
+        allText += extractTjText(decompText);
+      }
+    } catch {
+      // skip streams that fail
+    }
+  }
+
+  return allText.length > 30 ? cleanPdfText(allText) : "";
+}
+
 // ─── Attachment Processing ────────────────────────────────────────────────────
 
 async function buildUserContent(query: string, attachments?: Attachment[]): Promise<string | unknown[]> {
@@ -1039,43 +1154,28 @@ async function buildUserContent(query: string, attachments?: Attachment[]): Prom
         }
 
         if (att.type === "text/csv" || att.name.endsWith(".csv")) {
-          // CSV: include raw text
           const csvText = await res.text();
           const preview = csvText.length > 8000 ? csvText.slice(0, 8000) + "\n... (truncated)" : csvText;
           textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
+        } else if (att.type === "text/plain" || att.name.endsWith(".txt")) {
+          const plainText = await res.text();
+          const preview = plainText.length > 8000 ? plainText.slice(0, 8000) + "\n... (truncated)" : plainText;
+          textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of file ---`;
         } else {
-          // PDF / other binary: try to extract readable text from raw bytes
+          // PDF / other binary: decompress streams + extract text
           const buffer = await res.arrayBuffer();
           const bytes = new Uint8Array(buffer);
-          // Extract text streams from PDF (between parentheses after Tj/TJ operators)
-          let extracted = "";
-          const text = new TextDecoder("latin1").decode(bytes);
-          // Method 1: Extract text between BT...ET blocks with Tj/TJ operators
-          const tjMatches = text.matchAll(/\(([^)]{1,500})\)\s*Tj/g);
-          for (const m of tjMatches) extracted += m[1];
-          // Method 2: Extract TJ array strings
-          const tjArrayMatches = text.matchAll(/\[([^\]]{1,2000})\]\s*TJ/g);
-          for (const m of tjArrayMatches) {
-            const innerStrings = m[1].matchAll(/\(([^)]{1,500})\)/g);
-            for (const s of innerStrings) extracted += s[1];
-          }
 
-          if (extracted.length > 50) {
-            // Clean up common PDF encoding artifacts
-            const cleaned = extracted
-              .replace(/\\n/g, "\n")
-              .replace(/\\r/g, "")
-              .replace(/\\t/g, " ")
-              .replace(/\\\(/g, "(")
-              .replace(/\\\)/g, ")")
-              .replace(/\s{3,}/g, "  ")
-              .trim();
-            const preview = cleaned.length > 8000 ? cleaned.slice(0, 8000) + "\n... (truncated)" : cleaned;
+          const extracted = await extractPdfTextFull(bytes);
+
+          if (extracted.length > 30) {
+            const preview = extracted.length > 8000 ? extracted.slice(0, 8000) + "\n... (truncated)" : extracted;
             textContext += `\n\n--- Content extracted from ${att.name} ---\n${preview}\n--- End of file ---`;
-            console.log(`[api] Extracted ${cleaned.length} chars from ${att.name}`);
+            console.log(`[api] Extracted ${extracted.length} chars from ${att.name}`);
           } else {
-            textContext += `\n\n[Attached file: ${att.name} (${att.type}) — content could not be extracted as text. The user may need to share a screenshot or image of the document for visual analysis.]`;
-            console.log(`[api] Could not extract text from ${att.name}, only got ${extracted.length} chars`);
+            // Text extraction failed — PDF may be scanned/image-based or have non-standard encoding
+            console.log(`[api] Text extraction failed for ${att.name} (${extracted.length} chars)`);
+            textContext += `\n\n[Attached file: ${att.name} (${att.type}) — this appears to be a scanned or image-based document whose text could not be extracted. Ask the user to upload a screenshot/photo of the relevant page, or to provide the key details (like bill number, amount, vendor name) manually so you can look it up in HelloBooks.]`;
           }
         }
       } catch (err) {
@@ -1085,7 +1185,7 @@ async function buildUserContent(query: string, attachments?: Attachment[]): Prom
     }
   }
 
-  // If we have image parts, build a multimodal content array
+  // If we have image/file parts, build a multimodal content array
   if (contentParts.length > 0) {
     return [{ type: "text", text: textContext }, ...contentParts];
   }
