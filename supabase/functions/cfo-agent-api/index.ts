@@ -1013,94 +1013,197 @@ function getUserFacingErrorMessage(error: unknown): string {
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
-// ─── PDF Text Extraction ─────────────────────────────────────────────────────
-// Azure OpenAI does NOT support `type: "file"` content parts, so we extract
-// text from PDFs ourselves and inject it into the query context.
+// ─── Attachment Helpers ──────────────────────────────────────────────────────
 
-/** Extract text from PDF text-showing operators in a content stream.
- *  Handles: Tj, TJ, ' (single-quote), " (double-quote) per PDF spec. */
-function extractTjText(content: string): string {
-  let extracted = "";
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*Tj/g)) extracted += m[1] + " ";
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*'/g)) extracted += m[1] + " ";
-  for (const m of content.matchAll(/\(([^)]{1,500})\)\s*"/g)) extracted += m[1] + " ";
-  for (const m of content.matchAll(/\[([^\]]{1,4000})\]\s*TJ/g)) {
-    for (const s of m[1].matchAll(/\(([^)]{1,500})\)/g)) extracted += s[1];
-    extracted += " ";
+/** Check if any attachment requires the Responses API (PDF/document files). */
+function hasDocumentAttachments(attachments?: Attachment[]): boolean {
+  if (!attachments || attachments.length === 0) return false;
+  return attachments.some(att =>
+    att.url && (
+      att.type === "application/pdf" ||
+      att.name?.toLowerCase().endsWith(".pdf") ||
+      att.type?.includes("spreadsheet") ||
+      att.type?.includes("wordprocessing") ||
+      att.name?.toLowerCase().match(/\.(xlsx?|docx?)$/)
+    )
+  );
+}
+
+/** Convert Uint8Array to base64 string (safe for large files). */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
   }
-  return extracted;
+  return btoa(binary);
 }
 
-/** Clean PDF encoding artifacts. */
-function cleanPdfText(raw: string): string {
-  return raw
-    .replace(/\\n/g, "\n").replace(/\\r/g, "").replace(/\\t/g, " ")
-    .replace(/\\\(/g, "(").replace(/\\\)/g, ")")
-    .replace(/\\(\d{3})/g, (_m: string, octal: string) => {
-      const code = parseInt(octal, 8);
-      return code >= 32 && code < 127 ? String.fromCharCode(code) : " ";
-    })
-    .replace(/[^\x20-\x7E\n\r\t₹$€£¥%°±]/g, " ")
-    .replace(/\s{3,}/g, "  ").trim();
-}
+/** Build the `input` array for the OpenAI Responses API, including file attachments. */
+async function buildResponsesInput(
+  query: string,
+  conversationHistory: { role: string; content: string }[],
+  attachments?: Attachment[]
+): Promise<unknown[]> {
+  const input: unknown[] = [];
 
-/** Decompress a FlateDecode (zlib/deflate) PDF stream. */
-async function decompressFlate(data: Uint8Array): Promise<Uint8Array | null> {
-  for (const fmt of ["deflate", "deflate-raw"] as const) {
-    try {
-      const ds = new DecompressionStream(fmt);
-      const writer = ds.writable.getWriter();
-      const reader = ds.readable.getReader();
-      writer.write(data);
-      writer.close();
-      const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
+  // Add conversation history
+  for (const msg of conversationHistory) {
+    input.push({
+      role: msg.role,
+      content: [{ type: "input_text", text: msg.content }]
+    });
+  }
+
+  // Build user message content parts
+  const userContent: unknown[] = [];
+
+  if (attachments) {
+    for (const att of attachments) {
+      if (!att.url) continue;
+      const isImage = att.type?.startsWith("image/");
+      const isDocument = att.type === "application/pdf" ||
+        att.name?.toLowerCase().endsWith(".pdf") ||
+        att.type?.includes("spreadsheet") ||
+        att.type?.includes("wordprocessing") ||
+        att.name?.toLowerCase().match(/\.(xlsx?|docx?)$/);
+      const isTextFile = att.type === "text/csv" || att.type === "text/plain" ||
+        att.name?.toLowerCase().match(/\.(csv|txt)$/);
+
+      try {
+        console.log(`[api] Fetching attachment for Responses API: ${att.name} (${att.type})`);
+        const res = await fetch(att.url);
+        if (!res.ok) {
+          console.error(`[api] Could not fetch ${att.name}: HTTP ${res.status}`);
+          continue;
+        }
+
+        if (isDocument) {
+          // PDF/Office docs → input_file (model reads natively)
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          const base64 = uint8ArrayToBase64(bytes);
+          userContent.push({
+            type: "input_file",
+            filename: att.name || "document.pdf",
+            file_data: `data:${att.type || "application/pdf"};base64,${base64}`,
+          });
+          console.log(`[api] Encoded ${att.name} as input_file (${bytes.length} bytes)`);
+        } else if (isImage) {
+          // Images → input_image
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          const base64 = uint8ArrayToBase64(bytes);
+          userContent.push({
+            type: "input_image",
+            image_url: `data:${att.type || "image/jpeg"};base64,${base64}`,
+          });
+          console.log(`[api] Encoded ${att.name} as input_image (${bytes.length} bytes)`);
+        } else if (isTextFile) {
+          // CSV/TXT → inject as text
+          const fileText = await res.text();
+          const preview = fileText.length > 8000 ? fileText.slice(0, 8000) + "\n..." : fileText;
+          userContent.push({
+            type: "input_text",
+            text: `--- Content of ${att.name} ---\n${preview}\n--- End of ${att.name} ---`
+          });
+        }
+      } catch (err) {
+        console.error(`[api] Error processing ${att.name}:`, err);
       }
-      const totalLen = chunks.reduce((s, c) => s + c.length, 0);
-      const result = new Uint8Array(totalLen);
-      let off = 0;
-      for (const c of chunks) { result.set(c, off); off += c.length; }
-      return result;
-    } catch { /* try next format */ }
+    }
   }
-  return null;
+
+  // Add the query text
+  userContent.push({ type: "input_text", text: query });
+  input.push({ role: "user", content: userContent });
+
+  return input;
 }
 
-/** Full PDF text extraction: uncompressed + FlateDecode streams. */
-async function extractPdfText(bytes: Uint8Array): Promise<string> {
-  const raw = new TextDecoder("latin1").decode(bytes);
-  let allText = "";
+/** Call the OpenAI Responses API (/v1/responses) and normalize output to match callOpenAI format. */
+async function callOpenAIResponses(
+  config: LLMConfig,
+  systemPrompt: string,
+  input: unknown[],
+  tools?: OpenAITool[],
+  maxTokens?: number
+): Promise<{
+  finish_reason: string;
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+  };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}> {
+  const baseEndpoint = resolveLLMBaseEndpoint(config.endpoint);
+  const endpoint = `${baseEndpoint.replace(/\/$/, "")}/responses`;
 
-  // Pass 1: uncompressed text operators
-  allText += extractTjText(raw);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "api-key": config.api_key || "",
+  };
 
-  // Pass 2: decompress FlateDecode streams, then extract text
-  const streamRe = /stream\r?\n/g;
-  let match;
-  while ((match = streamRe.exec(raw)) !== null) {
-    const dataStart = match.index + match[0].length;
-    const endIdx = raw.indexOf("endstream", dataStart);
-    if (endIdx === -1) continue;
-    const preCtx = raw.substring(Math.max(0, match.index - 300), match.index);
-    if (!preCtx.includes("/FlateDecode")) continue;
-    try {
-      const streamBytes = bytes.subarray(dataStart, endIdx);
-      let trimEnd = streamBytes.length;
-      while (trimEnd > 0 && (streamBytes[trimEnd - 1] === 0x0A || streamBytes[trimEnd - 1] === 0x0D)) trimEnd--;
-      const decompressed = await decompressFlate(streamBytes.subarray(0, trimEnd));
-      if (decompressed && decompressed.length > 0) {
-        allText += extractTjText(new TextDecoder("latin1").decode(decompressed));
+  const body: Record<string, unknown> = {
+    model: config.model,
+    instructions: systemPrompt,
+    input,
+    max_output_tokens: maxTokens || config.max_tokens || 4096,
+  };
+  if (tools && tools.length > 0) body.tools = tools;
+
+  console.log(`[api] Calling Responses API: ${endpoint} (model: ${config.model})`);
+
+  let res: Response;
+  try {
+    res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Responses API unreachable: ${msg}`);
+  }
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Responses API error: ${res.status} - ${err.slice(0, 300)}`);
+  }
+
+  const result = await res.json();
+
+  // Normalize Responses API output → callOpenAI return format
+  const output = result.output || [];
+  let content = "";
+  const toolCalls: { id: string; type: string; function: { name: string; arguments: string } }[] = [];
+
+  for (const item of output) {
+    if (item.type === "message") {
+      for (const part of (item.content || [])) {
+        if (part.type === "output_text") content += part.text;
       }
-    } catch { /* skip */ }
+    } else if (item.type === "function_call") {
+      toolCalls.push({
+        id: item.call_id || item.id,
+        type: "function",
+        function: { name: item.name, arguments: item.arguments || "{}" },
+      });
+    }
   }
 
-  return allText.length > 30 ? cleanPdfText(allText) : "";
+  const finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
+
+  return {
+    finish_reason: finishReason,
+    message: {
+      role: "assistant",
+      content: content || null,
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    },
+    usage: result.usage,
+  };
 }
 
-// ─── Attachment Processing ────────────────────────────────────────────────────
+// ─── Attachment Processing (Chat Completions fallback for non-document files) ─
 
 async function buildUserContent(query: string, attachments?: Attachment[]): Promise<string | unknown[]> {
   if (!attachments || attachments.length === 0) return query;
@@ -1111,52 +1214,21 @@ async function buildUserContent(query: string, attachments?: Attachment[]): Prom
   for (const att of attachments) {
     if (!att.url) continue;
     const isImage = att.type?.startsWith("image/");
-    const isPdf = att.type === "application/pdf" || att.name?.toLowerCase().endsWith(".pdf");
 
     if (isImage) {
-      // Images: pass as image_url for GPT vision
       contentParts.push({ type: "image_url", image_url: { url: att.url, detail: "auto" } });
       console.log(`[api] Attachment image: ${att.name}`);
-
-    } else if (isPdf) {
-      // PDF: extract text content and inject into query context
+    } else if (att.url) {
       try {
-        console.log(`[api] Fetching PDF: ${att.name}`);
-        const res = await fetch(att.url);
-        if (!res.ok) {
-          textContext += `\n\n[Attached file: ${att.name} — could not fetch (HTTP ${res.status})]`;
-          continue;
-        }
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        const extracted = await extractPdfText(bytes);
-        if (extracted.length > 30) {
-          const preview = extracted.length > 12000 ? extracted.slice(0, 12000) + "\n... (truncated)" : extracted;
-          textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of ${att.name} ---`;
-          console.log(`[api] Extracted ${extracted.length} chars from PDF ${att.name}`);
-        } else {
-          textContext += `\n\n[Attached file: ${att.name} — PDF text could not be extracted (scanned/image-based). The user should upload a screenshot or provide key details manually.]`;
-          console.log(`[api] PDF text extraction failed for ${att.name} (${extracted.length} chars)`);
-        }
-      } catch (err) {
-        console.error(`[api] Error processing PDF ${att.name}:`, err);
-        textContext += `\n\n[Attached file: ${att.name} — error: ${err instanceof Error ? err.message : "unknown"}]`;
-      }
-
-    } else {
-      // CSV, TXT, and other text-based files: read as text
-      try {
-        console.log(`[api] Fetching text file: ${att.name} (${att.type})`);
         const res = await fetch(att.url);
         if (!res.ok) {
           textContext += `\n\n[Attached file: ${att.name} — could not fetch (HTTP ${res.status})]`;
           continue;
         }
         const fileText = await res.text();
-        const preview = fileText.length > 8000 ? fileText.slice(0, 8000) + "\n... (truncated)" : fileText;
+        const preview = fileText.length > 8000 ? fileText.slice(0, 8000) + "\n..." : fileText;
         textContext += `\n\n--- Content of ${att.name} ---\n${preview}\n--- End of ${att.name} ---`;
-        console.log(`[api] Read ${preview.length} chars from ${att.name}`);
       } catch (err) {
-        console.error(`[api] Error reading ${att.name}:`, err);
         textContext += `\n\n[Attached file: ${att.name} — error: ${err instanceof Error ? err.message : "unknown"}]`;
       }
     }
@@ -1720,12 +1792,19 @@ serve(async (req) => {
           sendEvent('tools_filtered', { category: effectiveCategory, toolCount: 0 });
           sendEvent('response_generating', { path: 'llm', category: effectiveCategory });
 
-          const chatUserContent = await buildUserContent(query, attachments);
-          const response = await callOpenAI(llmConfig as LLMConfig,
-            SYSTEM_PROMPTS.general_chat,
-            [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: chatUserContent }],
-            [], 512
-          );
+          let response;
+          if (hasDocumentAttachments(attachments)) {
+            // Use Responses API for document files (PDF, Excel, Word)
+            const responsesInput = await buildResponsesInput(query, conversationHistory, attachments);
+            response = await callOpenAIResponses(llmConfig as LLMConfig, SYSTEM_PROMPTS.general_chat, responsesInput, [], 512);
+          } else {
+            const chatUserContent = await buildUserContent(query, attachments);
+            response = await callOpenAI(llmConfig as LLMConfig,
+              SYSTEM_PROMPTS.general_chat,
+              [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: chatUserContent }],
+              [], 512
+            );
+          }
 
           const responseText = response.message.content || '';
           const chunkSize = 50;
@@ -1843,13 +1922,27 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
 
           // For confirmations, include more history
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
-          const userContent = await buildUserContent(query, attachments);
+          const useResponsesApi = hasDocumentAttachments(attachments);
+
+          // Build messages for Chat Completions (always needed for tool-call loop)
+          const userContent = useResponsesApi ? query : await buildUserContent(query, attachments);
           const messages: unknown[] = [
             ...conversationHistory.slice(-historySlice).map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userContent }
           ];
 
-          let response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+          let response;
+          if (useResponsesApi) {
+            // First call: Responses API with input_file for document attachments
+            const responsesInput = await buildResponsesInput(
+              query,
+              conversationHistory.slice(-historySlice),
+              attachments
+            );
+            response = await callOpenAIResponses(llmConfig as LLMConfig, systemPrompt, responsesInput, filteredTools);
+          } else {
+            response = await callOpenAI(llmConfig as LLMConfig, systemPrompt, messages, filteredTools);
+          }
           let iterations = 0;
           const mcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
           // Keep outer reference in sync
