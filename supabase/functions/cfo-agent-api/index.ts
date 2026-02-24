@@ -978,7 +978,7 @@ function resolveLLMBaseEndpoint(endpoint: string | null | undefined): string {
       path.includes("/functions/v1") ||
       path.endsWith("/v1/messages")
     ) {
-      console.warn(`[api] LLM endpoint "${raw}" looks incompatible with chat/completions. Falling back to default endpoint.`);
+      console.warn(`[api] LLM endpoint "${raw}" looks incompatible with OpenAI Responses API. Falling back to default endpoint.`);
       return DEFAULT_AZURE_OPENAI_ENDPOINT;
     }
     return raw;
@@ -1122,14 +1122,7 @@ async function buildResponsesInput(
   return input;
 }
 
-/** Call the OpenAI Responses API (/v1/responses) and normalize output to match callOpenAI format. */
-async function callOpenAIResponses(
-  config: LLMConfig,
-  systemPrompt: string,
-  input: unknown[],
-  tools?: OpenAITool[],
-  maxTokens?: number
-): Promise<{
+type NormalizedLLMResponse = {
   finish_reason: string;
   message: {
     role: string;
@@ -1137,7 +1130,199 @@ async function callOpenAIResponses(
     tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
   };
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-}> {
+};
+
+function toResponsesTools(tools?: OpenAITool[]): Array<{
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}> | undefined {
+  if (!tools || tools.length === 0) return undefined;
+  return tools.map((t) => ({
+    type: "function",
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+}
+
+function normalizeResponsesOutput(result: Record<string, unknown>): NormalizedLLMResponse {
+  const output = Array.isArray(result.output) ? result.output as Record<string, unknown>[] : [];
+  let content = "";
+  const toolCalls: { id: string; type: string; function: { name: string; arguments: string } }[] = [];
+
+  for (const item of output) {
+    const itemType = typeof item.type === "string" ? item.type : "";
+    if (itemType === "message") {
+      const parts = Array.isArray(item.content) ? item.content as Record<string, unknown>[] : [];
+      for (const part of parts) {
+        const partType = typeof part.type === "string" ? part.type : "";
+        if (partType === "output_text" && typeof part.text === "string") {
+          content += part.text;
+        }
+      }
+      continue;
+    }
+    if (itemType === "function_call") {
+      const id = typeof item.call_id === "string" ? item.call_id : (typeof item.id === "string" ? item.id : `call_${crypto.randomUUID()}`);
+      const name = typeof item.name === "string" ? item.name : "unknown_tool";
+      const args = typeof item.arguments === "string" ? item.arguments : "{}";
+      toolCalls.push({
+        id,
+        type: "function",
+        function: { name, arguments: args },
+      });
+    }
+  }
+
+  let finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
+  const status = typeof result.status === "string" ? result.status : "";
+  const incompleteDetails = (result.incomplete_details || {}) as Record<string, unknown>;
+  const incompleteReason = typeof incompleteDetails.reason === "string" ? incompleteDetails.reason : "";
+  if (finishReason !== "tool_calls" && status === "incomplete" && incompleteReason === "max_output_tokens") {
+    finishReason = "length";
+  }
+
+  const usageRaw = (result.usage || {}) as Record<string, unknown>;
+  const promptTokens = typeof usageRaw.input_tokens === "number"
+    ? usageRaw.input_tokens
+    : (typeof usageRaw.prompt_tokens === "number" ? usageRaw.prompt_tokens : undefined);
+  const completionTokens = typeof usageRaw.output_tokens === "number"
+    ? usageRaw.output_tokens
+    : (typeof usageRaw.completion_tokens === "number" ? usageRaw.completion_tokens : undefined);
+  const totalTokens = typeof usageRaw.total_tokens === "number" ? usageRaw.total_tokens : undefined;
+
+  return {
+    finish_reason: finishReason,
+    message: {
+      role: "assistant",
+      content: content || null,
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    },
+    usage: {
+      ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
+      ...(completionTokens !== undefined ? { completion_tokens: completionTokens } : {}),
+      ...(totalTokens !== undefined ? { total_tokens: totalTokens } : {}),
+    },
+  };
+}
+
+function pushInputPart(parts: Array<Record<string, unknown>>, part: unknown) {
+  if (!part || typeof part !== "object") return;
+  const p = part as Record<string, unknown>;
+  const rawType = typeof p.type === "string" ? p.type : "";
+
+  if (rawType === "input_text" || rawType === "text") {
+    const text = typeof p.text === "string" ? p.text : "";
+    if (text.trim()) parts.push({ type: "input_text", text });
+    return;
+  }
+
+  if (rawType === "input_image" || rawType === "image_url") {
+    let imageUrl = "";
+    if (typeof p.image_url === "string") {
+      imageUrl = p.image_url;
+    } else if (p.image_url && typeof p.image_url === "object") {
+      const imageObj = p.image_url as Record<string, unknown>;
+      imageUrl = typeof imageObj.url === "string" ? imageObj.url : "";
+    }
+    if (imageUrl) parts.push({ type: "input_image", image_url: imageUrl });
+    return;
+  }
+
+  if (rawType === "input_file") {
+    const inputFile: Record<string, unknown> = { type: "input_file" };
+    if (typeof p.file_id === "string") inputFile.file_id = p.file_id;
+    if (typeof p.file_data === "string") inputFile.file_data = p.file_data;
+    if (typeof p.filename === "string") inputFile.filename = p.filename;
+    if (inputFile.file_id || inputFile.file_data) parts.push(inputFile);
+    return;
+  }
+}
+
+function toResponsesMessageContent(content: unknown): Array<Record<string, unknown>> {
+  const parts: Array<Record<string, unknown>> = [];
+
+  if (typeof content === "string") {
+    if (content.trim()) parts.push({ type: "input_text", text: content });
+    return parts;
+  }
+
+  if (Array.isArray(content)) {
+    for (const part of content) pushInputPart(parts, part);
+    return parts;
+  }
+
+  if (content && typeof content === "object") {
+    pushInputPart(parts, content);
+    return parts;
+  }
+
+  return parts;
+}
+
+function toResponsesInputFromMessages(messages: unknown[]): unknown[] {
+  const input: unknown[] = [];
+
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object") continue;
+    const msg = raw as Record<string, unknown>;
+    const roleRaw = typeof msg.role === "string" ? msg.role : "user";
+    const role = roleRaw === "system" ? "developer" : roleRaw;
+
+    if (role === "tool") {
+      const callId = typeof msg.tool_call_id === "string" ? msg.tool_call_id : "";
+      const output = typeof msg.content === "string"
+        ? msg.content
+        : JSON.stringify(msg.content ?? "");
+      if (callId) {
+        input.push({
+          type: "function_call_output",
+          call_id: callId,
+          output,
+        });
+      }
+      continue;
+    }
+
+    if (role === "assistant" && Array.isArray(msg.tool_calls)) {
+      for (const rawToolCall of msg.tool_calls) {
+        if (!rawToolCall || typeof rawToolCall !== "object") continue;
+        const tc = rawToolCall as Record<string, unknown>;
+        const fn = (tc.function || {}) as Record<string, unknown>;
+        const name = typeof fn.name === "string" ? fn.name : "";
+        const callId = typeof tc.id === "string" ? tc.id : `call_${crypto.randomUUID()}`;
+        const argumentsJson = typeof fn.arguments === "string" ? fn.arguments : "{}";
+        if (!name) continue;
+        input.push({
+          type: "function_call",
+          call_id: callId,
+          name,
+          arguments: argumentsJson,
+        });
+      }
+    }
+
+    if (role === "user" || role === "assistant" || role === "developer") {
+      const content = toResponsesMessageContent(msg.content);
+      if (content.length > 0) {
+        input.push({ role, content });
+      }
+    }
+  }
+
+  return input;
+}
+
+/** Call the OpenAI Responses API (/v1/responses) and normalize output to match callOpenAI format. */
+async function callOpenAIResponses(
+  config: LLMConfig,
+  systemPrompt: string,
+  input: unknown[],
+  tools?: OpenAITool[],
+  maxTokens?: number
+): Promise<NormalizedLLMResponse> {
   const baseEndpoint = resolveLLMBaseEndpoint(config.endpoint);
   const endpoint = `${baseEndpoint.replace(/\/$/, "")}/responses`;
 
@@ -1152,16 +1337,8 @@ async function callOpenAIResponses(
     input,
     max_output_tokens: maxTokens || config.max_tokens || 4096,
   };
-  if (tools && tools.length > 0) {
-    // Responses API expects {type:"function", name, description, parameters}
-    // but buildOpenAIToolsFromMcp produces Chat Completions format {type:"function", function:{name,...}}
-    body.tools = tools.map(t => ({
-      type: "function" as const,
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    }));
-  }
+  const responsesTools = toResponsesTools(tools);
+  if (responsesTools) body.tools = responsesTools;
 
   console.log(`[api] Calling Responses API: ${endpoint} (model: ${config.model})`);
 
@@ -1170,49 +1347,19 @@ async function callOpenAIResponses(
     res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Responses API unreachable: ${msg}`);
+    throw new Error(`LLM service unreachable: ${msg}`);
   }
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Responses API error: ${res.status} - ${err.slice(0, 300)}`);
+    throw new Error(`OpenAI API error: ${res.status} - ${err.slice(0, 300)}`);
   }
 
-  const result = await res.json();
-
-  // Normalize Responses API output → callOpenAI return format
-  const output = result.output || [];
-  let content = "";
-  const toolCalls: { id: string; type: string; function: { name: string; arguments: string } }[] = [];
-
-  for (const item of output) {
-    if (item.type === "message") {
-      for (const part of (item.content || [])) {
-        if (part.type === "output_text") content += part.text;
-      }
-    } else if (item.type === "function_call") {
-      toolCalls.push({
-        id: item.call_id || item.id,
-        type: "function",
-        function: { name: item.name, arguments: item.arguments || "{}" },
-      });
-    }
-  }
-
-  const finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
-
-  return {
-    finish_reason: finishReason,
-    message: {
-      role: "assistant",
-      content: content || null,
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    },
-    usage: result.usage,
-  };
+  const result = await res.json() as Record<string, unknown>;
+  return normalizeResponsesOutput(result);
 }
 
-// ─── Attachment Processing (Chat Completions fallback for non-document files) ─
+// ─── Attachment Processing (non-document files) ───────────────────────────────
 
 async function buildUserContent(query: string, attachments?: Attachment[]): Promise<string | unknown[]> {
   if (!attachments || attachments.length === 0) return query;
@@ -1257,34 +1404,24 @@ async function callOpenAI(
   messages: unknown[],
   tools?: OpenAITool[],
   maxTokens?: number
-): Promise<{
-  finish_reason: string;
-  message: {
-    role: string;
-    content: string | null;
-    tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
-  };
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-}> {
+): Promise<NormalizedLLMResponse> {
   const baseEndpoint = resolveLLMBaseEndpoint(config.endpoint);
-  const endpoint = `${baseEndpoint.replace(/\/$/, "")}/chat/completions`;
+  const endpoint = `${baseEndpoint.replace(/\/$/, "")}/responses`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "api-key": config.api_key || "",
   };
 
-  const allMessages = [
-    { role: "developer", content: systemPrompt },
-    ...messages,
-  ];
-
+  const input = toResponsesInputFromMessages(messages);
   const body: Record<string, unknown> = {
     model: config.model,
-    max_completion_tokens: maxTokens || config.max_tokens || 4096,
-    messages: allMessages,
+    instructions: systemPrompt,
+    input,
+    max_output_tokens: maxTokens || config.max_tokens || 4096,
   };
-  if (tools && tools.length > 0) body.tools = tools;
+  const responsesTools = toResponsesTools(tools);
+  if (responsesTools) body.tools = responsesTools;
 
   let res: Response;
   try {
@@ -1296,18 +1433,11 @@ async function callOpenAI(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`OpenAI API error: ${res.status} - ${err.slice(0, 200)}`);
+    throw new Error(`OpenAI API error: ${res.status} - ${err.slice(0, 300)}`);
   }
 
-  const result = await res.json();
-  const choice = result.choices?.[0];
-  if (!choice) throw new Error("No choices returned from OpenAI");
-
-  return {
-    finish_reason: choice.finish_reason,
-    message: choice.message,
-    usage: result.usage,
-  };
+  const result = await res.json() as Record<string, unknown>;
+  return normalizeResponsesOutput(result);
 }
 
 serve(async (req) => {
@@ -1933,7 +2063,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           const historySlice = isConfirmation ? 20 : conversationHistory.length;
           const useResponsesApi = hasDocumentAttachments(attachments);
 
-          // Build messages for Chat Completions (always needed for tool-call loop)
+          // Build canonical message history for the Responses API tool-call loop
           const userContent = useResponsesApi ? query : await buildUserContent(query, attachments);
           const messages: unknown[] = [
             ...conversationHistory.slice(-historySlice).map(m => ({ role: m.role, content: m.content })),
