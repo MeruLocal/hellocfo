@@ -3,13 +3,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
+  detectFollowUp,
   type OpenAITool,
+  type FollowUpResult,
 } from "./tool-groups.ts";
 import { classifyQuery, type QueryCategory } from "./classifier.ts";
-import { SYSTEM_PROMPTS } from "./model-selector.ts";
+import { SYSTEM_PROMPTS, selectModelTier } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import { logFeedback } from "./feedback-logger.ts";
-import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
+import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 
 const corsHeaders = {
@@ -198,11 +200,28 @@ interface PendingAction {
 
 function isConfirmationMessage(query: string): boolean {
   const q = query.trim();
-  // Pure confirmations (short) are always confirmations
-  if (q.split(/\s+/).length <= 8 && CONFIRMATION_PATTERNS.some(p => p.test(q))) return true;
-  // Longer messages that contain confirmation keywords + additional data (e.g., invoice number)
-  // are also confirmations if they have at least one confirmation keyword
-  if (q.split(/\s+/).length <= 25 && CONFIRMATION_PATTERNS.some(p => p.test(q))) return true;
+  const wordCount = q.split(/\s+/).length;
+  const hasConfirmKeyword = CONFIRMATION_PATTERNS.some(p => p.test(q));
+  if (!hasConfirmKeyword) return false;
+
+  // Pure short confirmations: "yes", "haan", "ok kar do", "sure, go ahead"
+  if (wordCount <= 3) return true;
+
+  // For longer messages (4+ words), only treat as confirmation if the query
+  // does NOT contain view/query keywords that indicate a new data request.
+  // "Yes, show aging details" = follow-up data request, NOT confirmation.
+  // "Yes, and also for Sharma" = confirmation (continuing previous action).
+  // "Yes, create it" = confirmation.
+  const viewKeywords = /\b(show|list|get|view|display|fetch|report|compare|analyze|what|how|who|which|dikhao|batao|dikha)\b/i;
+  if (viewKeywords.test(q)) {
+    // Has both confirmation + view keywords — check if there's a write/action intent
+    const writeKeywords = /\b(create|update|send|delete|add|make|banao|generate|file|record|pay|void|cancel)\b/i;
+    if (writeKeywords.test(q)) return true; // "yes, create and show" → confirmation
+    return false; // "yes, show aging details" → NOT confirmation, it's a follow-up
+  }
+
+  // Confirmation with additional context: "yes, invoice number is INV-123"
+  if (wordCount <= 25) return true;
   return false;
 }
 
@@ -1606,6 +1625,9 @@ serve(async (req) => {
     let mcpClientInstance: StreamableMCPClient | null = null;
     // Hoisted so finally block can access real tool inputs/results
     let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
+    // Hoisted for feedback logging in finally block
+    let followUpResult: FollowUpResult = { isFollowUp: false };
+    let modelTier: { tier: string; reason: string } = { tier: 'cheap', reason: 'default' };
 
     try {
       sendEvent('connected', {
@@ -1676,6 +1698,19 @@ serve(async (req) => {
         feedbackResponse = errorMsg;
         return;
       }
+
+      // ─── Follow-up Detection ──────────────────────────────────────────
+      followUpResult = (!isConfirmation && conversationHistory.length >= 2)
+        ? detectFollowUp(query, conversationHistory as { role: string; content: string; metadata?: { toolsUsed?: string[]; toolsLoaded?: string[] } }[])
+        : { isFollowUp: false };
+
+      if (followUpResult.isFollowUp) {
+        console.log(`[api] Follow-up detected: ${followUpResult.reason}, reusing tools: ${followUpResult.reuseToolGroup?.join(', ')}`);
+      }
+
+      // ─── Model Tier Selection ─────────────────────────────────────────
+      modelTier = selectModelTier(query, classification.category);
+      console.log(`[api] Model tier: ${modelTier.tier} — ${modelTier.reason}`);
 
       const queryIsBulkList = isBulkListQuery(query);
       const queryRequestedEntities = detectRequestedEntities(query);
@@ -1782,6 +1817,25 @@ serve(async (req) => {
           path: 'llm', category: 'unified',
           confidence: 0.8, isConfirmation: true, noPendingAction: true,
         });
+      } else if (followUpResult.isFollowUp && classification.category === 'general_chat') {
+        // Short follow-up queries (e.g. "show more", "details for first one") should NOT
+        // be classified as general_chat — they need tools from the previous turn
+        effectiveCategory = 'unified';
+        console.log(`[api] Follow-up overrode general_chat → unified`);
+        sendEvent('route_classified', {
+          path: 'llm', category: 'unified',
+          confidence: 0.75, isFollowUp: true,
+          reuseTools: followUpResult.reuseToolGroup?.length || 0,
+          reason: followUpResult.reason,
+        });
+      } else if (queryIsPaginationFollowUp && classification.category === 'general_chat') {
+        // Pagination follow-ups ("next page", "more", "aur dikhao") must use tools
+        effectiveCategory = 'unified';
+        console.log(`[api] Pagination follow-up overrode general_chat → unified`);
+        sendEvent('route_classified', {
+          path: 'llm', category: 'unified',
+          confidence: 0.8, isPaginationFollowUp: true,
+        });
       } else {
         effectiveCategory = classification.category;
       }
@@ -1815,6 +1869,27 @@ serve(async (req) => {
           }
 
           if (bestIntent?.confidence === 0.95) break;
+        }
+      }
+
+      // Use adaptive threshold when intent is matched (feeds RL pipeline)
+      if (bestIntent) {
+        try {
+          const adaptiveThreshold = await getAdaptiveThreshold(supabase, bestIntent.id);
+          console.log(`[api] Intent "${bestIntent.name}" confidence=${bestIntent.confidence.toFixed(2)}, adaptiveThreshold=${adaptiveThreshold.toFixed(2)}`);
+          // If intent has high confidence AND resolution_flow tools, use them to supplement tool selection
+          if (bestIntent.confidence >= adaptiveThreshold && bestIntent.resolution_flow?.dataPipeline?.length) {
+            const intentTools = bestIntent.resolution_flow.dataPipeline
+              .map(p => p.mcpTool || p.tool)
+              .filter(Boolean);
+            if (intentTools.length > 0) {
+              console.log(`[api] High-confidence intent "${bestIntent.name}" — will supplement tool selection with: ${intentTools.join(', ')}`);
+              // Store for use in tool selection below
+              (bestIntent as Record<string, unknown>)._intentTools = intentTools;
+            }
+          }
+        } catch (e) {
+          console.warn(`[api] Adaptive threshold lookup failed:`, e);
         }
       }
 
@@ -1996,8 +2071,34 @@ serve(async (req) => {
               toolSelection.toolNames.push(pendingAction.toolName);
             }
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
+          } else if (followUpResult.isFollowUp && followUpResult.reuseToolGroup && followUpResult.reuseToolGroup.length > 0) {
+            // Follow-up: reuse tools from previous turn for context continuity
+            const validReuseTools = followUpResult.reuseToolGroup.filter(t => mcpTools.some(m => m.name === t));
+            if (validReuseTools.length > 0) {
+              toolSelection = {
+                toolNames: validReuseTools,
+                matchedCategories: ['follow_up_reuse'],
+                strategy: 'follow_up_reuse',
+              };
+              console.log(`[api] Follow-up: reusing ${validReuseTools.length} tools from previous turn`);
+            } else {
+              // None of the previous tools are available in MCP, fall back to normal selection
+              toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
+              console.log(`[api] Follow-up: previous tools unavailable, falling back to keyword selection`);
+            }
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
             toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
+            // Supplement with intent-derived tools if available
+            const intentTools = (bestIntent as Record<string, unknown> | null)?._intentTools as string[] | undefined;
+            if (intentTools && intentTools.length > 0) {
+              for (const t of intentTools) {
+                if (!toolSelection.toolNames.includes(t) && mcpTools.some(m => m.name === t)) {
+                  toolSelection.toolNames.push(t);
+                }
+              }
+              console.log(`[api] Supplemented tool selection with ${intentTools.length} intent tools`);
+            }
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
 
@@ -2069,7 +2170,13 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             }
           }
 
-          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}`;
+          // ─── Follow-up context for LLM ───
+          let followUpContext = '';
+          if (followUpResult.isFollowUp) {
+            followUpContext = `\n\n🔄 FOLLOW-UP CONTEXT: This is a short follow-up message to the previous conversation. The user is building on what was discussed before. Look at the conversation history carefully to understand what they are referring to. Use the same tools and data context from the previous turn. If the user says "show more", "details", "first one", "compare", etc., resolve these references from the conversation history.`;
+          }
+
+          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}${followUpContext}`;
 
           // For confirmations, include more history
           const historySlice = Math.min(isConfirmation ? 20 : 15, conversationHistory.length);
@@ -2110,7 +2217,11 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               const requestedToolName = toolCall.function.name;
               let toolName = requestedToolName;
               let toolInput: Record<string, unknown> = {};
-              try { toolInput = JSON.parse(toolCall.function.arguments); } catch (_e) { /* ok */ }
+              try {
+                toolInput = JSON.parse(toolCall.function.arguments);
+              } catch (parseError) {
+                console.warn(`[api] Failed to parse tool args for ${requestedToolName}: ${(toolCall.function.arguments || '').slice(0, 200)}`, parseError);
+              }
 
               if (!SIMPLE_DIRECT_LLM_MODE && (queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
                 const requestedToolDef = mcpToolsByName.get(requestedToolName);
@@ -2475,6 +2586,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
 
       // Non-blocking feedback log
       const responseTimeMs = Date.now() - startTime;
+      const implicitSignals = detectImplicitSignals(query, conversationHistory as { role: string; content: string }[]);
       await logFeedback(supabase, {
         message_id: apiMessageId,
         conversation_id: effectiveConversationId,
@@ -2491,7 +2603,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
         tool_selection_strategy: feedbackStrategy,
         response_time_ms: responseTimeMs,
         token_cost: feedbackTokenCost,
-        implicit_signals: { source: "api", isConfirmation },
+        implicit_signals: { ...implicitSignals, source: "api", isConfirmation, isFollowUp: followUpResult.isFollowUp, modelTier: modelTier.tier },
       }, "api");
 
       // RL logging
