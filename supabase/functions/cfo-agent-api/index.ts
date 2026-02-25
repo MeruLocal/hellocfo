@@ -776,17 +776,14 @@ function injectAllRecordsDefaults(
   if (!s?.properties) return args;
   const result = { ...args };
 
+  // Only inject "all" for the primary status field.
+  // Secondary fields like approvalStatus, bill_status etc. should NOT be
+  // auto-set — the MCP tool may not recognise "all" and return 0 records.
   const allStatusKeys = [
     'status',
     'statuses',
     'workflow_status',
     'workflowStatus',
-    'payment_status',
-    'paymentStatus',
-    'approval_status',
-    'approvalStatus',
-    'bill_status',
-    'invoice_status',
     'state',
   ];
 

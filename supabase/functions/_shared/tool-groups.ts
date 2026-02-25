@@ -461,6 +461,10 @@ export function detectFollowUp(
   if (words.length >= 5) return { isFollowUp: false };
   if (conversationHistory.length < 2) return { isFollowUp: false };
 
+  // Queries with explicit entity keywords are standalone, not follow-ups
+  const entityKeywords = /\b(bills?|invoices?|customers?|vendors?|payments?|credit.?notes?|challans?|transactions?|expenses?)\b/i;
+  if (entityKeywords.test(query)) return { isFollowUp: false };
+
   // Find the last assistant message with tool metadata
   for (let i = conversationHistory.length - 1; i >= 0; i--) {
     const msg = conversationHistory[i];
