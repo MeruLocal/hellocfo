@@ -792,8 +792,10 @@ function injectAllRecordsDefaults(
     if (result[key] === undefined || result[key] === null || result[key] === '') {
       const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
       const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum : [];
-      const enumAllowsAll = enumValues.length === 0 || enumValues.some(v => String(v).toLowerCase() === 'all');
-      if (enumAllowsAll) result[key] = 'all';
+      // Only inject "all" if the enum EXPLICITLY contains "all".
+      // If enum is empty/missing, skip — the MCP tool will return all records by default.
+      const enumExplicitlyAllowsAll = enumValues.length > 0 && enumValues.some(v => String(v).toLowerCase() === 'all');
+      if (enumExplicitlyAllowsAll) result[key] = 'all';
     }
   }
 
