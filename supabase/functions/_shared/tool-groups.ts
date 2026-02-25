@@ -60,12 +60,17 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     ],
     keywords: ["credit note", "credit notes", "cn", "debit note", "return", "refund"],
   },
-  // ----- CHART OF ACCOUNTS -----
+  // ----- CHART OF ACCOUNTS / FIXED ASSETS -----
   {
     name: "accounts",
-    description: "Chart of accounts — list, view, update",
+    description: "Chart of accounts, fixed assets — list, view, update",
     tools: ["get_charts_of_accounts", "get_chart_of_accounts_by_id", "update_chart_of_accounts"],
-    keywords: ["account", "accounts", "chart of accounts", "coa", "ledger", "gl", "general ledger"],
+    keywords: [
+      "account", "accounts", "chart of accounts", "coa", "ledger", "gl", "general ledger",
+      "fixed asset", "asset register", "depreciation", "book value", "net book value",
+      "capital work", "cwip", "fully depreciated", "disposed asset", "asset addition",
+      "it act depreciation", "companies act depreciation", "wdv", "slm",
+    ],
   },
   // ----- TRANSACTIONS / BANKING -----
   {
@@ -113,12 +118,17 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     tools: ["update_usage"],
     keywords: ["usage", "cost", "token"],
   },
-  // ----- EXPENSES -----
+  // ----- EXPENSES & EXPENSE CLAIMS -----
   {
     name: "expenses",
-    description: "Expense management — create, edit, list, categorize",
+    description: "Expense management, expense claims — create, edit, list, categorize, approve, reimburse",
     tools: ["create_expense", "edit_expense", "delete_expense", "list_expenses", "categorize_expense", "list_expense_categories", "list_bank_accounts"],
-    keywords: ["expense", "expenses", "spending", "expenditure", "kharcha"],
+    keywords: [
+      "expense", "expenses", "spending", "expenditure", "kharcha",
+      "claim", "claims", "expense claim", "reimbursement", "reimburse",
+      "pending approval", "approved claim", "rejected claim", "policy limit",
+      "employee claim", "processing time", "travel claim", "meal claim",
+    ],
   },
   // ----- BANKING -----
   {
@@ -144,58 +154,90 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   // ----- GST ACTIONS -----
   {
     name: "gst_actions",
-    description: "GST filing, e-invoice, e-way bill, ITC reconciliation",
+    description: "GST filing, e-invoice, e-way bill, ITC reconciliation, TDS/TCS, compliance",
     tools: ["file_gstr1", "file_gstr3b", "generate_einvoice", "cancel_einvoice", "create_eway_bill", "reconcile_gst", "get_gst_summary", "list_hsn_codes", "validate_gstin"],
-    keywords: ["gst", "gstr", "tax file", "einvoice", "eway", "hsn", "itc", "gst filing"],
+    keywords: [
+      "gst", "gstr", "tax file", "einvoice", "eway", "hsn", "itc", "gst filing",
+      "reconciliation", "mismatch", "b2c", "b2b", "blocked", "payable", "export invoice",
+      "compliance", "challan", "amendment", "tds", "tcs", "advance tax", "professional tax",
+      "form 16", "form 26q", "section 194", "tax return", "tax due", "tax calendar",
+      "net payable", "input credit", "reverse charge",
+    ],
   },
   // ----- P&L REPORTS -----
   {
     name: "reports_pnl",
-    description: "Profit & Loss, revenue breakdown, expense breakdown, margins",
+    description: "Profit & Loss, revenue breakdown, expense breakdown, margins, EBITDA",
     tools: ["get_profit_loss", "get_revenue_breakdown", "get_expense_breakdown", "get_gross_margin", "get_operating_margin", "compare_periods"],
-    keywords: ["p&l", "profit loss", "income statement", "revenue", "margin", "munafa", "profit"],
+    keywords: [
+      "p&l", "profit loss", "income statement", "revenue", "margin", "munafa", "profit",
+      "ebitda", "gross margin", "operating margin", "net margin", "pbt", "net profit",
+      "cost of goods", "gross profit", "income", "loss", "quarterly profit",
+    ],
   },
   // ----- BALANCE SHEET REPORTS -----
   {
     name: "reports_balance",
-    description: "Balance sheet and trial balance reports",
+    description: "Balance sheet, trial balance, equity, borrowings",
     tools: ["get_balance_sheet", "get_trial_balance", "get_chart_of_accounts"],
-    keywords: ["balance sheet", "trial balance", "account balance"],
+    keywords: [
+      "balance sheet", "trial balance", "account balance",
+      "equity", "borrowings", "loan", "reserves", "retained earnings",
+      "net worth", "total assets", "liabilities", "asset liability",
+    ],
   },
   // ----- CASH FLOW REPORTS -----
   {
     name: "reports_cashflow",
-    description: "Cash flow, liquidity, runway, burn rate analysis",
+    description: "Cash flow, liquidity, runway, burn rate, operating cash flow",
     tools: ["get_account_balance", "get_account_transactions", "get_cash_flow_statement", "get_bank_balance", "get_cash_position", "forecast_cash_flow", "list_bank_accounts"],
-    keywords: ["cash flow", "cash position", "liquidity", "runway", "burn rate"],
+    keywords: [
+      "cash flow", "cash position", "liquidity", "runway", "burn rate",
+      "operating cash", "free cash", "cash runway", "investing activities",
+      "financing activities", "cash burn", "net cash",
+    ],
   },
   // ----- PAYABLES REPORTS -----
   {
     name: "reports_payables",
-    description: "AP aging, overdue bills, vendor balances, DPO",
+    description: "AP aging, overdue bills, vendor balances, DPO, payment schedule",
     tools: ["get_ap_aging", "list_overdue_bills", "get_vendor_balance", "get_dpo", "list_vendors", "get_payment_schedule"],
-    keywords: ["ap aging", "overdue bill", "dpo", "payment schedule"],
+    keywords: [
+      "ap aging", "overdue bill", "dpo", "payment schedule",
+      "vendor aging", "bill aging", "payable aging", "vendor balance",
+    ],
   },
   // ----- GST REPORTS -----
   {
     name: "reports_gst",
-    description: "GST summary, GSTR data, ITC summary, HSN summary",
+    description: "GST summary, GSTR data, ITC summary, HSN summary, reconciliation",
     tools: ["get_gst_summary", "get_gstr1_data", "get_gstr3b_data", "get_itc_summary", "get_hsn_summary", "get_gst_reconciliation"],
-    keywords: ["gst summary", "gst report", "gstr data", "itc summary"],
+    keywords: [
+      "gst summary", "gst report", "gstr data", "itc summary",
+      "gst reconciliation", "gst mismatch", "itc blocked", "net gst",
+      "hsn summary", "hsn wise", "b2c sales", "b2b", "export invoice",
+    ],
   },
   // ----- KPI DASHBOARD -----
   {
     name: "kpi_dashboard",
-    description: "Key performance indicators, dashboard overview, health snapshot",
+    description: "Key performance indicators, dashboard overview, health snapshot, financial ratios",
     tools: ["get_revenue_kpi", "get_expense_kpi", "get_profit_kpi", "get_cashflow_kpi", "get_ar_kpi", "get_ap_kpi", "get_growth_rate", "get_runway"],
-    keywords: ["kpi", "dashboard", "health", "overview", "summary", "snapshot"],
+    keywords: [
+      "kpi", "dashboard", "health", "overview", "snapshot",
+      "ratio", "current ratio", "quick ratio", "debt equity", "dso", "dpo",
+      "ebitda", "pbt", "working capital", "financial ratio",
+    ],
   },
   // ----- TRENDS & ANALYSIS -----
   {
     name: "trends_analysis",
-    description: "Period comparisons, trend analysis, forecasting, anomaly detection",
+    description: "Period comparisons, trend analysis, forecasting, anomaly detection, budget vs actual",
     tools: ["compare_periods", "trend", "forecast", "anomaly_detection", "budget_vs_actual", "what_if_analysis", "get_profit_loss", "get_balance_sheet"],
-    keywords: ["compare", "vs", "trend", "forecast", "anomaly", "budget", "what if", "analysis"],
+    keywords: [
+      "compare", "vs", "trend", "forecast", "anomaly", "budget", "what if", "analysis",
+      "budget vs actual", "variance", "scenario", "projection", "runway",
+    ],
   },
 ];
 
@@ -255,8 +297,28 @@ export function selectToolsForQuery(
   if (matchedCategories.includes("reports_payables") && !expanded.includes("bills")) expanded.push("bills");
   if (matchedCategories.includes("reports_payables") && !expanded.includes("vendors")) expanded.push("vendors");
   if (matchedCategories.includes("gst_actions") && !expanded.includes("reports_gst")) expanded.push("reports_gst");
+  if (matchedCategories.includes("reports_gst") && !expanded.includes("gst_actions")) expanded.push("gst_actions");
   if (matchedCategories.includes("expenses") && !expanded.includes("accounts")) expanded.push("accounts");
   if (matchedCategories.includes("inventory") && !expanded.includes("invoices")) expanded.push("invoices");
+  // Fixed assets always need journal for depreciation entries
+  if (matchedCategories.includes("accounts") && queryLower.match(/depreciation|asset|cwip|fixed/)) {
+    if (!expanded.includes("journal")) expanded.push("journal");
+    if (!expanded.includes("reports_balance")) expanded.push("reports_balance");
+  }
+  // GST-related queries always benefit from invoice data
+  if ((matchedCategories.includes("gst_actions") || matchedCategories.includes("reports_gst")) && !expanded.includes("invoices")) {
+    expanded.push("invoices");
+  }
+  // Tax compliance queries need both GST and P&L context
+  if (queryLower.match(/advance tax|tax liability|tds|tcs|professional tax/)) {
+    if (!expanded.includes("gst_actions")) expanded.push("gst_actions");
+    if (!expanded.includes("reports_pnl")) expanded.push("reports_pnl");
+  }
+  // KPI / ratio queries include aging and cashflow
+  if (matchedCategories.includes("kpi_dashboard")) {
+    if (!expanded.includes("aging_reports")) expanded.push("aging_reports");
+    if (!expanded.includes("reports_cashflow")) expanded.push("reports_cashflow");
+  }
 
   const toolNames = resolveToolNames(expanded, mcpTools);
 

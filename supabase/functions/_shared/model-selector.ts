@@ -20,6 +20,13 @@ const COMPLEX_INDICATORS = [
   // Aggregation complexity
   "year over year", "yoy", "month over month", "mom", "quarter",
   "seasonal", "cyclical", "benchmark", "industry average",
+  // Financial analysis complexity
+  "reconciliation", "mismatch", "estimated", "calculate",
+  "compliance calendar", "deferred tax", "tax liability",
+  "scenario", "what if", "runway", "cash runway",
+  "budget vs actual", "ebitda", "operating margin", "free cash flow",
+  "depreciation schedule", "it act depreciation", "companies act",
+  "processing time", "average days", "dso", "dpo",
   // Hindi complex
   "vishleshan", "tulna", "purvanumaaan",
 ];
