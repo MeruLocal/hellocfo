@@ -982,9 +982,22 @@ function isWriteTool(toolName: string): boolean {
 function isToolResultError(result: string): boolean {
   const lower = result.toLowerCase();
   if (lower.startsWith('error:') || lower.startsWith('{"error"')) return true;
+  // Catch common MCP error patterns
+  if (lower.includes('"isError":true') || lower.includes('"iserror": true')) return true;
+  if (lower.includes('"statuscode":4') || lower.includes('"statuscode":5') || lower.includes('"statusCode":4') || lower.includes('"statusCode":5')) return true;
   try {
     const parsed = JSON.parse(result);
     if (parsed.error || parsed.Error || parsed.message?.toLowerCase().includes('error')) return true;
+    if (parsed.isError === true) return true;
+    if (parsed.statusCode && parsed.statusCode >= 400) return true;
+    // Check nested content array (MCP protocol format)
+    if (Array.isArray(parsed.content)) {
+      const textContent = parsed.content.find((c: { type: string }) => c.type === 'text');
+      if (textContent?.text) {
+        const textLower = textContent.text.toLowerCase();
+        if (textLower.startsWith('error:') || textLower.includes('"error"')) return true;
+      }
+    }
   } catch (_e) { /* not JSON */ }
   return false;
 }
@@ -1762,6 +1775,11 @@ serve(async (req) => {
             const result = await mcpClientInstance!.callTool(toolName, args);
             const truncated = truncateResult(result, isListTool(toolName) ? MAX_TOOL_RESULT_CHARS : 8000);
 
+            // Log write tool results for diagnostics
+            if (isWriteTool(toolName)) {
+              console.log(`[api] Write tool ${toolName} attempt ${attempt} result (first 500 chars):`, result.slice(0, 500));
+            }
+
             // Check if result payload indicates an error
             if (isToolResultError(result)) {
               lastError = `Tool returned error payload: ${result.slice(0, 200)}`;
@@ -2335,7 +2353,24 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             }
           }
 
-          // ─── Guardrail: validate success card doc numbers against real tool output ───
+          // ─── Guardrail: LLM claims failure but write tools actually succeeded ───
+          const llmClaimsFailure = /I wasn't able to|I couldn't complete|unable to complete|failed to create|failed to update|couldn't.*create|couldn't.*update|already retried/i.test(responseText);
+          if (llmClaimsFailure && hasSuccessfulWriteTool) {
+            console.warn(`[api] GUARDRAIL: LLM claimed failure but write tools succeeded. Rebuilding response.`);
+            const successfulWrites = mcpResults.filter(r => isWriteTool(r.tool) && r.success && r.result);
+            const parts: string[] = [];
+            for (const wr of successfulWrites) {
+              const doc = parseCreatedDoc(wr.tool, wr.result!);
+              const entityType = wr.tool.replace('create_', '').replace('update_', '').replace(/_/g, ' ');
+              if (doc?.docNumber) {
+                parts.push(`✅ **${entityType}** created successfully: **${doc.docNumber}**`);
+              } else {
+                parts.push(`✅ **${entityType}** created successfully.`);
+              }
+            }
+            responseText = parts.join('\n\n');
+          }
+
           if (hasSuccessfulWriteTool && hasSuccessCard) {
             const successfulWrites = mcpResults.filter(r => isWriteTool(r.tool) && r.success && r.result);
             const realDocNumbers: string[] = [];
