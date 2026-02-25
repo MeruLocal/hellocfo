@@ -328,8 +328,8 @@ function detectRequestedEntities(query: string): string[] {
 }
 
 const ENTITY_KEYWORDS: Record<string, string[]> = {
-  bills: ['bill', 'bills', 'purchase', 'payable', 'vendor'],
-  invoices: ['invoice', 'invoices', 'sales', 'receivable', 'customer'],
+  bills: ['bill', 'bills', 'purchase'],
+  invoices: ['invoice', 'invoices', 'sales'],
   customers: ['customer', 'customers', 'client', 'buyer', 'debtor'],
   vendors: ['vendor', 'vendors', 'supplier', 'creditor'],
   payments: ['payment', 'payments', 'receipt', 'collection'],
@@ -381,10 +381,19 @@ function scoreListToolForEntity(
   if (entitySignal === 0) return Number.NEGATIVE_INFINITY;
 
   let score = entitySignal * 3;
+
+  // Strong bonus if tool name directly contains the entity plural (e.g., "invoices" in "get_all_invoices")
+  const entityPlural = entity.endsWith('s') ? entity : entity + 's';
+  if (nameLower.includes(entityPlural.replace(/_/g, ''))) score += 8;
+
   if (/\b(list|get|fetch|search|find)\b/.test(nameLower)) score += 2;
   if (/\b(all|list|fetch|search|find)\b/.test(text)) score += 3;
   if (/\bby[_\s-]?id\b|\bdetail\b|\bsingle\b/.test(text)) score -= 5;
   if (/^(create_|update_|delete_|void_|cancel_)/.test(nameLower)) score -= 8;
+
+  // Penalize report/aging/summary tools — they shouldn't be used for simple list queries
+  if (/\b(report|aging|ageing|aged|summary|kpi|dashboard)\b/.test(text)) score -= 6;
+
   if (preferOverdue && /\boverdue|aging|ageing|receivable|payable|due\b/.test(text)) score += 5;
 
   const schema = tool.inputSchema as { properties?: Record<string, unknown> } | undefined;
