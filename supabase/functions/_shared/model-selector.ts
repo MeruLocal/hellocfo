@@ -27,6 +27,10 @@ const COMPLEX_INDICATORS = [
   "budget vs actual", "ebitda", "operating margin", "free cash flow",
   "depreciation schedule", "it act depreciation", "companies act",
   "processing time", "average days", "dso", "dpo",
+  // Accounting masters / compliance complexity
+  "cost center profitability", "intercompany", "inter-company",
+  "consolidation", "foreign currency", "impairment",
+  "eway compliance", "three-way match", "landed cost",
   // Hindi complex
   "vishleshan", "tulna", "purvanumaaan",
 ];

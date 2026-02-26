@@ -37,7 +37,7 @@ const FINANCIAL_KEYWORDS: { words: string[]; subCategory: string }[] = [
   { words: ["reconcile", "match", "categorize", "split"], subCategory: "banking" },
   { words: ["merge", "transfer", "adjust"], subCategory: "manage" },
   { words: ["reminder", "yaad dilao"], subCategory: "reminder" },
-  { words: ["e-invoice", "einvoice", "e-way", "eway"], subCategory: "compliance" },
+  { words: ["e-invoice", "einvoice", "e-way", "eway", "eway bill", "ewb", "transporter", "shipment"], subCategory: "compliance" },
   // View/query keywords
   { words: ["show", "get", "fetch", "list", "view", "display", "dikhao", "batao", "dikha"], subCategory: "view" },
   { words: ["report", "statement", "summary", "overview"], subCategory: "report" },
@@ -61,8 +61,13 @@ const FINANCIAL_KEYWORDS: { words: string[]; subCategory: string }[] = [
   { words: ["ebitda", "pbt", "dso", "dpo", "current ratio", "quick ratio", "debt equity", "working capital", "net worth"], subCategory: "kpis" },
   { words: ["inventory", "stock", "item", "product", "maal", "saman"], subCategory: "inventory" },
   { words: ["customer", "vendor", "contact", "client", "supplier", "graahak"], subCategory: "contacts" },
-  { words: ["bank", "account", "ledger", "transaction", "khata"], subCategory: "ledger" },
+  { words: ["bank", "account", "ledger", "transaction", "khata", "chart of accounts", "cost center", "cost centre", "journal entry", "unposted", "recurring entry"], subCategory: "ledger" },
   { words: ["forecast", "predict", "projection", "budget", "plan"], subCategory: "forecast" },
+  // Platform features (Drive, Comments, Tasks, Workspace)
+  { words: ["file", "files", "document", "documents", "uploaded", "storage", "shared with me", "drive", "attachment"], subCategory: "drive" },
+  { words: ["comment", "comments", "mentioned", "mention", "unread comment", "thread", "resolved comment"], subCategory: "comments" },
+  { words: ["task", "tasks", "pending task", "overdue task", "assigned", "my tasks", "due this week", "team task"], subCategory: "tasks" },
+  { words: ["dashboard", "notification", "notifications", "workspace", "alert", "bookmark", "favorite", "kpi", "login history"], subCategory: "workspace" },
   { words: ["top", "best", "worst", "highest", "lowest", "most", "least"], subCategory: "ranking" },
   { words: ["how much", "kitna", "total", "count", "number"], subCategory: "aggregate" },
   { words: ["what", "kya", "which", "kaun", "when", "kab"], subCategory: "query" },

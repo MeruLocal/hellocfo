@@ -63,13 +63,15 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   // ----- CHART OF ACCOUNTS / FIXED ASSETS -----
   {
     name: "accounts",
-    description: "Chart of accounts, fixed assets — list, view, update",
+    description: "Chart of accounts, fixed assets, account hierarchy, inactive accounts, cost centers",
     tools: ["get_charts_of_accounts", "get_chart_of_accounts_by_id", "update_chart_of_accounts"],
     keywords: [
       "account", "accounts", "chart of accounts", "coa", "ledger", "gl", "general ledger",
       "fixed asset", "asset register", "depreciation", "book value", "net book value",
       "capital work", "cwip", "fully depreciated", "disposed asset", "asset addition",
       "it act depreciation", "companies act depreciation", "wdv", "slm",
+      "inactive account", "dormant account", "cost center", "cost centre",
+      "account hierarchy", "account balance", "party outstanding",
     ],
   },
   // ----- TRANSACTIONS / BANKING -----
@@ -103,6 +105,21 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     description: "Delivery challans — list, view, update",
     tools: ["get_all_delivery_challans", "get_delivery_challan_by_id", "update_delivery_challan"],
     keywords: ["challan", "challans", "delivery", "dispatch", "dc"],
+  },
+  // ----- EWAY BILLS -----
+  {
+    name: "eway_bills",
+    description: "E-way bill generation, tracking, cancellation, extension, compliance",
+    tools: [
+      "create_eway_bill", "get_eway_bill", "cancel_eway_bill", "extend_eway_bill",
+      "list_eway_bills", "get_eway_bill_summary", "update_eway_bill_vehicle",
+    ],
+    keywords: [
+      "eway", "e-way", "eway bill", "e-way bill", "ewb",
+      "eway expiring", "eway cancelled", "eway pending",
+      "shipment", "transit", "transporter", "vehicle",
+      "part-b", "part b", "consolidated eway",
+    ],
   },
   // ----- ACCOUNT-PAYEE MAPPING -----
   {
@@ -147,15 +164,20 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   // ----- JOURNAL ENTRIES -----
   {
     name: "journal",
-    description: "Journal entries and chart of accounts",
+    description: "Journal entries, chart of accounts, ledger, recurring entries, provisions, accruals",
     tools: ["create_journal_entry", "edit_journal_entry", "delete_journal_entry", "list_journal_entries", "get_chart_of_accounts", "list_accounts"],
-    keywords: ["journal", "ledger", "day book", "journal entry"],
+    keywords: [
+      "journal", "ledger", "day book", "journal entry",
+      "unposted", "recurring entry", "provision", "accrual",
+      "suspense", "inter-company", "year-end closing", "adjusting entry",
+      "foreign currency revaluation",
+    ],
   },
   // ----- GST ACTIONS -----
   {
     name: "gst_actions",
     description: "GST filing, e-invoice, e-way bill, ITC reconciliation, TDS/TCS, compliance",
-    tools: ["file_gstr1", "file_gstr3b", "generate_einvoice", "cancel_einvoice", "create_eway_bill", "reconcile_gst", "get_gst_summary", "list_hsn_codes", "validate_gstin"],
+    tools: ["file_gstr1", "file_gstr3b", "generate_einvoice", "cancel_einvoice", "reconcile_gst", "get_gst_summary", "list_hsn_codes", "validate_gstin"],
     keywords: [
       "gst", "gstr", "tax file", "einvoice", "eway", "hsn", "itc", "gst filing",
       "reconciliation", "mismatch", "b2c", "b2b", "blocked", "payable", "export invoice",
@@ -308,6 +330,12 @@ export function selectToolsForQuery(
   // GST-related queries always benefit from invoice data
   if ((matchedCategories.includes("gst_actions") || matchedCategories.includes("reports_gst")) && !expanded.includes("invoices")) {
     expanded.push("invoices");
+  }
+  // Eway bill queries need invoice context and GST context
+  if (matchedCategories.includes("eway_bills")) {
+    if (!expanded.includes("invoices")) expanded.push("invoices");
+    if (!expanded.includes("delivery_challans")) expanded.push("delivery_challans");
+    if (!expanded.includes("gst_actions")) expanded.push("gst_actions");
   }
   // Tax compliance queries need both GST and P&L context
   if (queryLower.match(/advance tax|tax liability|tds|tcs|professional tax/)) {
@@ -526,13 +554,17 @@ export const CACHE_INVALIDATION_MAP: Record<string, string[]> = {
   file_gstr3b: ["gst", "tax", "itc", "filing"],
   generate_einvoice: ["gst", "invoice"],
   cancel_einvoice: ["gst", "invoice"],
-  create_eway_bill: ["gst"],
   reconcile_gst: ["gst", "tax", "itc"],
   // Inventory
   create_product: ["inventory", "stock"],
   edit_product: ["inventory", "stock"],
   adjust_stock: ["inventory", "stock"],
   stock_transfer: ["inventory", "stock"],
+  // Eway bills
+  create_eway_bill: ["gst", "eway", "invoice"],
+  cancel_eway_bill: ["gst", "eway"],
+  extend_eway_bill: ["gst", "eway"],
+  update_eway_bill_vehicle: ["gst", "eway"],
 };
 
 /**

@@ -343,6 +343,7 @@ function detectRequestedEntities(query: string): string[] {
   if (/\bcredit.?notes?\b/.test(q)) entities.push('credit_notes');
   if (/\bdelivery.?challans?\b/.test(q)) entities.push('delivery_challans');
   if (/\btransactions?\b/.test(q)) entities.push('transactions');
+  if (/\b(?:eway|e-way)\s*bills?\b/.test(q)) entities.push('eway_bills');
   return entities;
 }
 
@@ -355,6 +356,7 @@ const ENTITY_KEYWORDS: Record<string, string[]> = {
   credit_notes: ['credit note', 'credit notes', 'refund', 'return'],
   delivery_challans: ['delivery challan', 'challan', 'dispatch'],
   transactions: ['transaction', 'transactions', 'bank', 'statement'],
+  eway_bills: ['eway', 'e-way', 'eway bill', 'ewb', 'shipment', 'transit'],
 };
 
 function inferEntityFromTool(
@@ -590,6 +592,14 @@ const ENTITY_COLUMN_ALIASES: Record<string, string[][]> = {
     ['status', 'state'],
     ['amount', 'total', 'received', 'paid'],
   ],
+  eway_bills: [
+    ['eway_bill_number', 'ewb_number', 'ewb_no', 'eway_number'],
+    ['invoice_number', 'document_number', 'doc_ref'],
+    ['party_name', 'customer_name', 'vendor_name', 'consignee'],
+    ['valid_from', 'generation_date', 'created_date'],
+    ['valid_upto', 'expiry_date', 'validity'],
+    ['status', 'state', 'ewb_status'],
+  ],
 };
 
 function isInternalOrIdField(key: string, values: unknown[]): boolean {
@@ -678,6 +688,7 @@ function entityTitle(entity: string): string {
     credit_notes: 'Credit Notes',
     delivery_challans: 'Delivery Challans',
     transactions: 'Transactions',
+    eway_bills: 'E-Way Bills',
   };
   return map[entity] || entity.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -976,7 +987,7 @@ function injectScopeIds(
 }
 
 function isWriteTool(toolName: string): boolean {
-  return /^(create_|update_|delete_|void_|cancel_)/.test(toolName);
+  return /^(create_|update_|delete_|void_|cancel_|extend_|file_|generate_|import_|adjust_|record_)/.test(toolName);
 }
 
 function isToolResultError(result: string): boolean {
