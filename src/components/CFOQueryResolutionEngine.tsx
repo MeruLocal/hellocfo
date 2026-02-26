@@ -2564,6 +2564,46 @@ function IntentListView({
   generationProgress
 }: IntentListViewProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [intentSubTab, setIntentSubTab] = React.useState<'intents' | 'cases'>('intents');
+  const [casesGenProgress, setCasesGenProgress] = React.useState<{ running: boolean; current: number; total: number; created: number; skipped: number; failed: number }>({ running: false, current: 0, total: 0, created: 0, skipped: 0, failed: 0 });
+  const [casesGenCount, setCasesGenCount] = React.useState<number>(10);
+  const [showCasesGenInput, setShowCasesGenInput] = React.useState(false);
+
+  const handleGenerateFromCases = async () => {
+    if (casesGenProgress.running) return;
+    const count = Math.min(Math.max(1, casesGenCount), 50);
+    const casesToProcess = TEST_CASES.slice(0, count);
+
+    const batchSize = 8;
+    const totalBatches = Math.ceil(casesToProcess.length / batchSize);
+    setCasesGenProgress({ running: true, current: 0, total: totalBatches, created: 0, skipped: 0, failed: 0 });
+    setShowCasesGenInput(false);
+
+    try {
+      const { supabase } = await import('@/integrations/supabase/client');
+      const { data, error } = await supabase.functions.invoke('generate-intents-from-cases', {
+        body: { testCases: casesToProcess, batchSize },
+      });
+
+      if (error) throw error;
+
+      const summary = data?.summary || {};
+      setCasesGenProgress(prev => ({
+        ...prev,
+        running: false,
+        current: totalBatches,
+        created: summary.created || 0,
+        skipped: summary.skipped || 0,
+        failed: summary.failed || 0,
+      }));
+
+      toast({ title: 'Generation complete', description: `Created: ${summary.created}, Skipped: ${summary.skipped}, Failed: ${summary.failed}` });
+    } catch (err) {
+      console.error('Generate from cases error:', err);
+      setCasesGenProgress(prev => ({ ...prev, running: false }));
+      toast({ title: 'Generation failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2578,10 +2618,35 @@ function IntentListView({
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Intent Library</h1>
-          <p className="text-gray-500 mt-1">Manage query intents and AI-generated configurations</p>
+          <h1 className="text-2xl font-bold text-foreground">Intent Library</h1>
+          <p className="text-muted-foreground mt-1">Manage query intents and AI-generated configurations</p>
         </div>
         <div className="flex gap-2">
+          {/* Sub-tab toggle */}
+          <div className="flex gap-1 bg-muted p-1 rounded-lg mr-2">
+            <button
+              onClick={() => setIntentSubTab('intents')}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
+                intentSubTab === 'intents'
+                  ? 'bg-background shadow text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <MessageSquare size={14} /> Intents ({intents.length})
+            </button>
+            <button
+              onClick={() => setIntentSubTab('cases')}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
+                intentSubTab === 'cases'
+                  ? 'bg-background shadow text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <ListOrdered size={14} /> Test Cases ({TEST_CASES.length})
+            </button>
+          </div>
+          {intentSubTab === 'intents' && (
+            <>
           {/* Import Dropdown */}
           <div className="relative group">
             <button className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-200">
@@ -2633,6 +2698,49 @@ function IntentListView({
             </div>
           </div>
           
+          <div className="relative">
+            <button
+              onClick={() => setShowCasesGenInput(!showCasesGenInput)}
+              disabled={casesGenProgress.running}
+              className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50"
+            >
+              {casesGenProgress.running ? <Loader2 size={16} className="animate-spin" /> : <ListOrdered size={16} />}
+              {casesGenProgress.running ? 'Generating...' : `Generate from Cases (${TEST_CASES.length})`}
+            </button>
+            {showCasesGenInput && !casesGenProgress.running && (
+              <div className="absolute top-full mt-2 right-0 bg-white border border-border rounded-lg shadow-lg p-4 z-50 w-72">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Number of cases to generate (max 50)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={casesGenCount}
+                  onChange={(e) => setCasesGenCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+                  className="w-full px-3 py-2 border border-input rounded-md text-sm mb-3 bg-background"
+                />
+                <p className="text-xs text-muted-foreground mb-3">
+                  Will process cases 1–{Math.min(casesGenCount, 50)} of {TEST_CASES.length} total.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleGenerateFromCases}
+                    className="flex-1 px-3 py-2 bg-emerald-600 text-white rounded-md text-sm hover:bg-emerald-700"
+                  >
+                    Start Generation
+                  </button>
+                  <button
+                    onClick={() => setShowCasesGenInput(false)}
+                    className="px-3 py-2 border border-border rounded-md text-sm hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <button
             onClick={onOpenAIGenerator}
             className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-purple-700 hover:to-indigo-700"
@@ -2646,8 +2754,36 @@ function IntentListView({
           >
             <Plus size={16} /> Add Intent
           </button>
+            </>
+          )}
         </div>
       </div>
+
+      {intentSubTab === 'intents' ? (
+        <>
+      {/* Cases Generation Progress */}
+      {casesGenProgress.running && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <div className="flex items-center gap-3">
+            <Loader2 size={20} className="animate-spin text-emerald-600" />
+            <div className="flex-1">
+              <p className="font-medium text-emerald-700">
+                Generating intents from {TEST_CASES.length} test cases via Azure OpenAI...
+              </p>
+              <p className="text-xs text-emerald-600 mt-1">
+                This may take several minutes. Do not close this page.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+      {!casesGenProgress.running && casesGenProgress.created > 0 && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <p className="font-medium text-emerald-700">
+            ✅ Generation complete: {casesGenProgress.created} created, {casesGenProgress.skipped} skipped, {casesGenProgress.failed} failed
+          </p>
+        </div>
+      )}
 
       {/* Import/Generation Progress */}
       {(isImporting || generationProgress.total > 0) && (
@@ -2823,6 +2959,10 @@ function IntentListView({
           </div>
         )}
       </div>
+        </>
+      ) : (
+        <CasesLibraryView />
+      )}
     </div>
   );
 }
@@ -5726,7 +5866,7 @@ export default function CFOQueryResolutionEngine() {
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
-    { id: 'cases', label: 'Cases Library', icon: <ListOrdered size={18} />, count: TEST_CASES.length },
+    
     { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
     ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
@@ -5923,7 +6063,7 @@ export default function CFOQueryResolutionEngine() {
         )}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
         {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
-        {activeTab === 'cases' && <CasesLibraryView />}
+        
         {activeTab === 'api-console' && <ApiConsole />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
