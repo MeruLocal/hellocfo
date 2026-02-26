@@ -15,6 +15,10 @@ interface DataCharacteristics {
   hasComplianceDeadlines: boolean;
   hasTaxData: boolean;
   hasAssetData: boolean;
+  hasPercentages: boolean;
+  hasBenchmarkData: boolean;
+  hasProjectionData: boolean;
+  hasInventoryData: boolean;
   recordCount: number;
 }
 
@@ -22,6 +26,7 @@ function analyzeData(toolResults: { tool: string; result?: string; success: bool
   const successfulResults = toolResults.filter(r => r.success && r.result);
   let hasTimeSeries = false, hasAmounts = false, hasList = false, hasThresholds = false, totalRecords = 0;
   let hasComplianceDeadlines = false, hasTaxData = false, hasAssetData = false;
+  let hasPercentages = false, hasBenchmarkData = false, hasProjectionData = false, hasInventoryData = false;
   for (const result of successfulResults) {
     const text = result.result || "";
     if (/\b(month|quarter|year|week|period|date|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(text)) hasTimeSeries = true;
@@ -31,8 +36,12 @@ function analyzeData(toolResults: { tool: string; result?: string; success: bool
     if (/due\s+date|deadline|filing|deposit\s+by|penalty|last\s+date|due\s+on|compliance|gstr|tds\s+return|tax\s+calendar/i.test(text)) hasComplianceDeadlines = true;
     if (/tax\s+payable|itc|input\s+tax|net\s+gst|tds\s+deducted|tcs|advance\s+tax|gst\s+liability|tax\s+due|challan/i.test(text)) hasTaxData = true;
     if (/book\s+value|wdv|written\s+down|depreciation|fixed\s+asset|asset\s+register|cwip|net\s+block|gross\s+block|accumulated/i.test(text)) hasAssetData = true;
+    if (/percent|%|ratio|proportion|share|contribution|of\s+total/i.test(text)) hasPercentages = true;
+    if (/benchmark|industry|average|median|sector|peer|standard/i.test(text)) hasBenchmarkData = true;
+    if (/forecast|projected|estimated|expected|next\s+(month|quarter|year)|prediction|runway/i.test(text)) hasProjectionData = true;
+    if (/stock|inventory|reorder|sku|warehouse|batch|fifo|weighted|dead\s+stock|expiry|turnover\s+ratio/i.test(text)) hasInventoryData = true;
   }
-  return { hasTimeSeries, hasAmounts, hasList, hasThresholds, hasComplianceDeadlines, hasTaxData, hasAssetData, recordCount: totalRecords };
+  return { hasTimeSeries, hasAmounts, hasList, hasThresholds, hasComplianceDeadlines, hasTaxData, hasAssetData, hasPercentages, hasBenchmarkData, hasProjectionData, hasInventoryData, recordCount: totalRecords };
 }
 
 export function detectAutoEnrichments(toolResults: { tool: string; result?: string; success: boolean }[]): AutoEnrichment[] {
@@ -43,6 +52,10 @@ export function detectAutoEnrichments(toolResults: { tool: string; result?: stri
   if (c.hasList && c.recordCount > 3) enrichments.push({ type: "ranking", description: "Rank and highlight top/bottom items in the list", applied: true });
   if (c.hasThresholds || c.hasComplianceDeadlines || c.hasTaxData) enrichments.push({ type: "alert_evaluation", description: "Evaluate thresholds, flag compliance deadlines, tax dues, and items that need urgent attention", applied: true });
   if (c.hasAssetData) enrichments.push({ type: "depreciation_summary", description: "Summarize asset values with gross block, accumulated depreciation, net book value (WDV), and highlight fully depreciated assets", applied: true });
+  if (c.hasPercentages) enrichments.push({ type: "percentage_of_total", description: "Show each item as a percentage of the total. Highlight dominant contributors and minor items", applied: true });
+  if (c.hasBenchmarkData) enrichments.push({ type: "benchmark_comparison", description: "Compare values against industry benchmarks or historical averages. Flag items above or below standard", applied: true });
+  if (c.hasProjectionData) enrichments.push({ type: "projection", description: "Show projected values with confidence indicators. Highlight upward/downward trajectory", applied: true });
+  if (c.hasInventoryData) enrichments.push({ type: "inventory_health", description: "Assess stock health: flag dead stock, items below reorder level, expiring batches, and abnormal turnover ratios", applied: true });
   return enrichments;
 }
 

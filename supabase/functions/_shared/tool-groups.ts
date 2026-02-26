@@ -20,14 +20,26 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     name: "invoices",
     description: "Sales invoices — list, search, view, create, update",
     tools: ["get_all_invoices", "get_invoice_by_id", "update_invoice", "find_invoice_document", "create_invoice", "create_invoice_line_item"],
-    keywords: ["invoice", "invoices", "sales", "revenue", "billing", "billed", "sale", "create invoice", "new invoice", "raise invoice"],
+    keywords: [
+      "invoice", "invoices", "sales", "revenue", "billing", "billed", "sale",
+      "create invoice", "new invoice", "raise invoice",
+      "discount", "discounted", "churn", "channel", "recurring revenue",
+      "lifetime value", "clv", "acquisition", "fulfilment", "back order",
+      "disputed", "partial payment", "advance received",
+    ],
   },
   // ----- BILLS / PURCHASES -----
   {
     name: "bills",
     description: "Vendor bills — list, search, view, create, update",
     tools: ["get_bills", "get_bill_by_id", "update_bill", "create_bill"],
-    keywords: ["bill", "bills", "purchase", "purchases", "vendor bill", "payable", "payables", "ap", "create bill", "new bill"],
+    keywords: [
+      "bill", "bills", "purchase", "purchases", "vendor bill", "payable", "payables", "ap",
+      "create bill", "new bill",
+      "grn", "goods received", "three-way match", "price variance",
+      "purchase order", "po", "blanket order", "spend concentration",
+      "vendor contract", "sole source", "early payment discount",
+    ],
   },
   // ----- PAYMENTS -----
   {
@@ -159,7 +171,13 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     name: "inventory",
     description: "Product and stock management",
     tools: ["create_product", "edit_product", "adjust_stock", "list_products", "get_product", "stock_transfer", "list_warehouses", "stock_valuation"],
-    keywords: ["stock", "warehouse", "product", "item", "sku", "inventory"],
+    keywords: [
+      "stock", "warehouse", "product", "item", "sku", "inventory",
+      "fifo", "weighted average", "dead stock", "slow moving", "expiry",
+      "reorder", "safety stock", "eoq", "bin", "batch",
+      "scrap", "wastage", "stock adjustment", "landed cost",
+      "negative stock", "stock valuation", "turnover ratio",
+    ],
   },
   // ----- JOURNAL ENTRIES -----
   {
@@ -477,21 +495,53 @@ export interface FollowUpResult {
   reason?: string;
 }
 
+// Patterns that signal a contextual follow-up even for longer queries (5+ words)
+const CONTEXTUAL_FOLLOWUP_PATTERNS = [
+  /^(compare|filter|sort|group|break\s*down)\s+(that|this|it|them)\b/i,
+  /^(compare|show)\s+(that|this|it|them)\s+with\b/i,
+  /\b(same|that|this|these|those|it)\s+(for|by|with|against|vs|versus)\b/i,
+  /^(now|also|and)\s+(show|compare|filter|break|calculate|do|send|create)/i,
+  /^(what about|how about|and for)\b/i,
+  /\b(drill\s*down|go\s+deeper|more\s+detail|break\s*down|elaborate)\b/i,
+  /\b(the\s+same|do\s+the\s+same|repeat|same\s+thing)\b/i,
+  /^(yes|haan|ok|sure),?\s+(and|but|also|now|then)\b/i,
+  /\b(previous|last|above|earlier)\s+(one|item|record|customer|vendor|invoice|bill)\b/i,
+];
+
 /**
  * Detect if a query is a follow-up to a previous conversation turn.
  * If so, returns the tool names from the last assistant message metadata.
+ *
+ * Two modes:
+ *   1. Short queries (<5 words) without entity keywords → always follow-up
+ *   2. Longer queries (5-12 words) matching contextual patterns → follow-up
  */
 export function detectFollowUp(
   query: string,
   conversationHistory: { role: string; content: string; metadata?: { toolsUsed?: string[]; toolsLoaded?: string[] } }[],
 ): FollowUpResult {
   const words = query.trim().split(/\s+/);
-  if (words.length >= 5) return { isFollowUp: false };
   if (conversationHistory.length < 2) return { isFollowUp: false };
 
   // Queries with explicit entity keywords are standalone, not follow-ups
   const entityKeywords = /\b(bills?|invoices?|customers?|vendors?|payments?|credit.?notes?|challans?|transactions?|expenses?)\b/i;
-  if (entityKeywords.test(query)) return { isFollowUp: false };
+
+  let isCandidate = false;
+  let reason = "";
+
+  if (words.length < 5 && !entityKeywords.test(query)) {
+    // Short query without entity keywords — classic follow-up
+    isCandidate = true;
+    reason = `Short follow-up (${words.length} words)`;
+  } else if (words.length <= 12 && !entityKeywords.test(query)) {
+    // Medium query — check for contextual follow-up patterns
+    if (CONTEXTUAL_FOLLOWUP_PATTERNS.some(p => p.test(query))) {
+      isCandidate = true;
+      reason = `Contextual follow-up (${words.length} words, pattern match)`;
+    }
+  }
+
+  if (!isCandidate) return { isFollowUp: false };
 
   // Find the last assistant message with tool metadata
   for (let i = conversationHistory.length - 1; i >= 0; i--) {
@@ -502,7 +552,7 @@ export function detectFollowUp(
         return {
           isFollowUp: true,
           reuseToolGroup: tools,
-          reason: `Short follow-up (${words.length} words), reusing ${tools.length} tools from last turn`,
+          reason: `${reason}, reusing ${tools.length} tools from last turn`,
         };
       }
     }

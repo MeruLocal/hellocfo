@@ -45,7 +45,7 @@ const FINANCIAL_KEYWORDS: { words: string[]; subCategory: string }[] = [
   { words: ["compare", "comparison", "versus", "vs", "tulna"], subCategory: "compare" },
   // Entity keywords
   { words: ["invoice", "bill", "credit note", "debit note", "payment", "expense", "journal"], subCategory: "transaction" },
-  { words: ["revenue", "income", "sales", "turnover", "aay", "bikri"], subCategory: "revenue" },
+  { words: ["revenue", "income", "sales", "turnover", "aay", "bikri", "discount", "churn", "channel", "lifetime value", "clv", "acquisition"], subCategory: "revenue" },
   { words: ["expense", "cost", "spending", "kharcha", "vyay"], subCategory: "expense" },
   { words: ["claim", "reimbursement", "reimburse", "pending claim", "expense claim", "approved claim", "rejected claim"], subCategory: "expense" },
   { words: ["profit", "loss", "margin", "p&l", "laabh", "naafa", "nuksan"], subCategory: "profitability" },
@@ -59,7 +59,7 @@ const FINANCIAL_KEYWORDS: { words: string[]; subCategory: string }[] = [
   { words: ["tds deducted", "tds certificate", "tds payable", "tds receivable", "tds return", "tax compliance", "tax calendar"], subCategory: "tax" },
   { words: ["kpi", "ratio", "metric", "health", "score", "performance"], subCategory: "kpis" },
   { words: ["ebitda", "pbt", "dso", "dpo", "current ratio", "quick ratio", "debt equity", "working capital", "net worth"], subCategory: "kpis" },
-  { words: ["inventory", "stock", "item", "product", "maal", "saman"], subCategory: "inventory" },
+  { words: ["inventory", "stock", "item", "product", "maal", "saman", "fifo", "weighted average", "dead stock", "reorder", "expiry", "warehouse", "batch", "scrap", "landed cost"], subCategory: "inventory" },
   { words: ["customer", "vendor", "contact", "client", "supplier", "graahak"], subCategory: "contacts" },
   { words: ["bank", "account", "ledger", "transaction", "khata", "chart of accounts", "cost center", "cost centre", "journal entry", "unposted", "recurring entry"], subCategory: "ledger" },
   { words: ["forecast", "predict", "projection", "budget", "plan"], subCategory: "forecast" },

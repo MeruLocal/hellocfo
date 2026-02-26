@@ -31,6 +31,12 @@ const COMPLEX_INDICATORS = [
   "cost center profitability", "intercompany", "inter-company",
   "consolidation", "foreign currency", "impairment",
   "eway compliance", "three-way match", "landed cost",
+  // Extended sales / purchases / inventory analysis
+  "churn rate", "lifetime value", "customer acquisition",
+  "spend concentration", "price variance", "lead time analysis",
+  "fifo vs weighted", "economic order quantity", "safety stock",
+  "dead stock", "turnover ratio", "demand variability",
+  "waterfall", "contribution margin", "break even",
   // Hindi complex
   "vishleshan", "tulna", "purvanumaaan",
 ];
