@@ -2565,6 +2565,41 @@ function IntentListView({
 }: IntentListViewProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [intentSubTab, setIntentSubTab] = React.useState<'intents' | 'cases'>('intents');
+  const [casesGenProgress, setCasesGenProgress] = React.useState<{ running: boolean; current: number; total: number; created: number; skipped: number; failed: number }>({ running: false, current: 0, total: 0, created: 0, skipped: 0, failed: 0 });
+
+  const handleGenerateFromCases = async () => {
+    if (casesGenProgress.running) return;
+    if (!confirm(`This will generate intents for all ${TEST_CASES.length} test cases using Azure OpenAI. Existing intents with the same name will be skipped. Continue?`)) return;
+
+    const batchSize = 8;
+    const totalBatches = Math.ceil(TEST_CASES.length / batchSize);
+    setCasesGenProgress({ running: true, current: 0, total: totalBatches, created: 0, skipped: 0, failed: 0 });
+
+    try {
+      const { supabase } = await import('@/integrations/supabase/client');
+      const { data, error } = await supabase.functions.invoke('generate-intents-from-cases', {
+        body: { testCases: TEST_CASES, batchSize },
+      });
+
+      if (error) throw error;
+
+      const summary = data?.summary || {};
+      setCasesGenProgress(prev => ({
+        ...prev,
+        running: false,
+        current: totalBatches,
+        created: summary.created || 0,
+        skipped: summary.skipped || 0,
+        failed: summary.failed || 0,
+      }));
+
+      alert(`Done! Created: ${summary.created}, Skipped: ${summary.skipped}, Failed: ${summary.failed}. Refresh the page to see new intents.`);
+    } catch (err) {
+      console.error('Generate from cases error:', err);
+      setCasesGenProgress(prev => ({ ...prev, running: false }));
+      alert(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2660,6 +2695,15 @@ function IntentListView({
           </div>
           
           <button
+            onClick={handleGenerateFromCases}
+            disabled={casesGenProgress.running}
+            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50"
+          >
+            {casesGenProgress.running ? <Loader2 size={16} className="animate-spin" /> : <ListOrdered size={16} />}
+            {casesGenProgress.running ? 'Generating...' : `Generate from Cases (${TEST_CASES.length})`}
+          </button>
+
+          <button
             onClick={onOpenAIGenerator}
             className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-purple-700 hover:to-indigo-700"
           >
@@ -2679,6 +2723,30 @@ function IntentListView({
 
       {intentSubTab === 'intents' ? (
         <>
+      {/* Cases Generation Progress */}
+      {casesGenProgress.running && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <div className="flex items-center gap-3">
+            <Loader2 size={20} className="animate-spin text-emerald-600" />
+            <div className="flex-1">
+              <p className="font-medium text-emerald-700">
+                Generating intents from {TEST_CASES.length} test cases via Azure OpenAI...
+              </p>
+              <p className="text-xs text-emerald-600 mt-1">
+                This may take several minutes. Do not close this page.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+      {!casesGenProgress.running && casesGenProgress.created > 0 && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <p className="font-medium text-emerald-700">
+            ✅ Generation complete: {casesGenProgress.created} created, {casesGenProgress.skipped} skipped, {casesGenProgress.failed} failed
+          </p>
+        </div>
+      )}
+
       {/* Import/Generation Progress */}
       {(isImporting || generationProgress.total > 0) && (
         <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
