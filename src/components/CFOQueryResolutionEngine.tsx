@@ -2564,6 +2564,7 @@ function IntentListView({
   generationProgress
 }: IntentListViewProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [intentSubTab, setIntentSubTab] = React.useState<'intents' | 'cases'>('intents');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2578,10 +2579,35 @@ function IntentListView({
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Intent Library</h1>
-          <p className="text-gray-500 mt-1">Manage query intents and AI-generated configurations</p>
+          <h1 className="text-2xl font-bold text-foreground">Intent Library</h1>
+          <p className="text-muted-foreground mt-1">Manage query intents and AI-generated configurations</p>
         </div>
         <div className="flex gap-2">
+          {/* Sub-tab toggle */}
+          <div className="flex gap-1 bg-muted p-1 rounded-lg mr-2">
+            <button
+              onClick={() => setIntentSubTab('intents')}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
+                intentSubTab === 'intents'
+                  ? 'bg-background shadow text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <MessageSquare size={14} /> Intents ({intents.length})
+            </button>
+            <button
+              onClick={() => setIntentSubTab('cases')}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
+                intentSubTab === 'cases'
+                  ? 'bg-background shadow text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <ListOrdered size={14} /> Test Cases ({TEST_CASES.length})
+            </button>
+          </div>
+          {intentSubTab === 'intents' && (
+            <>
           {/* Import Dropdown */}
           <div className="relative group">
             <button className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-200">
@@ -2646,9 +2672,13 @@ function IntentListView({
           >
             <Plus size={16} /> Add Intent
           </button>
+            </>
+          )}
         </div>
       </div>
 
+      {intentSubTab === 'intents' ? (
+        <>
       {/* Import/Generation Progress */}
       {(isImporting || generationProgress.total > 0) && (
         <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
@@ -2823,6 +2853,10 @@ function IntentListView({
           </div>
         )}
       </div>
+        </>
+      ) : (
+        <CasesLibraryView />
+      )}
     </div>
   );
 }
@@ -5726,7 +5760,7 @@ export default function CFOQueryResolutionEngine() {
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
-    { id: 'cases', label: 'Cases Library', icon: <ListOrdered size={18} />, count: TEST_CASES.length },
+    
     { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
     ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
@@ -5923,7 +5957,7 @@ export default function CFOQueryResolutionEngine() {
         )}
         {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
         {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
-        {activeTab === 'cases' && <CasesLibraryView />}
+        
         {activeTab === 'api-console' && <ApiConsole />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
