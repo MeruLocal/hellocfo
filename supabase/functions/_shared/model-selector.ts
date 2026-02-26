@@ -37,6 +37,25 @@ const COMPLEX_INDICATORS = [
   "fifo vs weighted", "economic order quantity", "safety stock",
   "dead stock", "turnover ratio", "demand variability",
   "waterfall", "contribution margin", "break even",
+  // Advanced tax / compliance analysis
+  "mat computation", "minimum alternate tax", "deferred tax asset",
+  "deferred tax liability", "transfer pricing", "form 26as reconciliation",
+  "pan verification status", "effective tax rate trend",
+  "brought forward losses", "withholding comparison",
+  // Advanced reports / ratios
+  "dupont analysis", "altman z-score", "operating leverage degree",
+  "interest coverage ratio", "cash conversion cycle",
+  "common size statement", "fund flow statement",
+  "revenue recognition schedule", "capex vs opex breakdown",
+  // Fixed assets / accounting advanced
+  "component depreciation", "revaluation surplus", "cwip aging",
+  "impairment loss", "slm vs wdv", "borrowing costs capitalized",
+  "asset maintenance cost", "useful life analysis",
+  // Accounting period-end
+  "period end closing", "provision for doubtful",
+  "prepaid amortization schedule", "control account reconciliation",
+  "credit card reconciliation", "loan account reconciliation",
+  "foreign currency revaluation impact",
   // Hindi complex
   "vishleshan", "tulna", "purvanumaaan",
 ];

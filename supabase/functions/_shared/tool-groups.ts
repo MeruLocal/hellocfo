@@ -84,6 +84,12 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "it act depreciation", "companies act depreciation", "wdv", "slm",
       "inactive account", "dormant account", "cost center", "cost centre",
       "account hierarchy", "account balance", "party outstanding",
+      "suspense account", "control account", "subsidiary ledger",
+      "foreign currency ledger", "prepaid expense", "amortization",
+      "lease agreement", "revaluation", "impairment loss",
+      "asset tag", "physical verification", "useful life",
+      "component depreciation", "insurance expiring", "maintenance cost",
+      "zero balance", "unusual balance",
     ],
   },
   // ----- TRANSACTIONS / BANKING -----
@@ -157,6 +163,10 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "claim", "claims", "expense claim", "reimbursement", "reimburse",
       "pending approval", "approved claim", "rejected claim", "policy limit",
       "employee claim", "processing time", "travel claim", "meal claim",
+      "per diem", "mileage", "petty cash", "auto approved",
+      "receipt missing", "receipt attached", "policy violation",
+      "fuel expense", "client entertainment", "travel expense",
+      "international travel", "department wise expense",
     ],
   },
   // ----- BANKING -----
@@ -188,7 +198,9 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "journal", "ledger", "day book", "journal entry",
       "unposted", "recurring entry", "provision", "accrual",
       "suspense", "inter-company", "year-end closing", "adjusting entry",
-      "foreign currency revaluation",
+      "foreign currency revaluation", "period end", "unclosed period",
+      "doubtful debt", "loan reconciliation", "credit card reconciliation",
+      "narration", "high value transaction", "control total",
     ],
   },
   // ----- GST ACTIONS -----
@@ -200,8 +212,15 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "gst", "gstr", "tax file", "einvoice", "eway", "hsn", "itc", "gst filing",
       "reconciliation", "mismatch", "b2c", "b2b", "blocked", "payable", "export invoice",
       "compliance", "challan", "amendment", "tds", "tcs", "advance tax", "professional tax",
-      "form 16", "form 26q", "section 194", "tax return", "tax due", "tax calendar",
-      "net payable", "input credit", "reverse charge",
+      "form 16", "form 26q", "form 24q", "form 15g", "form 15h", "section 194", "section 192",
+      "tax return", "tax due", "tax calendar", "tax audit", "oltas",
+      "net payable", "input credit", "reverse charge", "rcm",
+      "nil rated", "exempt supply", "cdn", "place of supply",
+      "gstr-9", "annual return", "late fee", "interest on gst",
+      "form 26as", "pan verification", "lower deduction", "withholding",
+      "mat", "minimum alternate tax", "deferred tax", "transfer pricing",
+      "tds return", "tds challan", "tds default", "short deduction",
+      "tds on salary", "brought forward loss", "effective tax rate",
     ],
   },
   // ----- P&L REPORTS -----
@@ -213,6 +232,9 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "p&l", "profit loss", "income statement", "revenue", "margin", "munafa", "profit",
       "ebitda", "gross margin", "operating margin", "net margin", "pbt", "net profit",
       "cost of goods", "gross profit", "income", "loss", "quarterly profit",
+      "segment wise", "contribution margin", "common size", "common-size",
+      "fund flow", "revenue recognition", "capex vs opex",
+      "cogs breakdown", "expense by department",
     ],
   },
   // ----- BALANCE SHEET REPORTS -----
@@ -224,6 +246,8 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "balance sheet", "trial balance", "account balance",
       "equity", "borrowings", "loan", "reserves", "retained earnings",
       "net worth", "total assets", "liabilities", "asset liability",
+      "comparative balance", "year over year balance", "three year",
+      "consolidated financials", "standalone financials",
     ],
   },
   // ----- CASH FLOW REPORTS -----
@@ -235,6 +259,8 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "cash flow", "cash position", "liquidity", "runway", "burn rate",
       "operating cash", "free cash", "cash runway", "investing activities",
       "financing activities", "cash burn", "net cash",
+      "cash conversion cycle", "fcf", "free cash flow",
+      "monthly cash burn", "cash burn rate",
     ],
   },
   // ----- PAYABLES REPORTS -----
@@ -256,6 +282,9 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "gst summary", "gst report", "gstr data", "itc summary",
       "gst reconciliation", "gst mismatch", "itc blocked", "net gst",
       "hsn summary", "hsn wise", "b2c sales", "b2b", "export invoice",
+      "gstr-2b", "gstr-2a", "itc reversal", "filing status", "auto populated",
+      "nil return", "hsn purchase", "gstr-9 readiness", "itc utilization",
+      "itc on capital", "reverse charge mechanism",
     ],
   },
   // ----- KPI DASHBOARD -----
@@ -267,6 +296,9 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       "kpi", "dashboard", "health", "overview", "snapshot",
       "ratio", "current ratio", "quick ratio", "debt equity", "dso", "dpo",
       "ebitda", "pbt", "working capital", "financial ratio",
+      "roe", "roi", "return on equity", "dupont",
+      "altman", "z-score", "interest coverage", "operating leverage",
+      "cash position snapshot", "scorecard",
     ],
   },
   // ----- TRENDS & ANALYSIS -----
@@ -277,6 +309,9 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     keywords: [
       "compare", "vs", "trend", "forecast", "anomaly", "budget", "what if", "analysis",
       "budget vs actual", "variance", "scenario", "projection", "runway",
+      "break even", "break-even", "variance analysis",
+      "capex vs opex", "year over year", "yoy",
+      "quarter over quarter", "qoq", "month over month", "mom",
     ],
   },
 ];
@@ -364,6 +399,23 @@ export function selectToolsForQuery(
   if (matchedCategories.includes("kpi_dashboard")) {
     if (!expanded.includes("aging_reports")) expanded.push("aging_reports");
     if (!expanded.includes("reports_cashflow")) expanded.push("reports_cashflow");
+  }
+  // Expense claims benefit from accounts context for category mapping
+  if (matchedCategories.includes("expenses") && queryLower.match(/department|per diem|travel|mileage|petty cash/)) {
+    if (!expanded.includes("reports_pnl")) expanded.push("reports_pnl");
+  }
+  // Journal/accounting queries benefit from balance sheet context
+  if (matchedCategories.includes("journal") && queryLower.match(/period end|year.?end|provision|doubtful|prepaid|amortiz/)) {
+    if (!expanded.includes("reports_balance")) expanded.push("reports_balance");
+    if (!expanded.includes("accounts")) expanded.push("accounts");
+  }
+  // P&L + Balance Sheet for comprehensive financial analysis
+  if (matchedCategories.includes("reports_pnl") && queryLower.match(/segment|common.?size|contribution|fund flow|break.?even/)) {
+    if (!expanded.includes("reports_balance")) expanded.push("reports_balance");
+  }
+  // Inventory queries with valuation need accounts context
+  if (matchedCategories.includes("inventory") && queryLower.match(/valuation|holding cost|landed|write.?off|obsolescence|provision/)) {
+    if (!expanded.includes("accounts")) expanded.push("accounts");
   }
 
   const toolNames = resolveToolNames(expanded, mcpTools);

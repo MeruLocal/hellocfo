@@ -13,6 +13,7 @@ import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
+import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1713,8 +1714,14 @@ serve(async (req) => {
         sendEvent('response_chunk', { text: errorMsg });
         sendComplete({
           success: false, query, path: 'error', response: errorMsg,
+          category: classification.category,
+          subCategory: classification.subCategory || 'error',
+          modelTier: 'cheap',
+          toolCategories: [],
+          responseType: 'error' as ResponseType,
           matchedIntent: null, reasoning: 'MCP not connected',
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          isWriteOperation: false,
         });
 
         feedbackPath = "error_mcp";
@@ -1942,9 +1949,15 @@ serve(async (req) => {
           sendEvent('response_chunk', { text: msg });
           sendComplete({
             success: false, query, path: 'deterministic_list',
+            category: effectiveCategory,
+            subCategory: classification.subCategory || 'view',
+            modelTier: modelTier.tier,
+            toolCategories: ['list'],
+            responseType: 'error' as ResponseType,
             matchedIntent: null, reasoning: 'No matching dynamic list tools',
             response: msg,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+            isWriteOperation: false,
           });
           feedbackPath = "deterministic_list";
           feedbackResponse = msg;
@@ -2010,12 +2023,17 @@ serve(async (req) => {
           query,
           path: 'deterministic_list',
           category: effectiveCategory,
+          subCategory: classification.subCategory || 'view',
+          modelTier: modelTier.tier,
+          toolCategories: ['list', 'view'],
+          responseType: 'table' as ResponseType,
           matchedIntent: null,
           extractedEntities: {},
           reasoning: `Deterministic list fetch for ${deterministicListEntities.join(', ')}`,
           toolResults: deterministicMcpResults.map(r => ({ tool: r.tool, success: r.success, error: r.error, attempts: r.attempts })),
           response: responseText,
           executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+          isWriteOperation: false,
         });
 
         feedbackPath = "deterministic_list";
@@ -2069,9 +2087,14 @@ serve(async (req) => {
 
           sendComplete({
             success: true, query, path: 'llm', category: 'general_chat',
+            subCategory: classification.subCategory || 'greeting',
+            modelTier: modelTier.tier,
+            toolCategories: [],
+            responseType: 'info' as ResponseType,
             matchedIntent: null, extractedEntities: {}, reasoning: 'General conversation',
             pipelineSteps: [], enrichments: [], response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+            isWriteOperation: false,
           });
 
           feedbackPath = "general_chat";
@@ -2438,8 +2461,18 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             if (doc) createdDocsForComplete.push(doc);
           }
 
+          // Detect response type based on query and tools used
+          const toolsUsedNames = mcpResults.filter(r => r.success).map(r => r.tool);
+          const isWriteOp = toolsUsedNames.some(t => /^(create_|update_|delete_|void_|cancel_)/.test(t));
+          const responseTypeResult = detectResponseType(query, toolsUsedNames, isWriteOp);
+          const finalResponseType = responseTypeResult.type || detectResponseTypeFromResults(mcpResults);
+
           sendComplete({
             success: true, query, path: 'llm', category: effectiveCategory,
+            subCategory: classification.subCategory || 'general',
+            modelTier: modelTier.tier,
+            toolCategories: toolSelection.matchedCategories || [],
+            responseType: finalResponseType,
             matchedIntent: bestIntent ? { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence } : null,
             extractedEntities: {},
             reasoning: isConfirmation
@@ -2451,6 +2484,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
             isConfirmation,
+            isWriteOperation: isWriteOp,
             ...(createdDocsForComplete.length > 0 ? { createdDocs: createdDocsForComplete } : {}),
           });
 
@@ -2479,10 +2513,16 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
         success: false,
         query,
         path: 'error',
+        category: feedbackCategory || 'unknown',
+        subCategory: 'error',
+        modelTier: modelTier.tier,
+        toolCategories: [],
+        responseType: 'error' as ResponseType,
         response: safeMessage,
         matchedIntent: null,
         reasoning: 'Processing failed',
         executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+        isWriteOperation: false,
       });
     } finally {
       // Persist conversation to unified_conversations
