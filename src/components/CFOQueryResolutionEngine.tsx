@@ -2566,19 +2566,23 @@ function IntentListView({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [intentSubTab, setIntentSubTab] = React.useState<'intents' | 'cases'>('intents');
   const [casesGenProgress, setCasesGenProgress] = React.useState<{ running: boolean; current: number; total: number; created: number; skipped: number; failed: number }>({ running: false, current: 0, total: 0, created: 0, skipped: 0, failed: 0 });
+  const [casesGenCount, setCasesGenCount] = React.useState<number>(10);
+  const [showCasesGenInput, setShowCasesGenInput] = React.useState(false);
 
   const handleGenerateFromCases = async () => {
     if (casesGenProgress.running) return;
-    if (!confirm(`This will generate intents for all ${TEST_CASES.length} test cases using Azure OpenAI. Existing intents with the same name will be skipped. Continue?`)) return;
+    const count = Math.min(Math.max(1, casesGenCount), 50);
+    const casesToProcess = TEST_CASES.slice(0, count);
 
     const batchSize = 8;
-    const totalBatches = Math.ceil(TEST_CASES.length / batchSize);
+    const totalBatches = Math.ceil(casesToProcess.length / batchSize);
     setCasesGenProgress({ running: true, current: 0, total: totalBatches, created: 0, skipped: 0, failed: 0 });
+    setShowCasesGenInput(false);
 
     try {
       const { supabase } = await import('@/integrations/supabase/client');
       const { data, error } = await supabase.functions.invoke('generate-intents-from-cases', {
-        body: { testCases: TEST_CASES, batchSize },
+        body: { testCases: casesToProcess, batchSize },
       });
 
       if (error) throw error;
@@ -2593,11 +2597,11 @@ function IntentListView({
         failed: summary.failed || 0,
       }));
 
-      alert(`Done! Created: ${summary.created}, Skipped: ${summary.skipped}, Failed: ${summary.failed}. Refresh the page to see new intents.`);
+      toast({ title: 'Generation complete', description: `Created: ${summary.created}, Skipped: ${summary.skipped}, Failed: ${summary.failed}` });
     } catch (err) {
       console.error('Generate from cases error:', err);
       setCasesGenProgress(prev => ({ ...prev, running: false }));
-      alert(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast({ title: 'Generation failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
     }
   };
 
@@ -2694,14 +2698,48 @@ function IntentListView({
             </div>
           </div>
           
-          <button
-            onClick={handleGenerateFromCases}
-            disabled={casesGenProgress.running}
-            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50"
-          >
-            {casesGenProgress.running ? <Loader2 size={16} className="animate-spin" /> : <ListOrdered size={16} />}
-            {casesGenProgress.running ? 'Generating...' : `Generate from Cases (${TEST_CASES.length})`}
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowCasesGenInput(!showCasesGenInput)}
+              disabled={casesGenProgress.running}
+              className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50"
+            >
+              {casesGenProgress.running ? <Loader2 size={16} className="animate-spin" /> : <ListOrdered size={16} />}
+              {casesGenProgress.running ? 'Generating...' : `Generate from Cases (${TEST_CASES.length})`}
+            </button>
+            {showCasesGenInput && !casesGenProgress.running && (
+              <div className="absolute top-full mt-2 right-0 bg-white border border-border rounded-lg shadow-lg p-4 z-50 w-72">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Number of cases to generate (max 50)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={casesGenCount}
+                  onChange={(e) => setCasesGenCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+                  className="w-full px-3 py-2 border border-input rounded-md text-sm mb-3 bg-background"
+                />
+                <p className="text-xs text-muted-foreground mb-3">
+                  Will process cases 1–{Math.min(casesGenCount, 50)} of {TEST_CASES.length} total.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleGenerateFromCases}
+                    className="flex-1 px-3 py-2 bg-emerald-600 text-white rounded-md text-sm hover:bg-emerald-700"
+                  >
+                    Start Generation
+                  </button>
+                  <button
+                    onClick={() => setShowCasesGenInput(false)}
+                    className="px-3 py-2 border border-border rounded-md text-sm hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             onClick={onOpenAIGenerator}
