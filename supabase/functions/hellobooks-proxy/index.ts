@@ -49,15 +49,42 @@ serve(async (req) => {
         });
       }
 
-      console.log(`[hellobooks-proxy] Calling ${HELLOBOOKS_BASE}/user/getallusers`);
-      const res = await fetch(`${HELLOBOOKS_BASE}/user/getallusers`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
+      // Try multiple endpoint variations since the API is case-sensitive
+      const endpoints = [
+        { url: `${HELLOBOOKS_BASE}/user/getallusers`, method: "GET" },
+        { url: `${HELLOBOOKS_BASE}/user/getAllUsers`, method: "GET" },
+        { url: `${HELLOBOOKS_BASE}/user/getallusers`, method: "POST" },
+        { url: `${HELLOBOOKS_BASE}/user/getAllUsers`, method: "POST" },
+        { url: `${HELLOBOOKS_BASE}/entity/getall`, method: "GET" },
+        { url: `${HELLOBOOKS_BASE}/entity/getAll`, method: "GET" },
+      ];
+
+      let res: Response | null = null;
+      for (const ep of endpoints) {
+        console.log(`[hellobooks-proxy] Trying ${ep.method} ${ep.url}`);
+        const attempt = await fetch(ep.url, {
+          method: ep.method,
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          ...(ep.method === "POST" ? { body: JSON.stringify({}) } : {}),
+        });
+        const status = attempt.status;
+        console.log(`[hellobooks-proxy] ${ep.method} ${ep.url} -> ${status}`);
+        if (status !== 404) {
+          res = attempt;
+          break;
+        }
+        // Consume body to prevent resource leak
+        await attempt.text();
+      }
+
+      if (!res) {
+        return new Response(JSON.stringify({ error: "No valid endpoint found for entity listing", entities: [] }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const text = await res.text();
       console.log(`[hellobooks-proxy] getallusers status=${res.status}, body=${text.substring(0, 500)}`);
