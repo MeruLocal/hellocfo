@@ -92,7 +92,7 @@ const callLovableAI = async (
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
-        max_tokens: 8192,
+        max_tokens: 16384,
         temperature: 0.3,
       }),
       signal: controller.signal,
@@ -354,6 +354,46 @@ OUTPUT ONLY the JSON array - no explanations:
     });
 
     console.log(`✅ ${uniqueIntents.length} unique intents after filtering duplicates`);
+
+    // Retry if we got fewer intents than requested
+    if (uniqueIntents.length < intentCount) {
+      const missing = intentCount - uniqueIntents.length;
+      console.log(`⚠️ Only ${uniqueIntents.length}/${intentCount} intents generated. Retrying for ${missing} more...`);
+
+      const retryExistingNames = [...existingIntentNames, ...uniqueIntents.map(i => i.name)];
+      const retryExistingStr = retryExistingNames.map(n => `- ${n}`).join('\n');
+
+      const retryUserPrompt = `Generate EXACTLY ${missing} unique CFO query intents for:
+- Module: ${moduleName}
+- Sub-Module: ${subModuleName}
+
+IMPORTANT: These intent names already exist - DO NOT generate duplicates:
+${retryExistingStr}
+
+AVAILABLE MCP TOOLS:
+${toolsDescription}
+
+${userPrompt.split('For EACH intent')[1] ? 'For EACH intent' + userPrompt.split('For EACH intent')[1] : ''}`;
+
+      try {
+        const retryResponse = await callLovableAI(systemPrompt, retryUserPrompt);
+        const retryIntents = parseJSON(retryResponse) as GeneratedIntent[];
+        if (Array.isArray(retryIntents)) {
+          const retryNamesLower = new Set(retryExistingNames.map(n => n.toLowerCase().trim()));
+          for (const intent of retryIntents) {
+            const nameLower = intent.name?.toLowerCase().trim();
+            if (nameLower && !retryNamesLower.has(nameLower)) {
+              uniqueIntents.push(intent);
+              retryNamesLower.add(nameLower);
+              if (uniqueIntents.length >= intentCount) break;
+            }
+          }
+          console.log(`✅ After retry: ${uniqueIntents.length} total intents`);
+        }
+      } catch (retryError) {
+        console.error('⚠️ Retry failed, proceeding with partial results:', retryError);
+      }
+    }
 
     // Validate and structure each intent with complete information
     const validatedIntents = uniqueIntents.map((intent, idx) => ({
