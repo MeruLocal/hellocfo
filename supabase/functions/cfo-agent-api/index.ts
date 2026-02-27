@@ -11,6 +11,10 @@ import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
+import { validateWriteToolArgs, type WriteToolTracker, buildWriteToolSummary } from "../_shared/write-validator.ts";
+import { logQueryRouting, type RoutingLogEntry } from "../_shared/routing-logger.ts";
+import { loadPendingMCQ, resolveMCQ, saveMCQState, buildMCQSSEEvent, type MCQState } from "../_shared/mcq-engine.ts";
+import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1212,6 +1216,25 @@ serve(async (req) => {
         let args = sanitizeToolArgs(rawArgs, schema);
         args = injectScopeIds(args, schema, effectiveEntityId, mcpOrgId || '');
 
+        // Gap 7: Pre-flight validation for write tools
+        if (isWriteTool(toolName)) {
+          const validation = validateWriteToolArgs(toolName, args);
+          if (!validation.valid) {
+            console.warn(`[api] Write validation failed for ${toolName}: ${validation.errors.join(', ')}`);
+            sendEvent('write_validation', { tool: toolName, valid: false, errors: validation.errors, warnings: validation.warnings });
+            return {
+              result: JSON.stringify({ error: `Validation failed: ${validation.errors.join('; ')}` }),
+              success: false,
+              attempts: 0,
+              failureReason: `Pre-flight validation: ${validation.errors.join('; ')}`,
+            };
+          }
+          if (validation.warnings.length > 0) {
+            sendEvent('write_validation', { tool: toolName, valid: true, warnings: validation.warnings });
+          }
+        }
+        args = injectScopeIds(args, schema, effectiveEntityId, mcpOrgId || '');
+
         // For list tools, inject pagination defaults if not already set
         if (isListTool(toolName)) {
           args = injectPaginationDefaults(
@@ -1873,6 +1896,47 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           await checkForSuggestedIntents(supabase, "api");
         }
       }
+
+      // Gap 9: Query routing log — full trace
+      const writeTrackers: WriteToolTracker[] = allMcpResults
+        .filter(r => isWriteTool(r.tool))
+        .map(r => ({
+          tool: r.tool,
+          args: r.input || {},
+          success: r.success,
+          result: r.result,
+          error: r.error,
+          attempts: r.attempts || 1,
+        }));
+
+      await logQueryRouting(supabase, {
+        requestId: apiMessageId,
+        conversationId: effectiveConversationId,
+        entityId: effectiveEntityId,
+        userId: user.id,
+        query,
+        routePath: feedbackPath,
+        category: feedbackCategory,
+        intentMatched: feedbackIntent || undefined,
+        intentConfidence: feedbackIntentConfidence || undefined,
+        toolsLoaded: feedbackToolsLoaded,
+        toolsUsed: feedbackToolsUsed,
+        toolsFailed: allMcpResults.filter(r => !r.success).map(r => r.tool),
+        toolSelectionStrategy: feedbackStrategy || undefined,
+        modelUsed: feedbackModel || undefined,
+        inputTokens: feedbackTokenCost ? Math.floor(feedbackTokenCost * 0.6) : 0,
+        outputTokens: feedbackTokenCost ? Math.floor(feedbackTokenCost * 0.4) : 0,
+        totalTokens: feedbackTokenCost || 0,
+        responseTimeMs,
+        isWriteOperation: allMcpResults.some(r => isWriteTool(r.tool)),
+        writeToolResults: writeTrackers.length > 0 ? buildWriteToolSummary(writeTrackers).details.map(d => ({
+          tool: d.tool,
+          success: d.success,
+          error: d.error,
+          attempts: d.attempts,
+          validationErrors: d.validationErrors,
+        })) : undefined,
+      }, "api");
 
       mcpClientInstance?.close();
       closeStream();
