@@ -26,6 +26,7 @@ import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from ".
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 import { validateWriteToolArgs } from "../_shared/write-validator.ts";
 import { logQueryRouting } from "../_shared/routing-logger.ts";
+import { autoCancelPendingMCQ, extractConversationContext, buildConversationContextPrompt, MAX_MCQ_CHAIN } from "../_shared/mcq-engine.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -314,6 +315,15 @@ serve(async (req) => {
             console.warn(`[${reqId}] Failed to load persisted conversation history:`, historyError);
           }
         }
+
+        // GAP 2+3: Auto-cancel any pending MCQ from previous turn
+        const effectiveConversationId = incomingConversationId || reqId;
+        const mcqCancelResult = await autoCancelPendingMCQ(supabase as AnySupabaseClient, effectiveConversationId, reqId);
+
+        // GAP 1: Extract multi-turn conversation context
+        const conversationCtx = extractConversationContext(conversationHistory as Array<{ role: string; content: string; metadata?: unknown }>);
+        if (mcqCancelResult.cancelled) conversationCtx.mcqAbandoned = true;
+        const multiTurnContextPrompt = buildConversationContextPrompt(conversationCtx);
 
         const { data: llmConfig, error: llmError } = await (supabase as AnySupabaseClient)
           .from("llm_configs")
@@ -646,7 +656,7 @@ serve(async (req) => {
             const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
               ? "You are a finance assistant connected to live MCP tools. For every user request, call MCP tools when data/action is needed. Do not invent data. Use tool results as source of truth."
               : SYSTEM_PROMPTS.unified;
-            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.`;
+            let systemPrompt = `${categoryPrompt}\n\nContext: ${businessContext?.country || "IN"}, ${businessContext?.currency || "INR"}, ${businessContext?.industry || "General"}\nAvailable tools: ${filteredTools.map((t) => t.function.name).join(", ")}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${multiTurnContextPrompt}`;
 
             // Build messages
             const messages: unknown[] = [...conversationHistory, { role: "user", content: query }];

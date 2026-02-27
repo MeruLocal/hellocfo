@@ -28,6 +28,7 @@ import {
   RouteClassification,
   ToolsFilteredInfo,
   MCQData,
+  MCQStatus,
 } from './types';
 import type { Intent, BusinessContext, CountryConfig, LLMConfig } from '@/hooks/useCFOData';
 import type { MCPTool } from '@/hooks/useMCPTools';
@@ -55,7 +56,8 @@ export function RealtimeCFOAgent({
   const [conversationId, setConversationId] = useState<string>(crypto.randomUUID());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
-  
+  const [mcqChainCount, setMcqChainCount] = useState(0);
+  const MAX_MCQ_CHAIN = 2;
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -181,28 +183,43 @@ export function RealtimeCFOAgent({
 
       case 'mcq_prompt': {
         const mcqData = data as unknown as MCQData;
-        // Insert an MCQ card as an agent message
-        setMessages(prev => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage && lastMessage.role === 'agent' && lastMessage.isStreaming) {
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...lastMessage,
-                content: mcqData.question,
-                mcqData: { ...mcqData, selectedValue: null },
-                isStreaming: false,
-              }
-            ];
+        // GAP 4: MCQ chain fatigue — suppress after MAX_MCQ_CHAIN
+        setMcqChainCount(prev => {
+          const newCount = prev + 1;
+          if (newCount > MAX_MCQ_CHAIN) {
+            console.log(`[MCQ] Chain limit reached (${newCount}/${MAX_MCQ_CHAIN}), suppressing MCQ`);
+            return newCount;
           }
-          return [...prev, {
-            id: crypto.randomUUID(),
-            role: 'agent' as const,
-            content: mcqData.question,
-            timestamp: new Date(),
-            mcqData: { ...mcqData, selectedValue: null },
-            isStreaming: false,
-          }];
+          // Insert an MCQ card as an agent message
+          setMessages(prevMsgs => {
+            const lastMessage = prevMsgs[prevMsgs.length - 1];
+            const mcqDataWithMeta: MCQData = {
+              ...mcqData,
+              selectedValue: null,
+              createdAt: new Date().toISOString(),
+              status: 'active' as MCQStatus,
+            };
+            if (lastMessage && lastMessage.role === 'agent' && lastMessage.isStreaming) {
+              return [
+                ...prevMsgs.slice(0, -1),
+                {
+                  ...lastMessage,
+                  content: mcqData.question,
+                  mcqData: mcqDataWithMeta,
+                  isStreaming: false,
+                }
+              ];
+            }
+            return [...prevMsgs, {
+              id: crypto.randomUUID(),
+              role: 'agent' as const,
+              content: mcqData.question,
+              timestamp: new Date(),
+              mcqData: mcqDataWithMeta,
+              isStreaming: false,
+            }];
+          });
+          return newCount;
         });
         setIsProcessing(false);
         setCurrentPhase('');
@@ -294,6 +311,17 @@ export function RealtimeCFOAgent({
       content: inputValue.trim(),
       timestamp: new Date()
     };
+
+    // GAP 3: Free-text override — cancel any active MCQ cards when user sends a new message
+    setMessages(prev => prev.map(msg => {
+      if (msg.mcqData && msg.mcqData.status === 'active' && !msg.mcqData.selectedValue) {
+        return { ...msg, mcqData: { ...msg.mcqData, status: 'overridden' as MCQStatus } };
+      }
+      return msg;
+    }));
+
+    // Reset MCQ chain counter for new query flow
+    setMcqChainCount(0);
 
     // Add user message
     setMessages(prev => [...prev, userMessage]);
@@ -428,7 +456,8 @@ export function RealtimeCFOAgent({
   const handleMCQSelect = useCallback((messageId: string, option: { label: string; value: string; description?: string }) => {
     setMessages(prev => prev.map(msg => {
       if (msg.id === messageId && msg.mcqData) {
-        return { ...msg, mcqData: { ...msg.mcqData, selectedValue: option.value } };
+        const newStatus: MCQStatus = option.value === 'cancel' ? 'cancelled' : 'resolved';
+        return { ...msg, mcqData: { ...msg.mcqData, selectedValue: option.value, status: newStatus } };
       }
       return msg;
     }));
@@ -447,7 +476,6 @@ export function RealtimeCFOAgent({
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, userMessage]);
-      // Trigger sendMessage logic with the selection
       setInputValue('');
     }, 100);
   }, []);
@@ -457,6 +485,7 @@ export function RealtimeCFOAgent({
     setCurrentUnderstanding({});
     setCurrentPhase('');
     setConversationId(crypto.randomUUID());
+    setMcqChainCount(0);
   };
 
   const handleSelectConversation = async (selectedConvId: string) => {

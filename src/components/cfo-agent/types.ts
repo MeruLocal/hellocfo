@@ -94,6 +94,8 @@ export interface AgentUnderstanding {
   toolsFiltered?: ToolsFilteredInfo;
 }
 
+export type MCQStatus = 'active' | 'resolved' | 'expired' | 'overridden' | 'cancelled';
+
 export interface MCQData {
   mcqId?: string;
   mcqType: 'entity_resolution' | 'parameter_resolution' | 'write_confirmation' | 'disambiguation';
@@ -102,6 +104,8 @@ export interface MCQData {
   pendingTool?: string;
   context?: Record<string, unknown>;
   selectedValue?: string | null;
+  createdAt?: string;
+  status?: MCQStatus;
 }
 
 export interface ChatMessage {
