@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import {
   Search,
@@ -13,7 +13,8 @@ import {
   Calendar,
   Hash,
   RefreshCw,
-  ExternalLink,
+  Building2,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +29,7 @@ import {
 } from '@/components/ui/select';
 import { format, isToday, isYesterday, isThisWeek, formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { EntityNameCompact } from '@/components/whatsapp/EntityName';
 
 interface ConversationRecord {
   id: string;
@@ -83,6 +85,8 @@ export function GlobalChatHistory() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [modeFilter, setModeFilter] = useState<string>('all');
+  const [entityFilter, setEntityFilter] = useState<string>('all');
+  const [orgFilter, setOrgFilter] = useState<string>('all');
   const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<ChatMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -121,7 +125,6 @@ export function GlobalChatHistory() {
     setIsLoadingMessages(true);
 
     try {
-      // Messages are stored inline in the unified_conversations row
       const msgs = Array.isArray(conv.messages) ? conv.messages as ChatMessage[] : [];
       setExpandedMessages(msgs);
     } catch (e) {
@@ -132,10 +135,26 @@ export function GlobalChatHistory() {
     }
   }, [expandedConversationId]);
 
+  // Unique entities and orgs for filters
+  const uniqueEntities = useMemo(() =>
+    Array.from(new Set(conversations.map((c) => c.entity_id).filter(Boolean))) as string[],
+    [conversations]
+  );
+  const uniqueOrgs = useMemo(() =>
+    Array.from(new Set(conversations.map((c) => c.org_id).filter(Boolean))) as string[],
+    [conversations]
+  );
+  const uniqueModes = useMemo(() =>
+    Array.from(new Set(conversations.map((c) => c.mode).filter(Boolean))) as string[],
+    [conversations]
+  );
+
   // Filtering
   const filtered = conversations.filter((conv) => {
     if (conv.is_deleted) return false;
     if (modeFilter !== 'all' && conv.mode !== modeFilter) return false;
+    if (entityFilter !== 'all' && conv.entity_id !== entityFilter) return false;
+    if (orgFilter !== 'all' && conv.org_id !== orgFilter) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       const matchesSummary = conv.summary?.toLowerCase().includes(q);
@@ -165,9 +184,6 @@ export function GlobalChatHistory() {
     return b.localeCompare(a);
   });
 
-  // Unique modes for filter
-  const uniqueModes = Array.from(new Set(conversations.map((c) => c.mode).filter(Boolean))) as string[];
-
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -188,8 +204,8 @@ export function GlobalChatHistory() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 max-w-md min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={searchQuery}
@@ -198,9 +214,37 @@ export function GlobalChatHistory() {
             className="pl-9"
           />
         </div>
+        <Select value={entityFilter} onValueChange={setEntityFilter}>
+          <SelectTrigger className="w-[180px]">
+            <Building2 size={14} className="mr-1 shrink-0" />
+            <SelectValue placeholder="All Entities" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Entities</SelectItem>
+            {uniqueEntities.map((eid) => (
+              <SelectItem key={eid} value={eid}>
+                {eid}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={orgFilter} onValueChange={setOrgFilter}>
+          <SelectTrigger className="w-[180px]">
+            <Users size={14} className="mr-1 shrink-0" />
+            <SelectValue placeholder="All Orgs" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Orgs</SelectItem>
+            {uniqueOrgs.map((oid) => (
+              <SelectItem key={oid} value={oid}>
+                {oid}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={modeFilter} onValueChange={setModeFilter}>
           <SelectTrigger className="w-[160px]">
-            <Filter size={14} className="mr-1" />
+            <Filter size={14} className="mr-1 shrink-0" />
             <SelectValue placeholder="All Modes" />
           </SelectTrigger>
           <SelectContent>
@@ -276,6 +320,19 @@ export function GlobalChatHistory() {
                                 <span className="text-xs text-muted-foreground font-mono">
                                   {conv.chat_display_id}
                                 </span>
+                              )}
+                            </div>
+                            {/* Entity & Org tags */}
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                                <Building2 size={9} />
+                                <EntityNameCompact entityId={conv.entity_id} orgId={conv.org_id || ''} />
+                              </Badge>
+                              {conv.org_id && (
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1">
+                                  <Users size={9} />
+                                  {conv.org_id}
+                                </Badge>
                               )}
                             </div>
                             {conv.last_message_preview && (
@@ -395,7 +452,10 @@ export function GlobalChatHistory() {
 
                             {/* Conversation metadata footer */}
                             <div className="flex items-center gap-3 mt-3 pt-2 border-t border-border text-[10px] text-muted-foreground">
-                              <span>Entity: {conv.entity_id}</span>
+                              <span className="flex items-center gap-1">
+                                <Building2 size={10} />
+                                <EntityNameCompact entityId={conv.entity_id} orgId={conv.org_id || ''} />
+                              </span>
                               {conv.org_id && <span>Org: {conv.org_id}</span>}
                               <span>User: {conv.user_id.slice(0, 8)}…</span>
                               <span>Created: {format(new Date(conv.created_at), 'MMM d, h:mm a')}</span>
