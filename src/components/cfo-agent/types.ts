@@ -94,6 +94,16 @@ export interface AgentUnderstanding {
   toolsFiltered?: ToolsFilteredInfo;
 }
 
+export interface MCQData {
+  mcqId?: string;
+  mcqType: 'entity_resolution' | 'parameter_resolution' | 'write_confirmation' | 'disambiguation';
+  question: string;
+  options: Array<{ label: string; value: string; description?: string }>;
+  pendingTool?: string;
+  context?: Record<string, unknown>;
+  selectedValue?: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'agent';
@@ -108,6 +118,7 @@ export interface ChatMessage {
   };
   executionTime?: string;
   llmModel?: string;
+  mcqData?: MCQData;
 }
 
 export interface CompleteEventData {

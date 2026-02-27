@@ -806,6 +806,63 @@ export type Database = {
         }
         Relationships: []
       }
+      mcq_pending_states: {
+        Row: {
+          context: Json
+          conversation_id: string
+          created_at: string
+          entity_id: string
+          expires_at: string | null
+          id: string
+          mcq_type: string
+          options: Json
+          pending_args: Json
+          pending_tool: string | null
+          question: string
+          resolved_at: string | null
+          selected_option: Json | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          context?: Json
+          conversation_id: string
+          created_at?: string
+          entity_id: string
+          expires_at?: string | null
+          id?: string
+          mcq_type?: string
+          options?: Json
+          pending_args?: Json
+          pending_tool?: string | null
+          question: string
+          resolved_at?: string | null
+          selected_option?: Json | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Update: {
+          context?: Json
+          conversation_id?: string
+          created_at?: string
+          entity_id?: string
+          expires_at?: string | null
+          id?: string
+          mcq_type?: string
+          options?: Json
+          pending_args?: Json
+          pending_tool?: string | null
+          question?: string
+          resolved_at?: string | null
+          selected_option?: Json | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       meta_account_health: {
         Row: {
           account_status: string
@@ -1031,6 +1088,93 @@ export type Database = {
           full_name?: string | null
           id?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      query_routing_logs: {
+        Row: {
+          cache_hit: boolean | null
+          category: string | null
+          conversation_id: string | null
+          created_at: string
+          enrichments_applied: string[] | null
+          entity_id: string
+          error_message: string | null
+          id: string
+          input_tokens: number | null
+          intent_confidence: number | null
+          intent_matched: string | null
+          is_write_operation: boolean | null
+          model_tier: string | null
+          model_used: string | null
+          output_tokens: number | null
+          query: string
+          request_id: string
+          response_time_ms: number | null
+          route_path: string
+          tool_selection_strategy: string | null
+          tools_failed: string[] | null
+          tools_loaded: string[] | null
+          tools_used: string[] | null
+          total_tokens: number | null
+          user_id: string | null
+          write_tool_results: Json | null
+        }
+        Insert: {
+          cache_hit?: boolean | null
+          category?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          enrichments_applied?: string[] | null
+          entity_id: string
+          error_message?: string | null
+          id?: string
+          input_tokens?: number | null
+          intent_confidence?: number | null
+          intent_matched?: string | null
+          is_write_operation?: boolean | null
+          model_tier?: string | null
+          model_used?: string | null
+          output_tokens?: number | null
+          query: string
+          request_id: string
+          response_time_ms?: number | null
+          route_path: string
+          tool_selection_strategy?: string | null
+          tools_failed?: string[] | null
+          tools_loaded?: string[] | null
+          tools_used?: string[] | null
+          total_tokens?: number | null
+          user_id?: string | null
+          write_tool_results?: Json | null
+        }
+        Update: {
+          cache_hit?: boolean | null
+          category?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          enrichments_applied?: string[] | null
+          entity_id?: string
+          error_message?: string | null
+          id?: string
+          input_tokens?: number | null
+          intent_confidence?: number | null
+          intent_matched?: string | null
+          is_write_operation?: boolean | null
+          model_tier?: string | null
+          model_used?: string | null
+          output_tokens?: number | null
+          query?: string
+          request_id?: string
+          response_time_ms?: number | null
+          route_path?: string
+          tool_selection_strategy?: string | null
+          tools_failed?: string[] | null
+          tools_loaded?: string[] | null
+          tools_used?: string[] | null
+          total_tokens?: number | null
+          user_id?: string | null
+          write_tool_results?: Json | null
         }
         Relationships: []
       }

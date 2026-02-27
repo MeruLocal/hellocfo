@@ -2,14 +2,16 @@ import React, { useState } from 'react';
 import { User, Bot, ChevronDown, ChevronUp, Clock, Coins, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { ChatMessage } from './types';
 import { AgentThinkingPanel } from './AgentThinkingPanel';
+import { MCQCard } from './MCQCard';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  onMCQSelect?: (option: { label: string; value: string; description?: string }) => void;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onMCQSelect }: MessageBubbleProps) {
   const [showUnderstanding, setShowUnderstanding] = useState(
     message.role === 'agent' && message.understanding?.intent !== undefined
   );
@@ -58,26 +60,42 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </div>
         )}
 
-        {/* Message Bubble */}
-        <div className={cn(
-          "rounded-2xl px-4 py-3",
-          isUser 
-            ? "bg-primary text-primary-foreground rounded-br-md" 
-            : "bg-muted text-foreground rounded-bl-md"
-        )}>
-          {message.isStreaming && !message.content ? (
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1">
-                <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        {/* MCQ Card */}
+        {!isUser && message.mcqData && onMCQSelect && (
+          <div className="mb-3 w-full">
+            <MCQCard
+              mcqId={message.mcqData.mcqId}
+              mcqType={message.mcqData.mcqType}
+              question={message.mcqData.question}
+              options={message.mcqData.options}
+              onSelect={onMCQSelect}
+              selectedValue={message.mcqData.selectedValue}
+            />
+          </div>
+        )}
+
+        {/* Message Bubble - hide if MCQ card is shown */}
+        {!(message.mcqData && onMCQSelect) && (
+          <div className={cn(
+            "rounded-2xl px-4 py-3",
+            isUser 
+              ? "bg-primary text-primary-foreground rounded-br-md" 
+              : "bg-muted text-foreground rounded-bl-md"
+          )}>
+            {message.isStreaming && !message.content ? (
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-sm opacity-70">Thinking...</span>
               </div>
-              <span className="text-sm opacity-70">Thinking...</span>
-            </div>
-          ) : (
-            <div className="whitespace-pre-wrap text-sm">{message.content}</div>
-          )}
-        </div>
+            ) : (
+              <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+            )}
+          </div>
+        )}
 
         {/* Message Metadata */}
         <div className={cn(

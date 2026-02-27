@@ -14,7 +14,6 @@ import { detectResponseType, detectResponseTypeFromResults, type ResponseType } 
 import { validateWriteToolArgs, type WriteToolTracker, buildWriteToolSummary } from "../_shared/write-validator.ts";
 import { logQueryRouting, type RoutingLogEntry } from "../_shared/routing-logger.ts";
 import { loadPendingMCQ, resolveMCQ, saveMCQState, buildMCQSSEEvent, type MCQState } from "../_shared/mcq-engine.ts";
-import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
