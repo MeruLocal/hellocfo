@@ -77,7 +77,7 @@ async function saveToolsToDB(tools: any[]): Promise<void> {
 
 export function useMCPTools() {
   const [tools, setTools] = useState<MCPTool[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
 
@@ -85,11 +85,12 @@ export function useMCPTools() {
   useEffect(() => {
     if (initialized) return;
     setInitialized(true);
+    setLoading(true);
     loadToolsFromDB().then((cached) => {
       if (cached.length > 0) {
         setTools(cached);
       }
-    });
+    }).finally(() => setLoading(false));
   }, [initialized]);
 
   const fetchTools = useCallback(async (credentials?: MCPCredentials) => {
