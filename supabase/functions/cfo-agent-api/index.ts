@@ -3,8 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
+  getSemanticCandidates,
   type OpenAITool,
 } from "./tool-groups.ts";
+import { selectToolsSemantically } from "../_shared/semantic-tool-selector.ts";
 import { SYSTEM_PROMPT } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import { logFeedback } from "./feedback-logger.ts";
@@ -1366,7 +1368,7 @@ serve(async (req) => {
       }
 
       {
-          // Tool selection based on query keywords
+          // Tool selection based on query keywords + semantic matching
           let toolSelection: ReturnType<typeof selectToolsForQuery>;
           let filteredTools: OpenAITool[];
 
@@ -1389,14 +1391,32 @@ serve(async (req) => {
               }
               console.log(`[api] Supplemented tool selection with ${intentTools.length} intent tools`);
             }
+
+            // Semantic matching: find additional tools beyond static keyword categories
+            if (mcpTools.length > 0) {
+              const candidates = getSemanticCandidates(toolSelection.matchedCategories, mcpTools);
+              if (candidates.length > 0) {
+                const semantic = await selectToolsSemantically(query, candidates, reqId);
+                if (semantic.toolNames.length > 0) {
+                  for (const name of semantic.toolNames) {
+                    if (!toolSelection.toolNames.includes(name)) {
+                      toolSelection.toolNames.push(name);
+                    }
+                  }
+                  toolSelection.strategy = `${toolSelection.strategy}+${semantic.strategy}`;
+                  console.log(`[api] Semantic added ${semantic.toolNames.length} tools: ${semantic.toolNames.join(', ')}`);
+                }
+              }
+            }
+
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
 
-          // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL
+          // FALLBACK: If matching yielded 0 tools but MCP has tools, pass ALL
           const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
           if (usingAllTools) {
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
-            console.log(`[api] No keyword match — falling back to all ${filteredTools.length} MCP tools`);
+            console.log(`[api] No match — falling back to all ${filteredTools.length} MCP tools`);
           }
 
           sendEvent('tools_filtered', {

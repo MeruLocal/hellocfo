@@ -5,8 +5,10 @@ type AnySupabaseClient = any;
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
+  getSemanticCandidates,
   type OpenAITool,
 } from "./tool-groups.ts";
+import { selectToolsSemantically } from "../_shared/semantic-tool-selector.ts";
 import { classifyQuery, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
@@ -596,14 +598,31 @@ serve(async (req) => {
             const toolSelection = SIMPLE_DIRECT_LLM_MODE
               ? { toolNames: mcpTools.map((t) => t.name), matchedCategories: ["all_mcp_tools"], strategy: "direct_llm_all_mcp_tools" }
               : selectToolsForQuery(query, effectiveCategory, mcpTools);
+
+            // Semantic matching: find additional tools beyond static keyword categories
+            if (!SIMPLE_DIRECT_LLM_MODE && mcpTools.length > 0) {
+              const candidates = getSemanticCandidates(toolSelection.matchedCategories, mcpTools);
+              if (candidates.length > 0) {
+                const semantic = await selectToolsSemantically(query, candidates, reqId);
+                if (semantic.toolNames.length > 0) {
+                  for (const name of semantic.toolNames) {
+                    if (!toolSelection.toolNames.includes(name)) {
+                      toolSelection.toolNames.push(name);
+                    }
+                  }
+                  toolSelection.strategy = `${toolSelection.strategy}+${semantic.strategy}`;
+                  console.log(`[${reqId}] Semantic added ${semantic.toolNames.length} tools: ${semantic.toolNames.join(', ')}`);
+                }
+              }
+            }
+
             let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
-            // FALLBACK: If keyword filtering yielded 0 tools but MCP has tools, pass ALL of them.
-            // This prevents the LLM from hallucinating that tools don't exist.
+            // FALLBACK: If matching yielded 0 tools but MCP has tools, pass ALL of them.
             const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
             if (usingAllTools) {
               filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
-              console.log(`[${reqId}] No keyword match — falling back to all ${filteredTools.length} MCP tools`);
+              console.log(`[${reqId}] No match — falling back to all ${filteredTools.length} MCP tools`);
             }
 
             sendEvent("tools_filtered", {
