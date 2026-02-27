@@ -56,3 +56,9 @@ verify_jwt = false
 
 [functions.analyze-tool-gaps]
 verify_jwt = false
+
+[functions.seed-test-cases]
+verify_jwt = false
+
+[functions.run-regression-tests]
+verify_jwt = false

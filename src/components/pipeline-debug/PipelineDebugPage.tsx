@@ -5,11 +5,16 @@ import { LiveTestPanel } from './LiveTestPanel';
 import { PipelineProgressBar } from './PipelineProgressBar';
 import { StepInspectorCard } from './StepInspectorCard';
 import { HistoricalHealthMonitor } from './HistoricalHealthMonitor';
+import { RegressionSuitePanel } from './RegressionSuitePanel';
 import { mapSSEEventToStepUpdates } from './sseMapper';
 import { PIPELINE_STEPS, createInitialRunState, type PipelineRunState } from './types';
+import { Play, FlaskConical, BarChart3, TestTube } from 'lucide-react';
+
+type TabId = 'live' | 'regression' | 'health';
 
 export function PipelineDebugPage() {
   const { session } = useAuth();
+  const [activeTab, setActiveTab] = useState<TabId>('live');
   const [run, setRun] = useState<PipelineRunState | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -146,6 +151,12 @@ export function PipelineDebugPage() {
       }).pop()
     : null;
 
+  const tabs = [
+    { id: 'live' as TabId, label: 'Live Tester', icon: <Play size={14} /> },
+    { id: 'regression' as TabId, label: 'Regression Suite', icon: <TestTube size={14} /> },
+    { id: 'health' as TabId, label: 'Health Monitor', icon: <BarChart3 size={14} /> },
+  ];
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -153,55 +164,81 @@ export function PipelineDebugPage() {
         <div className="flex items-center gap-3">
           <div className="h-2 w-2 rounded-full bg-emerald-500" />
           <h1 className="text-lg font-bold text-foreground">Pipeline Debugger</h1>
-          <span className="text-[10px] text-muted-foreground font-mono">v1 — Phase 1</span>
+          <span className="text-[10px] text-muted-foreground font-mono">v2 — Regression</span>
         </div>
-        {run?.totalDurationMs && (
+        {activeTab === 'live' && run?.totalDurationMs && (
           <span className="text-xs font-mono text-muted-foreground">
             Total: {run.totalDurationMs}ms | Route: {run.routePath || '—'} | Model: {run.model || '—'}
           </span>
         )}
       </div>
 
-      {/* Progress Bar */}
-      {run && <PipelineProgressBar steps={PIPELINE_STEPS} stepStates={stepStates} />}
+      {/* Tabs */}
+      <div className="border-b px-6 flex gap-0">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2.5 text-sm font-medium flex items-center gap-2 border-b-2 transition-colors ${
+              activeTab === tab.id
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab.icon} {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto p-6 space-y-4 max-w-6xl mx-auto w-full">
-        <LiveTestPanel
-          onExecute={handleExecute}
-          onClear={handleClear}
-          onCopyReport={handleCopyReport}
-          isRunning={isRunning}
-          hasRun={!!run}
-        />
+      {/* Tab Content */}
+      <div className="flex-1 overflow-auto">
+        {activeTab === 'live' && (
+          <div className="p-6 space-y-4 max-w-6xl mx-auto w-full">
+            {/* Progress Bar */}
+            {run && <PipelineProgressBar steps={PIPELINE_STEPS} stepStates={stepStates} />}
 
-        {/* Step Inspector */}
-        {run && (
-          <div className="space-y-2">
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Step Inspector</h2>
-            {PIPELINE_STEPS.map(step => (
-              <StepInspectorCard
-                key={step.id}
-                stepDef={step}
-                stepState={stepStates[step.id] || { stepId: step.id, status: 'pending' }}
-                autoExpand={lastCompletedStep?.id === step.id}
-              />
-            ))}
+            <LiveTestPanel
+              onExecute={handleExecute}
+              onClear={handleClear}
+              onCopyReport={handleCopyReport}
+              isRunning={isRunning}
+              hasRun={!!run}
+            />
+
+            {/* Step Inspector */}
+            {run && (
+              <div className="space-y-2">
+                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Step Inspector</h2>
+                {PIPELINE_STEPS.map(step => (
+                  <StepInspectorCard
+                    key={step.id}
+                    stepDef={step}
+                    stepState={stepStates[step.id] || { stepId: step.id, status: 'pending' }}
+                    autoExpand={lastCompletedStep?.id === step.id}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Final Response Preview */}
+            {run?.finalResponse && (
+              <div className="border rounded-lg bg-card p-4">
+                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Final Response</h2>
+                <div className="text-sm text-foreground whitespace-pre-wrap font-mono max-h-48 overflow-auto">
+                  {run.finalResponse}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Final Response Preview */}
-        {run?.finalResponse && (
-          <div className="border rounded-lg bg-white p-4">
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Final Response</h2>
-            <div className="text-sm text-foreground whitespace-pre-wrap font-mono max-h-48 overflow-auto">
-              {run.finalResponse}
-            </div>
+        {activeTab === 'regression' && <RegressionSuitePanel />}
+
+        {activeTab === 'health' && (
+          <div className="p-6 max-w-6xl mx-auto w-full">
+            <HistoricalHealthMonitor />
           </div>
         )}
-
-        {/* Historical Health Monitor placeholder */}
-        <HistoricalHealthMonitor />
       </div>
     </div>
   );
