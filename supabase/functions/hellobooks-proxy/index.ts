@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -14,15 +14,18 @@ serve(async (req) => {
   }
 
   try {
-    const { action, email, password, token } = await req.json();
+    const body = await req.json();
+    const { action, email, password, token } = body;
+    console.log(`[hellobooks-proxy] action=${action}`);
 
     if (action === "login") {
       if (!email || !password) {
         return new Response(JSON.stringify({ error: "Email and password required" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
+      console.log(`[hellobooks-proxy] Calling ${HELLOBOOKS_BASE}/auth/login`);
       const res = await fetch(`${HELLOBOOKS_BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -30,8 +33,11 @@ serve(async (req) => {
       });
 
       const data = await res.json();
+      console.log(`[hellobooks-proxy] login status=${res.status}, hasToken=${!!data.token}`);
+
+      // Always return 200 so supabase.functions.invoke doesn't throw
       return new Response(JSON.stringify(data), {
-        status: res.status,
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -39,10 +45,11 @@ serve(async (req) => {
     if (action === "getallusers") {
       if (!token) {
         return new Response(JSON.stringify({ error: "Token required" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
+      console.log(`[hellobooks-proxy] Calling ${HELLOBOOKS_BASE}/user/getallusers`);
       const res = await fetch(`${HELLOBOOKS_BASE}/user/getallusers`, {
         method: "POST",
         headers: {
@@ -52,21 +59,24 @@ serve(async (req) => {
         body: JSON.stringify({}),
       });
 
-      const data = await res.json();
-      return new Response(JSON.stringify(data), {
-        status: res.status,
+      const text = await res.text();
+      console.log(`[hellobooks-proxy] getallusers status=${res.status}, body=${text.substring(0, 500)}`);
+
+      // Always return 200
+      return new Response(text, {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     return new Response(JSON.stringify({ error: "Unknown action" }), {
-      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    console.error("hellobooks-proxy error:", msg);
+    console.error("[hellobooks-proxy] error:", msg);
     return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
