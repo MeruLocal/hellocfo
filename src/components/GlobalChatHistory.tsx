@@ -460,15 +460,7 @@ export function GlobalChatHistory() {
             onClose={() => setSelectedConversation(null)}
           />
         </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <div className="text-center">
-            <MessageSquare size={48} className="mx-auto mb-3 opacity-20" />
-            <p className="text-sm font-medium">Select a conversation</p>
-            <p className="text-xs mt-1">Click on a conversation to view its messages</p>
-          </div>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
