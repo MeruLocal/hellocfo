@@ -65,34 +65,37 @@ interface GeneratedIntent {
   };
 }
 
-// Call Lovable AI Gateway
-const callLovableAI = async (
+// Call OpenAI GPT-5.2
+const callOpenAI = async (
   systemPrompt: string,
   userPrompt: string,
   timeoutMs: number = 120000
 ): Promise<string> => {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    throw new Error("LOVABLE_API_KEY is not configured");
+  const apiKey = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+  if (!apiKey) {
+    throw new Error("OPENAI_GPT_5_2_API_KEY is not configured");
   }
+
+  const baseUrl = Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "https://api.openai.com/v1";
+  const endpoint = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "gpt-5.2",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
-        max_tokens: 16384,
+        max_completion_tokens: 16384,
         temperature: 0.3,
       }),
       signal: controller.signal,
@@ -105,11 +108,11 @@ const callLovableAI = async (
         throw new Error("Rate limit exceeded. Please try again later.");
       }
       if (response.status === 402) {
-        throw new Error("AI credits exhausted. Please add credits to continue.");
+        throw new Error("Payment required.");
       }
       const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-      throw new Error(`AI API error: ${response.status}`);
+      console.error("OpenAI GPT-5.2 error:", response.status, errorText);
+      throw new Error(`OpenAI API error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -329,8 +332,8 @@ OUTPUT ONLY the JSON array - no explanations:
   }
 ]`;
 
-    console.log('🤖 Calling Lovable AI for batch intent generation...');
-    const aiResponse = await callLovableAI(systemPrompt, userPrompt);
+    console.log('🤖 Calling OpenAI GPT-5.2 for batch intent generation...');
+    const aiResponse = await callOpenAI(systemPrompt, userPrompt);
     console.log('✅ AI response received');
 
     const generatedIntents = parseJSON(aiResponse) as GeneratedIntent[];
@@ -376,7 +379,7 @@ ${toolsDescription}
 ${userPrompt.split('For EACH intent')[1] ? 'For EACH intent' + userPrompt.split('For EACH intent')[1] : ''}`;
 
       try {
-        const retryResponse = await callLovableAI(systemPrompt, retryUserPrompt);
+        const retryResponse = await callOpenAI(systemPrompt, retryUserPrompt);
         const retryIntents = parseJSON(retryResponse) as GeneratedIntent[];
         if (Array.isArray(retryIntents)) {
           const retryNamesLower = new Set(retryExistingNames.map(n => n.toLowerCase().trim()));

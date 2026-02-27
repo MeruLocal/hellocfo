@@ -445,9 +445,12 @@ OUTPUT FORMAT:
 }`;
 };
 
-// Validate LLM config
+// Validate LLM config - allow fallback to GPT-5.2 secrets
 const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
   if (!llmConfig) {
+    // Check if GPT-5.2 secrets are available as fallback
+    const gpt52Key = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+    if (gpt52Key) return; // Will use GPT-5.2 fallback
     throw new Error('LLM configuration is not set. Please configure your LLM settings.');
   }
   
@@ -460,6 +463,9 @@ const validateLLMConfig = (llmConfig: LLMConfig | undefined): void => {
   }
   
   if (!llmConfig.apiKey) {
+    // Fallback to GPT-5.2 secrets
+    const gpt52Key = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+    if (gpt52Key) return;
     throw new Error('API key is not set. Please enter your API key.');
   }
   
@@ -499,7 +505,20 @@ const callAI = async (
   businessContext?: GenerationRequest['businessContext'],
   sectionName?: string
 ): Promise<{ content: string; usage: UsageStats }> => {
-  const { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
+  let { provider, endpoint, model, apiKey, temperature, maxTokens } = llmConfig;
+  
+  // Fallback to GPT-5.2 secrets if no API key in config
+  if (!apiKey) {
+    const gpt52Key = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+    const gpt52Url = Deno.env.get("OPENAI_GPT_5_2_BASE_URL");
+    if (gpt52Key) {
+      apiKey = gpt52Key;
+      provider = 'openai';
+      model = 'gpt-5.2';
+      endpoint = gpt52Url ? (gpt52Url.endsWith("/chat/completions") ? gpt52Url : `${gpt52Url}/chat/completions`) : 'https://api.openai.com/v1/chat/completions';
+      console.log(`[AI CALL] Using GPT-5.2 fallback from secrets`);
+    }
+  }
   
   console.log(`[AI CALL] Starting ${sectionName || 'generation'} with ${provider}/${model}`);
   
