@@ -3535,29 +3535,95 @@ function BusinessContextView({
   onDelete: any;
   onSetDefault: any;
 }) {
-  const contexts = allContexts;
+  const contexts = allContexts || [];
   const activeContext = context;
+  const [showCreate, setShowCreate] = React.useState(false);
+  const [newCtx, setNewCtx] = React.useState({ name: '', industry: 'manufacturing', country: 'IN', currency: 'INR', entity_size: 'medium', fiscal_year_end: 'March' });
+
+  const handleCreate = () => {
+    onCreate(newCtx);
+    setShowCreate(false);
+    setNewCtx({ name: '', industry: 'manufacturing', country: 'IN', currency: 'INR', entity_size: 'medium', fiscal_year_end: 'March' });
+  };
+
   return (
     <div className="p-6">
-      <h2 className="text-xl font-bold text-gray-900 mb-4">Business Contexts</h2>
-      <div className="space-y-3">
-        {contexts.map(ctx => (
-          <div key={ctx.id} className={`p-4 border rounded-lg bg-white ${ctx.id === activeContext?.id ? 'border-blue-500 ring-1 ring-blue-200' : ''}`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-medium">{ctx.name || ctx.industry}</h3>
-                <p className="text-sm text-gray-500">{ctx.country} · {ctx.currency} · {ctx.entitySize}</p>
-              </div>
-              <div className="flex gap-2">
-                {ctx.id !== activeContext?.id && (
-                  <button onClick={() => onSetDefault(ctx.id)} className="text-blue-600 hover:text-blue-800 text-sm">Set Default</button>
-                )}
-                <button onClick={() => onDelete(ctx.id)} className="text-red-500 hover:text-red-700 text-sm">Delete</button>
-              </div>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold text-foreground">Business Contexts</h2>
+        <button onClick={() => setShowCreate(!showCreate)} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:opacity-90">
+          + Add Context
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className="mb-6 p-4 border rounded-lg bg-card space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Name</label>
+              <input value={newCtx.name} onChange={e => setNewCtx({...newCtx, name: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background" placeholder="e.g. My Manufacturing Co" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Industry</label>
+              <select value={newCtx.industry} onChange={e => setNewCtx({...newCtx, industry: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background">
+                {['manufacturing','services','retail','technology','healthcare','finance','education','agriculture','construction','logistics'].map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Country</label>
+              <input value={newCtx.country} onChange={e => setNewCtx({...newCtx, country: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Currency</label>
+              <input value={newCtx.currency} onChange={e => setNewCtx({...newCtx, currency: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Entity Size</label>
+              <select value={newCtx.entity_size} onChange={e => setNewCtx({...newCtx, entity_size: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background">
+                {['micro','small','medium','large','enterprise'].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Fiscal Year End</label>
+              <input value={newCtx.fiscal_year_end} onChange={e => setNewCtx({...newCtx, fiscal_year_end: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm bg-background" />
             </div>
           </div>
-        ))}
-      </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
+            <button onClick={handleCreate} className="px-4 py-1.5 bg-primary text-primary-foreground rounded-md text-sm">Create</button>
+          </div>
+        </div>
+      )}
+
+      {contexts.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <p className="text-lg mb-2">No business contexts yet</p>
+          <p className="text-sm">Click "+ Add Context" to create your first business context.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {contexts.map(ctx => (
+            <div key={ctx.id} className={`p-4 border rounded-lg bg-card ${ctx.id === activeContext?.id ? 'border-primary ring-1 ring-primary/20' : ''}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium text-foreground">{ctx.name || ctx.industry}</h3>
+                    {ctx.id === activeContext?.id && <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">Default</span>}
+                  </div>
+                  <p className="text-sm text-muted-foreground">{ctx.country} · {ctx.currency} · {ctx.entitySize || ctx.entity_size}</p>
+                  {ctx.sub_industry && <p className="text-xs text-muted-foreground mt-0.5">Sub-industry: {ctx.sub_industry}</p>}
+                  {ctx.fiscal_year_end && <p className="text-xs text-muted-foreground">FY End: {ctx.fiscal_year_end}</p>}
+                </div>
+                <div className="flex gap-2">
+                  {ctx.id !== activeContext?.id && (
+                    <button onClick={() => onSetDefault(ctx.id)} className="text-primary hover:opacity-80 text-sm">Set Default</button>
+                  )}
+                  <button onClick={() => onDelete(ctx.id)} className="text-destructive hover:opacity-80 text-sm">Delete</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -4315,7 +4381,7 @@ export default function CFOQueryResolutionEngine() {
             onDelete={deleteEnrichmentType}
           />
         )}
-        {activeTab === 'business' && businessContext && (
+        {activeTab === 'business' && (
           <BusinessContextView 
             context={businessContext} 
             allContexts={allContexts}
