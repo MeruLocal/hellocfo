@@ -1,53 +1,89 @@
 
+# Replace Semantic LLM Tool Selection with tool_registry DB Lookup + Hard Cap
 
-# Stage-wise Success/Fail Ratio Panel in Global Chat History
+## Summary
+Remove the LLM-based semantic tool selector (Gemini Flash Lite call) and replace it with a structured `tool_registry` database lookup via an RPC function. Enforce a hard cap of 40 tools and add an emergency fallback set. Every instance of `mcpTools.map(t => t.name)` that sends all 698 tools will be replaced.
 
-## Overview
-Add a **Pipeline Debug Panel** to the right side of the Global Chat History's MessagePanel. When a conversation is selected, alongside the messages, show an aggregated success/fail breakdown for each stage of the chatbot pipeline -- helping debug where failures occur across the flow.
+## Step 1: Create RPC function via database migration
 
-## Stages to Track
-From the message metadata stored in `unified_conversations.messages`, we can extract per-bot-message:
+Create `match_tools_from_registry` SQL function:
 
-1. **Routing** -- Was a valid route assigned? (`route` field: success if present and not "unknown")
-2. **Intent Detection** -- Was an intent matched? (`intent.name` present with confidence > 0)
-3. **Tool Loading** -- Were tools loaded? (`toolsLoaded` array length > 0)
-4. **Tool Execution** -- Were tools actually used? (`toolsUsed` array length > 0 when `toolsLoaded` > 0)
-5. **Response Generation** -- Was a non-empty response generated? (`content` is non-empty)
+```sql
+CREATE OR REPLACE FUNCTION match_tools_from_registry(
+  p_modules TEXT[],
+  p_keywords TEXT[],
+  p_exclude TEXT[] DEFAULT '{}',
+  p_limit INT DEFAULT 20
+) RETURNS TABLE(tool_name TEXT, module TEXT, match_source TEXT) AS $$
+  SELECT tool_name, module,
+    CASE WHEN module = ANY(p_modules) THEN 'module' ELSE 'keyword' END as match_source
+  FROM tool_registry
+  WHERE is_active = true
+    AND (module = ANY(p_modules) OR keywords && p_keywords)
+    AND tool_name != ALL(p_exclude)
+  ORDER BY
+    CASE WHEN module = ANY(p_modules) THEN 0 ELSE 1 END,
+    tool_name
+  LIMIT p_limit;
+$$ LANGUAGE sql STABLE;
+```
 
-Each stage shows a small bar or ratio like `8/10 success` with a colored indicator (green/yellow/red).
+## Step 2: Delete `supabase/functions/_shared/semantic-tool-selector.ts`
 
-## UI Design
-- Add a collapsible **"Pipeline Health"** section at the top of the MessagePanel, above the messages
-- Shows a horizontal row of stage cards, each with:
-  - Stage name + icon
-  - Success count / Total count
-  - A small progress bar (green for > 80%, yellow for 50-80%, red for < 50%)
-- Collapsed by default on small conversations, expanded on larger ones
+Remove the entire file -- no longer needed.
 
-## Technical Details
+## Step 3: Update `supabase/functions/_shared/tool-groups.ts`
 
-### File: `src/components/GlobalChatHistory.tsx`
+- Remove `getSemanticCandidates()` function (lines 463-471)
+- Add constants and helper:
+  - `HARD_CAP_TOOLS = 40`
+  - `EMERGENCY_FALLBACK_TOOLS` array (8 safe default tools)
+  - `extractKeywords(query)` helper
+  - `lookupToolsFromRegistry(supabase, query, matchedCategories, alreadySelected, reqId)` async function that calls the RPC
+- Update comment at line 453-454 referencing semantic matching
 
-1. **Add a `PipelineHealthBar` component** inside the file:
-   - Takes `messages: ChatMessage[]` as prop
-   - Iterates over bot messages (`role === 'agent'`)
-   - For each bot message, checks metadata fields to determine pass/fail per stage
-   - Computes aggregated counts and renders the stage cards
+## Step 4: Update `supabase/functions/cfo-agent-api/index.ts`
 
-2. **Stage evaluation logic:**
-   ```text
-   For each bot message:
-     Routing:    PASS if metadata.route exists and !== "unknown"
-     Intent:     PASS if metadata.intent?.name exists
-     Tool Load:  PASS if metadata.toolsLoaded?.length > 0
-     Tool Exec:  PASS if metadata.toolsUsed?.length > 0 (only counted when toolsLoaded > 0)
-     Response:   PASS if content.trim().length > 0
-   ```
+All `mcpTools.map(t => t.name)` occurrences replaced:
 
-3. **Place the component** between the "Panel Stats" bar and the messages ScrollArea in the MessagePanel
+- **Line 9**: Remove `import { selectToolsSemantically }` 
+- **Line 6**: Remove `getSemanticCandidates` from import
+- **Line 3-8**: Add `lookupToolsFromRegistry`, `HARD_CAP_TOOLS`, `EMERGENCY_FALLBACK_TOOLS` to imports
+- **Lines 1375-1380** (`SIMPLE_DIRECT_LLM_MODE` block): Replace `mcpTools.map(t => t.name)` with `EMERGENCY_FALLBACK_TOOLS` (or keep a larger static set capped at 40)
+- **Lines 1396-1410** (semantic matching block): Replace with `lookupToolsFromRegistry()` call
+- **Lines 1415-1420** (fallback to ALL tools): Replace with `EMERGENCY_FALLBACK_TOOLS`
+- Add priority-ordered merge + hard cap before `buildOpenAIToolsFromMcp`:
+  ```
+  const prioritized = [...intentTools, ...categoryTools, ...registryTools];
+  const deduped = [...new Set(prioritized)];
+  const capped = deduped.slice(0, HARD_CAP_TOOLS);
+  if (capped.length === 0) capped = [...EMERGENCY_FALLBACK_TOOLS];
+  ```
 
-4. **Styling**: Use existing Badge, Progress components. Color-coded: green (>80%), amber (50-80%), red (<50%).
+## Step 5: Update `supabase/functions/realtime-cfo-agent/index.ts`
 
-### No backend changes needed
-All data is already available in the `messages` JSONB column of `unified_conversations`. This is purely a frontend computation.
+Same pattern as Step 4:
 
+- **Line 8**: Remove `getSemanticCandidates` from import
+- **Line 11**: Remove `import { selectToolsSemantically }`
+- **Line 599**: Replace `mcpTools.map((t) => t.name)` in `SIMPLE_DIRECT_LLM_MODE` block
+- **Lines 602-617**: Replace semantic matching block with `lookupToolsFromRegistry()` call
+- **Lines 621-626**: Replace fallback-to-all-tools with `EMERGENCY_FALLBACK_TOOLS`
+- Add same priority merge + hard cap logic
+
+## Step 6: Update re-export files
+
+Both `cfo-agent-api/tool-groups.ts` and `realtime-cfo-agent/tool-groups.ts`:
+- Remove `getSemanticCandidates` from re-exports
+- Add `lookupToolsFromRegistry`, `HARD_CAP_TOOLS`, `EMERGENCY_FALLBACK_TOOLS`
+
+## Occurrences of `mcpTools.map(t => t.name)` being fixed
+
+| File | Line | Current behavior | New behavior |
+|------|------|-----------------|-------------|
+| `cfo-agent-api/index.ts` | 1377 | SIMPLE_DIRECT_LLM_MODE sends all 698 | Capped to 40 or emergency fallback |
+| `cfo-agent-api/index.ts` | 1418 | Zero-match fallback sends all 698 | Emergency fallback (8 tools) |
+| `realtime-cfo-agent/index.ts` | 599 | SIMPLE_DIRECT_LLM_MODE sends all | Capped to 40 or emergency fallback |
+| `realtime-cfo-agent/index.ts` | 624 | Zero-match fallback sends all | Emergency fallback (8 tools) |
+| `test-with-mcp/index.ts` | 334 | Logging only (harmless) | No change needed |
+| `_shared/tool-groups.ts` | 450 | Availability check (harmless) | No change needed |
