@@ -3203,6 +3203,22 @@ interface HelloBooksEntity {
   _id: string;
   Name: string;
   OrganizationId: string;
+  OrgName?: string;
+  GSTIN?: string;
+  PAN?: string;
+  CIN?: string;
+  Currency?: string;
+  Country?: string;
+  State?: string;
+  City?: string;
+  Address?: string;
+  FiscalYearStart?: string;
+  FiscalYearEnd?: string;
+  Industry?: string;
+  EntityType?: string;
+  Status?: string;
+  CreatedAt?: string;
+  [key: string]: unknown;
 }
 
 function MCPToolsView({ 
@@ -3282,6 +3298,22 @@ function MCPToolsView({
                 _id: entity._id || entity.id,
                 Name: entity.Name,
                 OrganizationId: org._id,
+                OrgName: org.Name,
+                GSTIN: entity.GSTIN,
+                PAN: entity.PAN,
+                CIN: entity.CIN,
+                Currency: entity.Currency,
+                Country: entity.Country,
+                State: entity.State,
+                City: entity.City,
+                Address: entity.Address,
+                FiscalYearStart: entity.FiscalYearStart,
+                FiscalYearEnd: entity.FiscalYearEnd,
+                Industry: entity.Industry,
+                EntityType: entity.EntityType,
+                Status: entity.Status,
+                CreatedAt: entity.CreatedAt,
+                ...entity, // capture any additional fields
               });
             }
           }
@@ -3437,6 +3469,74 @@ function MCPToolsView({
           </button>
         </div>
       )}
+
+      {/* Business Context for Selected Entity */}
+      {isLoggedIn && selectedEntityId && (() => {
+        const selectedEntity = entities.find(e => e._id === selectedEntityId);
+        const selectedOrg = organizations.find(o => o._id === selectedOrgId);
+        if (!selectedEntity) return null;
+
+        // Collect all meaningful fields from the entity
+        const excludeKeys = new Set(['_id', 'id', 'OrganizationId', '__v', 'Entities']);
+        const contextFields: Array<{ label: string; value: string }> = [];
+
+        // Priority fields first
+        if (selectedEntity.Name) contextFields.push({ label: 'Entity', value: selectedEntity.Name });
+        if (selectedOrg?.Name) contextFields.push({ label: 'Organization', value: selectedOrg.Name });
+        if (selectedOrg?.BusinessId) contextFields.push({ label: 'Business ID', value: selectedOrg.BusinessId });
+        if (selectedEntity.GSTIN) contextFields.push({ label: 'GSTIN', value: selectedEntity.GSTIN });
+        if (selectedEntity.PAN) contextFields.push({ label: 'PAN', value: selectedEntity.PAN });
+        if (selectedEntity.CIN) contextFields.push({ label: 'CIN', value: selectedEntity.CIN });
+        if (selectedEntity.Currency) contextFields.push({ label: 'Currency', value: selectedEntity.Currency });
+        if (selectedEntity.Country) contextFields.push({ label: 'Country', value: selectedEntity.Country });
+        if (selectedEntity.State) contextFields.push({ label: 'State', value: selectedEntity.State });
+        if (selectedEntity.City) contextFields.push({ label: 'City', value: selectedEntity.City });
+        if (selectedEntity.Address) contextFields.push({ label: 'Address', value: selectedEntity.Address });
+        if (selectedEntity.Industry) contextFields.push({ label: 'Industry', value: selectedEntity.Industry });
+        if (selectedEntity.EntityType) contextFields.push({ label: 'Entity Type', value: selectedEntity.EntityType });
+        if (selectedEntity.FiscalYearStart) contextFields.push({ label: 'FY Start', value: selectedEntity.FiscalYearStart });
+        if (selectedEntity.FiscalYearEnd) contextFields.push({ label: 'FY End', value: selectedEntity.FiscalYearEnd });
+        if (selectedEntity.Status) contextFields.push({ label: 'Status', value: selectedEntity.Status });
+
+        // Catch any extra keys not already shown
+        const shownLabels = new Set(contextFields.map(f => f.label));
+        for (const [key, val] of Object.entries(selectedEntity)) {
+          if (excludeKeys.has(key)) continue;
+          if (key === 'Name' || key === 'OrgName') continue;
+          const label = key.replace(/([a-z])([A-Z])/g, '$1 $2');
+          if (shownLabels.has(label)) continue;
+          if (val && typeof val !== 'object') {
+            contextFields.push({ label, value: String(val) });
+          }
+        }
+
+        if (contextFields.length <= 2) return null;
+
+        return (
+          <Collapsible defaultOpen>
+            <div className="mb-6 border rounded-lg bg-muted/30 overflow-hidden">
+              <CollapsibleTrigger className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50 transition-colors">
+                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <Globe size={14} /> Business Context — {selectedEntity.Name}
+                </h3>
+                <ChevronDown size={14} className="text-muted-foreground" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="px-4 pb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2">
+                    {contextFields.map(({ label, value }) => (
+                      <div key={label}>
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+                        <p className="text-sm text-foreground font-medium truncate" title={value}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+        );
+      })()}
 
       {error && <div className="mb-4 p-3 bg-destructive/10 text-destructive rounded text-sm">{error}</div>}
 
