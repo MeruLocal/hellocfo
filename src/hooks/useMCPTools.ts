@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 
@@ -23,10 +23,74 @@ export interface MCPCredentials {
   orgId: string;
 }
 
+async function loadToolsFromDB(): Promise<MCPTool[]> {
+  const { data, error } = await supabase
+    .from('mcp_tools_master')
+    .select('*')
+    .eq('is_active', true)
+    .order('tool_name');
+
+  if (error || !data) return [];
+
+  return data.map((row) => ({
+    id: row.tool_name,
+    name: row.tool_name,
+    description: row.description || '',
+    endpoint: row.endpoint || '',
+    method: row.method || 'POST',
+    parameters: row.input_schema && typeof row.input_schema === 'object' && 'properties' in (row.input_schema as any)
+      ? Object.entries((row.input_schema as any).properties || {}).map(([name, schema]: [string, any]) => ({
+          name,
+          type: schema.type || 'string',
+          required: ((row.input_schema as any).required || []).includes(name),
+          enumValues: schema.enum,
+        }))
+      : [],
+    responseFields: [],
+  }));
+}
+
+async function saveToolsToDB(tools: any[]): Promise<void> {
+  // Mark all existing tools inactive first
+  await supabase.from('mcp_tools_master').update({ is_active: false }).neq('tool_name', '');
+
+  // Upsert fresh tools
+  const rows = tools.map((tool: any) => ({
+    tool_name: tool.name || tool.id,
+    display_name: tool.name || tool.id,
+    description: tool.description || '',
+    endpoint: tool.endpoint || '',
+    method: tool.method || 'POST',
+    input_schema: tool.inputSchema || null,
+    category: 'mcp',
+    is_active: true,
+  }));
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabase
+    .from('mcp_tools_master')
+    .upsert(rows, { onConflict: 'tool_name' });
+
+  if (error) console.error('Failed to save MCP tools to DB:', error.message);
+}
+
 export function useMCPTools() {
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  // Load cached tools from DB on mount
+  useEffect(() => {
+    if (initialized) return;
+    setInitialized(true);
+    loadToolsFromDB().then((cached) => {
+      if (cached.length > 0) {
+        setTools(cached);
+      }
+    });
+  }, [initialized]);
 
   const fetchTools = useCallback(async (credentials?: MCPCredentials) => {
     setLoading(true);
@@ -37,7 +101,6 @@ export function useMCPTools() {
       const body: Record<string, string> = {};
 
       if (credentials) {
-        // Strip any existing "Bearer " prefix before adding our own
         let token = credentials.authToken.trim();
         while (token.toLowerCase().startsWith("bearer ")) {
           token = token.substring(7).trim();
@@ -53,12 +116,12 @@ export function useMCPTools() {
       });
 
       if (invokeError) throw invokeError;
-
-      if (data?.error) {
-        throw new Error(data.error);
-      }
+      if (data?.error) throw new Error(data.error);
 
       if (data?.tools && Array.isArray(data.tools)) {
+        // Save raw tools to DB
+        await saveToolsToDB(data.tools);
+
         const mappedTools: MCPTool[] = data.tools.map((tool: any) => ({
           id: tool.name || tool.id,
           name: tool.name || tool.id,
@@ -77,7 +140,7 @@ export function useMCPTools() {
         }));
 
         setTools(mappedTools);
-        toast({ title: `Loaded ${mappedTools.length} MCP tools` });
+        toast({ title: `Loaded & saved ${mappedTools.length} MCP tools` });
       } else {
         setTools([]);
       }
