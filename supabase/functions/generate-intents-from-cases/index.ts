@@ -424,7 +424,8 @@ serve(async (req) => {
           continue;
         }
 
-        // Process each generated intent
+        // Deduplicate AI response (AI may return same name for different cases)
+        const seenInBatch = new Set<string>();
         for (const gen of parsed) {
           const caseId = gen.caseId as number;
           const intentName = (gen.name as string) || promptToIntentName(batch.find((tc) => tc.id === caseId)?.prompt || "");
@@ -436,12 +437,14 @@ serve(async (req) => {
             continue;
           }
 
-          // Check for duplicates
-          if (existingNames.has(intentName.toLowerCase())) {
+          // Check for duplicates (existing DB + within this batch response)
+          const nameLower = intentName.toLowerCase();
+          if (existingNames.has(nameLower) || seenInBatch.has(nameLower)) {
             results.push({ caseId, success: true, intentName, skipped: true });
             skipped++;
             continue;
           }
+          seenInBatch.add(nameLower);
 
           const moduleId = CATEGORY_TO_MODULE[tc.category] || "reports";
           const subModuleId = deriveSubModule(tc.category, tc.subCategory);
