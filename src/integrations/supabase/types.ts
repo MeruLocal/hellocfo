@@ -107,6 +107,63 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_usage_logs: {
+        Row: {
+          conversation_id: string
+          created_at: string
+          duration_ms: number | null
+          entity_id: string
+          estimated_cost_usd: number
+          id: string
+          input_tokens: number
+          message_count: number
+          model: string
+          org_id: string | null
+          output_tokens: number
+          provider: string
+          tools_called_count: number
+          tools_used: string[] | null
+          total_tokens: number
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string
+          duration_ms?: number | null
+          entity_id: string
+          estimated_cost_usd?: number
+          id?: string
+          input_tokens?: number
+          message_count?: number
+          model?: string
+          org_id?: string | null
+          output_tokens?: number
+          provider?: string
+          tools_called_count?: number
+          tools_used?: string[] | null
+          total_tokens?: number
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string
+          duration_ms?: number | null
+          entity_id?: string
+          estimated_cost_usd?: number
+          id?: string
+          input_tokens?: number
+          message_count?: number
+          model?: string
+          org_id?: string | null
+          output_tokens?: number
+          provider?: string
+          tools_called_count?: number
+          tools_used?: string[] | null
+          total_tokens?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       country_configs: {
         Row: {
           code: string
@@ -622,6 +679,57 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      mcp_tools_master: {
+        Row: {
+          avg_response_time_ms: number | null
+          category: string
+          created_at: string
+          description: string | null
+          display_name: string
+          endpoint: string | null
+          id: string
+          input_schema: Json | null
+          is_active: boolean
+          last_called_at: string | null
+          method: string
+          tool_name: string
+          total_calls: number
+          updated_at: string
+        }
+        Insert: {
+          avg_response_time_ms?: number | null
+          category?: string
+          created_at?: string
+          description?: string | null
+          display_name: string
+          endpoint?: string | null
+          id?: string
+          input_schema?: Json | null
+          is_active?: boolean
+          last_called_at?: string | null
+          method?: string
+          tool_name: string
+          total_calls?: number
+          updated_at?: string
+        }
+        Update: {
+          avg_response_time_ms?: number | null
+          category?: string
+          created_at?: string
+          description?: string | null
+          display_name?: string
+          endpoint?: string | null
+          id?: string
+          input_schema?: Json | null
+          is_active?: boolean
+          last_called_at?: string | null
+          method?: string
+          tool_name?: string
+          total_calls?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
       meta_account_health: {
         Row: {
