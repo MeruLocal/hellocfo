@@ -51,7 +51,7 @@ serve(async (req) => {
       if (!offsetRaw && body.offset !== undefined && body.offset !== null) {
         offsetRaw = String(body.offset);
       }
-    } catch {
+    } catch (_e) {
       // ignore invalid/empty POST body and rely on query params
     }
   }

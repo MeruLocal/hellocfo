@@ -178,7 +178,7 @@ const parseJSON = (text: string): unknown => {
     if (arrayMatch) {
       try {
         return JSON.parse(arrayMatch[0]);
-      } catch {
+      } catch (_e) {
         // Continue
       }
     }
