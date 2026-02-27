@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
           is_active: intent.is_active !== false,
           training_phrases: intent.training_phrases || [],
           entities: entities,
-          generated_by: "batch_import",
+          generated_by: "ai",
         };
 
         if (existing) {
