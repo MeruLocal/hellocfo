@@ -9,8 +9,10 @@ const corsHeaders = {
 
 // OpenAI GPT-5.2 endpoint (from secrets)
 const getOpenAIEndpoint = () => {
-  const baseUrl = Deno.env.get("OPENAI_GPT_5_2_BASE_URL");
+  let baseUrl = (Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "").trim();
   if (!baseUrl) throw new Error("OPENAI_GPT_5_2_BASE_URL secret is not configured");
+  if (baseUrl.startsWith("ttps://")) baseUrl = `h${baseUrl}`;
+  if (!baseUrl.startsWith("http")) baseUrl = `https://${baseUrl}`;
   return baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
 };
 

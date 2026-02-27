@@ -510,8 +510,10 @@ const callAI = async (
   // Fallback to GPT-5.2 secrets if no API key in config
   if (!apiKey) {
     const gpt52Key = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
-    const gpt52Url = Deno.env.get("OPENAI_GPT_5_2_BASE_URL");
+    let gpt52Url = (Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "").trim();
     if (gpt52Key) {
+      if (gpt52Url.startsWith("ttps://")) gpt52Url = `h${gpt52Url}`;
+      if (gpt52Url && !gpt52Url.startsWith("http")) gpt52Url = `https://${gpt52Url}`;
       apiKey = gpt52Key;
       provider = 'openai';
       model = 'gpt-5.2';
