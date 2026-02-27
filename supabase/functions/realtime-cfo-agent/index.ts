@@ -21,6 +21,8 @@ import {
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
+import { validateWriteToolArgs } from "../_shared/write-validator.ts";
+import { logQueryRouting } from "../_shared/routing-logger.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -650,6 +652,20 @@ serve(async (req) => {
                 if (mcpClientInstance) {
                   sendEvent("executing_tool", { tool: toolName, description: toolName });
 
+                  // Gap 7: Pre-flight validation for write tools
+                  const isWrite = /^(create|update|delete|void|cancel)_/.test(toolName);
+                  if (isWrite) {
+                    const validation = validateWriteToolArgs(toolName, toolInput);
+                    if (!validation.valid) {
+                      console.warn(`[${reqId}] Write validation failed for ${toolName}: ${validation.errors.join(', ')}`);
+                      sendEvent("write_validation", { tool: toolName, valid: false, errors: validation.errors });
+                      mcpResults.push({ tool: toolName, error: `Validation: ${validation.errors.join('; ')}`, success: false });
+                      sendEvent("tool_result", { tool: toolName, success: false, error: validation.errors.join('; ') });
+                      messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: validation.errors.join('; ') }) });
+                      continue;
+                    }
+                  }
+
                   try {
                     // entity_id/org_id are already in the MCP URL query params — do not pass as tool args
                     const mcpResult = await mcpClientInstance.callTool(toolName, toolInput);
@@ -820,6 +836,24 @@ serve(async (req) => {
           response_time_ms: responseTimeMs,
           token_cost: feedbackTokenCost,
           implicit_signals: { source: "realtime" },
+        }, reqId);
+
+        // Gap 9: Query routing log
+        await logQueryRouting(supabase, {
+          requestId: reqId,
+          conversationId: effectiveConversationId,
+          entityId,
+          userId: "realtime-user",
+          query,
+          routePath: feedbackPath,
+          intentMatched: feedbackIntent || undefined,
+          intentConfidence: feedbackIntentConfidence || undefined,
+          toolsLoaded: feedbackToolsLoaded,
+          toolsUsed: feedbackToolsUsed,
+          toolSelectionStrategy: feedbackStrategy || undefined,
+          modelUsed: feedbackModel || undefined,
+          totalTokens: feedbackTokenCost || 0,
+          responseTimeMs,
         }, reqId);
 
         // RL logging — intent routing stats or LLM path patterns

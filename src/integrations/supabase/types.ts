@@ -203,6 +203,48 @@ export type Database = {
         }
         Relationships: []
       }
+      embedding_jobs: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          intent_id: string
+          intent_name: string
+          job_type: string
+          phrases_count: number | null
+          processed_count: number | null
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          intent_id: string
+          intent_name: string
+          job_type?: string
+          phrases_count?: number | null
+          processed_count?: number | null
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          intent_id?: string
+          intent_name?: string
+          job_type?: string
+          phrases_count?: number | null
+          processed_count?: number | null
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
       enrichment_types: {
         Row: {
           config_fields: Json
@@ -374,6 +416,39 @@ export type Database = {
           tools_used?: string[] | null
           user_id?: string
           user_message?: string
+        }
+        Relationships: []
+      }
+      intent_embeddings: {
+        Row: {
+          created_at: string
+          embedding: string | null
+          id: string
+          intent_id: string
+          intent_name: string
+          model: string
+          phrase: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          intent_id: string
+          intent_name: string
+          model?: string
+          phrase: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          intent_id?: string
+          intent_name?: string
+          model?: string
+          phrase?: string
+          updated_at?: string
         }
         Relationships: []
       }
