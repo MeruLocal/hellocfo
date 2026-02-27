@@ -614,7 +614,7 @@ serve(async (req) => {
             });
 
             // Select model tier
-            const modelSelection = selectModelTier(query, effectiveCategory);
+            const modelSelection = selectModelTier(query);
             console.log(`[${reqId}] Model: ${modelSelection.tier} (${modelSelection.reason})`);
 
             // Build category-specific system prompt
