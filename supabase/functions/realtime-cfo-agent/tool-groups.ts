@@ -3,7 +3,10 @@ export {
   TOOL_CATEGORIES,
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
-  getSemanticCandidates,
+  lookupToolsFromRegistry,
+  extractKeywords,
+  HARD_CAP_TOOLS,
+  EMERGENCY_FALLBACK_TOOLS,
   type ToolCategory,
   type OpenAITool,
 } from "../_shared/tool-groups.ts";

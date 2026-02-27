@@ -1654,6 +1654,19 @@ export type Database = {
         }
         Returns: boolean
       }
+      match_tools_from_registry: {
+        Args: {
+          p_exclude?: string[]
+          p_keywords: string[]
+          p_limit?: number
+          p_modules: string[]
+        }
+        Returns: {
+          match_source: string
+          module: string
+          tool_name: string
+        }[]
+      }
     }
     Enums: {
       app_role: "admin" | "user"

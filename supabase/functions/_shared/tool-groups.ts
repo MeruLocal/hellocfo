@@ -450,24 +450,84 @@ function resolveToolNames(
   const available = new Set(mcpTools.map(t => t.name));
   const matchedStatic = staticNames.filter(name => available.has(name));
 
-  // No more fuzzy/dynamic matching — semantic matching is done externally
-  // via selectToolsSemantically() and merged by the calling edge function.
   if (matchedStatic.length === 0) return [];
   return matchedStatic;
 }
 
+// ============================================================
+// Hard Cap + Emergency Fallback + tool_registry DB Lookup
+// ============================================================
+
+export const HARD_CAP_TOOLS = 40;
+
+export const EMERGENCY_FALLBACK_TOOLS = [
+  'search_contacts', 'get_all_invoices', 'get_all_bills',
+  'get_accounts', 'get_profit_and_loss', 'get_balance_sheet',
+  'search_items', 'get_organisation',
+];
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+  'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+  'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+  'between', 'out', 'off', 'over', 'under', 'again', 'further', 'then',
+  'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each',
+  'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+  'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
+  'and', 'but', 'or', 'if', 'while', 'because', 'until', 'about',
+  'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those',
+  'i', 'me', 'my', 'mine', 'we', 'our', 'ours', 'you', 'your', 'yours',
+  'he', 'him', 'his', 'she', 'her', 'hers', 'it', 'its', 'they', 'them',
+  'their', 'theirs', 'show', 'get', 'give', 'tell', 'find', 'list',
+  'please', 'want', 'know', 'see', 'look', 'make', 'let', 'help',
+]);
+
+export function extractKeywords(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+}
+
 /**
- * Returns candidate MCP tools that are NOT covered by the given static categories.
- * These are the tools that need semantic matching.
+ * Lookup tools from the tool_registry table via the match_tools_from_registry RPC.
+ * Zero LLM cost, zero latency overhead — just a DB query.
  */
-export function getSemanticCandidates(
+export async function lookupToolsFromRegistry(
+  supabase: { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: Array<{ tool_name: string; module: string; match_source: string }> | null; error: unknown }> },
+  query: string,
   matchedCategories: string[],
-  mcpTools: Array<{ name: string; description: string; inputSchema: unknown }>,
-): Array<{ name: string; description: string }> {
-  const staticNames = new Set(getAllToolNames(matchedCategories));
-  return mcpTools
-    .filter(t => !staticNames.has(t.name))
-    .map(t => ({ name: t.name, description: t.description || "" }));
+  alreadySelected: string[],
+  reqId: string,
+): Promise<{ toolNames: string[]; strategy: string }> {
+  try {
+    const keywords = extractKeywords(query);
+    if (matchedCategories.length === 0 && keywords.length === 0) {
+      return { toolNames: [], strategy: 'registry_no_input' };
+    }
+
+    const { data, error } = await supabase.rpc('match_tools_from_registry', {
+      p_modules: matchedCategories,
+      p_keywords: keywords,
+      p_exclude: alreadySelected,
+      p_limit: 20,
+    });
+
+    if (error) {
+      console.warn(`[${reqId}] tool_registry lookup error:`, error);
+      return { toolNames: [], strategy: 'registry_error' };
+    }
+
+    const toolNames = (data || []).map((r: { tool_name: string }) => r.tool_name);
+    console.log(`[${reqId}] tool_registry lookup: ${toolNames.length} tools from ${matchedCategories.length} modules + ${keywords.length} keywords`);
+    return { toolNames, strategy: 'tool_registry_lookup' };
+  } catch (err) {
+    console.warn(`[${reqId}] tool_registry lookup exception:`, err);
+    return { toolNames: [], strategy: 'registry_exception' };
+  }
 }
 
 /**

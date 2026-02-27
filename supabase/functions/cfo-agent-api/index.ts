@@ -3,10 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
-  getSemanticCandidates,
+  lookupToolsFromRegistry,
+  HARD_CAP_TOOLS,
+  EMERGENCY_FALLBACK_TOOLS,
   type OpenAITool,
 } from "./tool-groups.ts";
-import { selectToolsSemantically } from "../_shared/semantic-tool-selector.ts";
 import { SYSTEM_PROMPT } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import { logFeedback } from "./feedback-logger.ts";
@@ -1374,49 +1375,53 @@ serve(async (req) => {
 
           if (SIMPLE_DIRECT_LLM_MODE) {
             toolSelection = {
-              toolNames: mcpTools.map(t => t.name),
-              matchedCategories: ['all_mcp_tools'],
-              strategy: 'direct_llm_all_mcp_tools',
+              toolNames: [...EMERGENCY_FALLBACK_TOOLS],
+              matchedCategories: ['emergency_fallback'],
+              strategy: 'direct_llm_emergency_fallback',
             };
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
             toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
-            // Supplement with intent-derived tools if available
+
+            // Supplement with intent-derived tools if available (highest priority)
             const intentTools = (bestIntent as Record<string, unknown> | null)?._intentTools as string[] | undefined;
             if (intentTools && intentTools.length > 0) {
-              for (const t of intentTools) {
-                if (!toolSelection.toolNames.includes(t) && mcpTools.some(m => m.name === t)) {
-                  toolSelection.toolNames.push(t);
-                }
+              // Intent tools go first for priority ordering
+              const intentFirst = [...intentTools];
+              for (const t of toolSelection.toolNames) {
+                if (!intentFirst.includes(t)) intentFirst.push(t);
               }
+              toolSelection.toolNames = intentFirst;
               console.log(`[api] Supplemented tool selection with ${intentTools.length} intent tools`);
             }
 
-            // Semantic matching: find additional tools beyond static keyword categories
+            // tool_registry DB lookup: find additional tools beyond static keyword categories
             if (mcpTools.length > 0) {
-              const candidates = getSemanticCandidates(toolSelection.matchedCategories, mcpTools);
-              if (candidates.length > 0) {
-                const semantic = await selectToolsSemantically(query, candidates, reqId);
-                if (semantic.toolNames.length > 0) {
-                  for (const name of semantic.toolNames) {
-                    if (!toolSelection.toolNames.includes(name)) {
-                      toolSelection.toolNames.push(name);
-                    }
+              const registry = await lookupToolsFromRegistry(
+                supabase, query, toolSelection.matchedCategories, toolSelection.toolNames, reqId
+              );
+              if (registry.toolNames.length > 0) {
+                for (const name of registry.toolNames) {
+                  if (!toolSelection.toolNames.includes(name)) {
+                    toolSelection.toolNames.push(name);
                   }
-                  toolSelection.strategy = `${toolSelection.strategy}+${semantic.strategy}`;
-                  console.log(`[api] Semantic added ${semantic.toolNames.length} tools: ${semantic.toolNames.join(', ')}`);
                 }
+                toolSelection.strategy = `${toolSelection.strategy}+${registry.strategy}`;
+                console.log(`[api] Registry added ${registry.toolNames.length} tools`);
               }
             }
+
+            // Priority-ordered hard cap: intent tools first, then category, then registry
+            const deduped = [...new Set(toolSelection.toolNames)];
+            toolSelection.toolNames = deduped.slice(0, HARD_CAP_TOOLS);
 
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           }
 
-          // FALLBACK: If matching yielded 0 tools but MCP has tools, pass ALL
-          const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
-          if (usingAllTools) {
-            filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
-            console.log(`[api] No match — falling back to all ${filteredTools.length} MCP tools`);
+          // FALLBACK: If matching yielded 0 tools, use emergency fallback — NEVER all 698
+          if (filteredTools.length === 0 && mcpTools.length > 0) {
+            filteredTools = buildOpenAIToolsFromMcp(mcpTools, EMERGENCY_FALLBACK_TOOLS);
+            console.warn(`[api] Zero tools matched — using emergency fallback (${EMERGENCY_FALLBACK_TOOLS.length} tools)`);
           }
 
           sendEvent('tools_filtered', {
