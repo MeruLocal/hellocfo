@@ -76,7 +76,10 @@ const callOpenAI = async (
     throw new Error("OPENAI_GPT_5_2_API_KEY is not configured");
   }
 
-  const baseUrl = Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "https://api.openai.com/v1";
+  let baseUrl = (Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "https://api.openai.com/v1").trim();
+  // Fix common secret misconfiguration: missing 'h' prefix or protocol
+  if (baseUrl.startsWith("ttps://")) baseUrl = `h${baseUrl}`;
+  if (!baseUrl.startsWith("http")) baseUrl = `https://${baseUrl}`;
   const endpoint = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
 
   const controller = new AbortController();
