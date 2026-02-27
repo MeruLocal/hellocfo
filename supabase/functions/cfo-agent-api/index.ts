@@ -127,17 +127,18 @@ function parseCreatedDoc(toolName: string, resultStr: string): CreatedDoc | null
   let amount: number | null = null;
   try {
     const parsed = JSON.parse(resultStr);
-    const obj = parsed?.data || parsed?.result || parsed || {};
+    const obj = parsed?.data || parsed?.result || parsed?.resOfCreation || parsed?.resOfUpdate || parsed || {};
     const record = Array.isArray(obj) ? obj[0] : obj;
     if (!record || typeof record !== 'object') return null;
-    docNumber = record.invoice_number || record.invoiceNumber || record.bill_number ||
-      record.billNumber || record.number || record.document_number || record.reference_number ||
+    docNumber = record.InvoiceNumber || record.invoice_number || record.invoiceNumber ||
+      record.BillNumber || record.bill_number || record.billNumber ||
+      record.number || record.document_number || record.reference_number ||
       record.credit_note_number || record.payment_number || null;
     internalId = record.id || record.invoice_id || record.bill_id || record.payment_id ||
       record.customer_id || record.vendor_id || record.contact_id || null;
-    party = record.customer_name || record.vendor_name || record.contact_name ||
+    party = record.PayeeName || record.customer_name || record.vendor_name || record.contact_name ||
       record.party_name || record.name || null;
-    amount = record.total || record.amount || record.grand_total || record.balance || null;
+    amount = record.TotalPayableAmount || record.total || record.amount || record.grand_total || record.balance || null;
     if (typeof amount === 'string') amount = parseFloat(amount) || null;
   } catch (_e) { /* not JSON */ }
   return { docType, docNumber, internalId, party, amount, createdAt: new Date().toISOString() };
@@ -1413,7 +1414,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             if (matchedDoc && matchedDoc.internalId) {
               detailLookupContext = `\n\n🔍 DOCUMENT LOOKUP CONTEXT: The user is asking about ${detailLookup.docType} "${detailLookup.docRef}". This document was created in this conversation. Internal ID: ${matchedDoc.internalId}. Use the get/view detail tool with this internal ID to fetch full details. If the first lookup returns empty, retry once after a brief pause — the record may still be syncing.`;
             } else {
-              detailLookupContext = `\n\n🔍 DOCUMENT LOOKUP CONTEXT: The user is asking about ${detailLookup.docType} "${detailLookup.docRef}". Search by the document NUMBER/reference, NOT by ID. Use a search or find tool with the invoice/bill number parameter. If not found on first try and the document was recently created, retry once. Do NOT call get_invoice_by_id with the human-readable number — that requires an internal ID.`;
+              detailLookupContext = `\n\n🔍 DOCUMENT LOOKUP CONTEXT: The user is asking about ${detailLookup.docType} "${detailLookup.docRef}". You do NOT have the internal ID. To get full details:\n1. PREFERRED: Use a "view" or "get_by_id" detail tool if you can first resolve the ID. Call the list tool (e.g. get_invoices) with the document number to find the internal ID, then call the detail tool (e.g. get_invoice_by_id) with that ID.\n2. FALLBACK: If only a list tool exists, use it with the document number filter — but note it may return limited fields.\nDo NOT call get_invoice_by_id with the human-readable number — that requires an internal UUID ID.`;
             }
           }
 
