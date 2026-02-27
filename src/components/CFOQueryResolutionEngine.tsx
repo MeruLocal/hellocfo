@@ -62,7 +62,7 @@ import {
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
   ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3,
-  CheckCircle2, LockKeyhole
+  CheckCircle2, LockKeyhole, LayoutGrid, List
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
@@ -3379,7 +3379,19 @@ function MCPToolsView({
   onRefresh: (creds: { authToken: string; entityId: string; orgId: string }) => void;
 }) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
+  const [toolSearch, setToolSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const { getToolAnalytics } = useToolAnalytics();
+
+  const filteredTools = useMemo(() => {
+    if (!toolSearch.trim()) return tools;
+    const q = toolSearch.toLowerCase();
+    return tools.filter(t =>
+      t.name.toLowerCase().includes(q) ||
+      t.description.toLowerCase().includes(q) ||
+      t.parameters.some(p => p.name.toLowerCase().includes(q))
+    );
+  }, [tools, toolSearch]);
 
   // Login state
   const [email, setEmail] = useState('cfoagent@gmail.com');
@@ -3693,37 +3705,111 @@ function MCPToolsView({
       {error && <div className="mb-4 p-3 bg-destructive/10 text-destructive rounded text-sm">{error}</div>}
 
       {tools.length > 0 && (
-        <p className="text-xs text-muted-foreground mb-3">{tools.length} tools loaded</p>
+        <div className="flex items-center gap-3 mb-3">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder={`Search ${tools.length} tools...`}
+              value={toolSearch}
+              onChange={e => setToolSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            {toolSearch && (
+              <button onClick={() => setToolSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center border rounded-md overflow-hidden">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground'}`}
+              title="Grid view"
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={`p-2 transition-colors ${viewMode === 'table' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground'}`}
+              title="Table view"
+            >
+              <List size={14} />
+            </button>
+          </div>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {filteredTools.length}{toolSearch ? ` / ${tools.length}` : ''} tools
+          </span>
+        </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {tools.map(tool => {
-          const analytics = getToolAnalytics(tool.id);
-          return (
-            <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-card">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium text-sm text-foreground">{tool.name}</h3>
-                    <MCPToolUsageBadge toolName={tool.id} analytics={analytics} />
+      {/* Grid View */}
+      {viewMode === 'grid' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {filteredTools.map(tool => {
+            const analytics = getToolAnalytics(tool.id);
+            return (
+              <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-card">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium text-sm text-foreground">{tool.name}</h3>
+                      <MCPToolUsageBadge toolName={tool.id} analytics={analytics} />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tool.description}</p>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tool.description}</p>
                 </div>
+                {tool.parameters.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {tool.parameters.slice(0, 4).map(p => (
+                      <span key={p.name} className={`text-xs px-1.5 py-0.5 rounded ${p.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                        {p.name}
+                      </span>
+                    ))}
+                    {tool.parameters.length > 4 && <span className="text-xs text-muted-foreground">+{tool.parameters.length - 4}</span>}
+                  </div>
+                )}
               </div>
-              {tool.parameters.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {tool.parameters.slice(0, 4).map(p => (
-                    <span key={p.name} className={`text-xs px-1.5 py-0.5 rounded ${p.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                      {p.name}
-                    </span>
-                  ))}
-                  {tool.parameters.length > 4 && <span className="text-xs text-muted-foreground">+{tool.parameters.length - 4}</span>}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Table View */}
+      {viewMode === 'table' && filteredTools.length > 0 && (
+        <div className="border rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-muted/50 border-b">
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">#</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">Tool Name</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">Description</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">Method</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground text-xs">Params</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTools.map((tool, idx) => (
+                  <tr
+                    key={tool.id}
+                    onClick={() => setSelectedTool(tool)}
+                    className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
+                  >
+                    <td className="px-3 py-2 text-xs text-muted-foreground">{idx + 1}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-primary whitespace-nowrap">{tool.name}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground max-w-[300px] truncate">{tool.description}</td>
+                    <td className="px-3 py-2">
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{tool.method}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">{tool.parameters.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {isLoading && tools.length === 0 && (
         <div className="text-center py-12 text-muted-foreground">
