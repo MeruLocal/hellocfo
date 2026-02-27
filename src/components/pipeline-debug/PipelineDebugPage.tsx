@@ -6,11 +6,12 @@ import { PipelineProgressBar } from './PipelineProgressBar';
 import { StepInspectorCard } from './StepInspectorCard';
 import { HistoricalHealthMonitor } from './HistoricalHealthMonitor';
 import { RegressionSuitePanel } from './RegressionSuitePanel';
+import { MissingToolsAudit } from './MissingToolsAudit';
 import { mapSSEEventToStepUpdates } from './sseMapper';
 import { PIPELINE_STEPS, createInitialRunState, type PipelineRunState } from './types';
-import { Play, FlaskConical, BarChart3, TestTube } from 'lucide-react';
+import { Play, BarChart3, TestTube, SearchX } from 'lucide-react';
 
-type TabId = 'live' | 'regression' | 'health';
+type TabId = 'live' | 'regression' | 'health' | 'missing-tools';
 
 export function PipelineDebugPage() {
   const { session } = useAuth();
@@ -155,6 +156,7 @@ export function PipelineDebugPage() {
     { id: 'live' as TabId, label: 'Live Tester', icon: <Play size={14} /> },
     { id: 'regression' as TabId, label: 'Regression Suite', icon: <TestTube size={14} /> },
     { id: 'health' as TabId, label: 'Health Monitor', icon: <BarChart3 size={14} /> },
+    { id: 'missing-tools' as TabId, label: 'Missing Tools', icon: <SearchX size={14} /> },
   ];
 
   return (
@@ -239,6 +241,8 @@ export function PipelineDebugPage() {
             <HistoricalHealthMonitor />
           </div>
         )}
+
+        {activeTab === 'missing-tools' && <MissingToolsAudit />}
       </div>
     </div>
   );
