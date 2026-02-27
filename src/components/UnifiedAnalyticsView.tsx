@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  BarChart3, MessageSquare, Cpu, DollarSign, Activity, TrendingUp,
+  BarChart3, MessageSquare, Cpu, DollarSign, TrendingUp,
   Loader2, RefreshCw, Database, Zap, Clock, Hash, Building2, Users,
-  Search, Filter, Calendar, X, ChevronRight, User, Bot
+  Search, Filter, Calendar, X, ChevronRight, ChevronDown, User, Bot,
+  AlertTriangle, CheckCircle2, XCircle, Wrench, Brain, Route
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
@@ -46,10 +47,17 @@ interface ChatMessage {
   timestamp?: string;
   metadata?: {
     route?: string;
+    category?: string;
+    routingStrategy?: string;
     intent?: { name: string; confidence?: number } | null;
     toolsUsed?: string[];
+    toolsLoaded?: string[];
+    toolResults?: { tool: string; input?: Record<string, unknown>; success: boolean; error?: string }[];
+    enrichmentsApplied?: string[];
     executionTime?: string;
     llmModel?: string;
+    usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+    errorDetail?: string;
     [key: string]: unknown;
   };
 }
@@ -104,14 +112,57 @@ function getDateGroup(dateStr: string): string {
   return format(date, 'MMM yyyy');
 }
 
-function getRouteBadgeVariant(route?: string): 'default' | 'secondary' | 'outline' {
-  if (!route) return 'outline';
-  if (route === 'fast') return 'default';
-  if (route === 'llm' || route === 'llm_tools') return 'secondary';
-  return 'outline';
+function getRouteBadgeColor(route?: string): string {
+  if (!route) return 'bg-muted text-muted-foreground';
+  if (route === 'fast') return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+  if (route === 'llm' || route === 'llm_tools') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+  if (route === 'cached') return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+  if (route === 'general_chat') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400';
+  return 'bg-muted text-muted-foreground';
+}
+
+function getStrategyLabel(strategy?: string): { label: string; color: string } | null {
+  if (!strategy) return null;
+  if (strategy.includes('fast_path')) return { label: '🟢 embedding_direct', color: 'text-green-600' };
+  if (strategy.includes('general_chat')) return { label: '🟡 general_chat', color: 'text-purple-600' };
+  if (strategy.includes('keyword') || strategy.includes('category')) return { label: '🟠 keyword_fallback', color: 'text-amber-600' };
+  if (strategy.includes('emergency') || strategy.includes('fallback')) return { label: '🔴 fallback', color: 'text-red-600' };
+  if (strategy.includes('registry')) return { label: '🔵 db_registry', color: 'text-blue-600' };
+  return { label: strategy, color: 'text-muted-foreground' };
 }
 
 type SubTab = 'conversations' | 'analytics';
+
+// ── Expandable Tool Detail ─────────────────────────────────────
+function ToolResultDetail({ result }: { result: { tool: string; input?: Record<string, unknown>; success: boolean; error?: string } }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="text-[10px] border border-border rounded px-2 py-1">
+      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 w-full text-left">
+        {result.success ? <CheckCircle2 size={10} className="text-green-500 shrink-0" /> : <XCircle size={10} className="text-red-500 shrink-0" />}
+        <span className="font-mono font-medium truncate">{result.tool}</span>
+        <ChevronDown size={10} className={cn('ml-auto shrink-0 transition-transform', expanded && 'rotate-180')} />
+      </button>
+      {expanded && (
+        <div className="mt-1 pt-1 border-t border-border space-y-1">
+          {result.input && Object.keys(result.input).length > 0 && (
+            <div>
+              <span className="text-muted-foreground font-semibold">Args:</span>
+              <pre className="text-[9px] bg-muted/50 rounded px-1.5 py-1 mt-0.5 overflow-x-auto max-h-24 whitespace-pre-wrap">
+                {JSON.stringify(result.input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {result.error && (
+            <div className="text-red-600 dark:text-red-400">
+              <span className="font-semibold">Error:</span> {result.error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Message Panel (right side detail) ─────────────────────────
 function MessagePanel({ conversation, onClose }: { conversation: ConversationRecord; onClose: () => void }) {
@@ -119,6 +170,15 @@ function MessagePanel({ conversation, onClose }: { conversation: ConversationRec
     () => (Array.isArray(conversation.messages) ? (conversation.messages as ChatMessage[]) : []),
     [conversation.messages]
   );
+  const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set());
+
+  const toggleExpand = (idx: number) => {
+    setExpandedMessages(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -163,32 +223,138 @@ function MessagePanel({ conversation, onClose }: { conversation: ConversationRec
           ) : (
             messages.map((msg, idx) => {
               const isUserMsg = msg.role === 'user';
+              const meta = msg.metadata;
+              const isExpanded = expandedMessages.has(idx);
+              const strategy = getStrategyLabel(meta?.routingStrategy);
+              const hasError = meta?.errorDetail || msg.content?.includes('encountered an error');
+              const toolResults = meta?.toolResults || [];
+              const failedTools = toolResults.filter(r => !r.success);
+
               return (
                 <div key={msg.id || idx} className={cn('flex gap-2', isUserMsg && 'flex-row-reverse')}>
                   <div className={cn('w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-1', isUserMsg ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>
                     {isUserMsg ? <User size={12} /> : <Bot size={12} />}
                   </div>
-                  <div className={cn('rounded-lg px-3 py-2 max-w-[85%] text-sm', isUserMsg ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground')}>
+                  <div className={cn(
+                    'rounded-lg px-3 py-2 max-w-[90%] text-sm',
+                    isUserMsg ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
+                    hasError && !isUserMsg && 'border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30'
+                  )}>
                     <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      {msg.timestamp && (
-                        <span className={cn('text-[10px]', isUserMsg ? 'text-primary-foreground/60' : 'text-muted-foreground')}>
-                          {format(new Date(msg.timestamp), 'h:mm a')}
-                        </span>
-                      )}
-                      {!isUserMsg && msg.metadata?.route && (
-                        <Badge variant={getRouteBadgeVariant(msg.metadata.route)} className="text-[9px] px-1 py-0 h-4">{msg.metadata.route}</Badge>
-                      )}
-                      {!isUserMsg && msg.metadata?.intent?.name && (
-                        <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">{msg.metadata.intent.name}</Badge>
-                      )}
-                      {!isUserMsg && msg.metadata?.toolsUsed && msg.metadata.toolsUsed.length > 0 && (
-                        <span className="text-[10px] text-muted-foreground">🔧 {msg.metadata.toolsUsed.length} tools</span>
-                      )}
-                      {!isUserMsg && msg.metadata?.executionTime && (
-                        <span className="text-[10px] text-muted-foreground">⏱ {msg.metadata.executionTime}</span>
-                      )}
-                    </div>
+
+                    {/* ── Metadata Row (always visible for bot messages) ── */}
+                    {!isUserMsg && (
+                      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                        {/* Timestamp */}
+                        {msg.timestamp && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {format(new Date(msg.timestamp), 'h:mm a')}
+                          </span>
+                        )}
+                        {/* Route badge with color */}
+                        {meta?.route && (
+                          <span className={cn('text-[9px] px-1.5 py-0 rounded-full font-medium', getRouteBadgeColor(meta.route))}>
+                            <Route size={8} className="inline mr-0.5" />{meta.route}
+                          </span>
+                        )}
+                        {/* Routing strategy */}
+                        {strategy && (
+                          <span className={cn('text-[9px] font-medium', strategy.color)}>
+                            {strategy.label}
+                          </span>
+                        )}
+                        {/* Intent with confidence */}
+                        {meta?.intent?.name ? (
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 gap-0.5">
+                            <Brain size={8} />
+                            {meta.intent.name}
+                            {meta.intent.confidence != null && (
+                              <span className="opacity-60">({(meta.intent.confidence * 100).toFixed(0)}%)</span>
+                            )}
+                          </Badge>
+                        ) : (
+                          meta?.route && meta.route !== 'general_chat' && meta.route !== 'cached' && (
+                            <span className="text-[9px] text-red-500 font-medium">⚠ No intent</span>
+                          )
+                        )}
+                        {/* Tool count (clickable to expand) */}
+                        {(meta?.toolsUsed || meta?.toolsLoaded) && (meta?.toolsUsed?.length || 0) > 0 && (
+                          <button onClick={() => toggleExpand(idx)} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-0.5">
+                            <Wrench size={9} />
+                            {meta?.toolsUsed?.length || 0}/{meta?.toolsLoaded?.length || '?'} tools
+                            {failedTools.length > 0 && <span className="text-red-500 ml-0.5">({failedTools.length} failed)</span>}
+                          </button>
+                        )}
+                        {/* Token usage */}
+                        {meta?.usage?.total_tokens && meta.usage.total_tokens > 0 && (
+                          <span className="text-[10px] text-muted-foreground">
+                            📊 {formatNumber(meta.usage.total_tokens)} tok
+                            {meta.usage.input_tokens && meta.usage.output_tokens ? (
+                              <span className="opacity-60 ml-0.5">({formatNumber(meta.usage.input_tokens)}↑ {formatNumber(meta.usage.output_tokens)}↓)</span>
+                            ) : null}
+                          </span>
+                        )}
+                        {/* Execution time */}
+                        {meta?.executionTime && (
+                          <span className="text-[10px] text-muted-foreground">⏱ {meta.executionTime}</span>
+                        )}
+                        {/* LLM Model */}
+                        {meta?.llmModel && (
+                          <span className="text-[9px] text-muted-foreground font-mono">{meta.llmModel}</span>
+                        )}
+                        {/* Enrichments */}
+                        {meta?.enrichmentsApplied && meta.enrichmentsApplied.length > 0 && (
+                          <span className="text-[9px] text-muted-foreground">✨ {meta.enrichmentsApplied.join(', ')}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Error Detail (inline) ── */}
+                    {!isUserMsg && hasError && (
+                      <div className="mt-2 p-2 rounded bg-red-100 dark:bg-red-900/30 text-[10px] text-red-700 dark:text-red-400 flex items-start gap-1">
+                        <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                        <span>{meta?.errorDetail || 'Unknown error — check edge function logs'}</span>
+                      </div>
+                    )}
+
+                    {/* ── Expanded Tool Details ── */}
+                    {!isUserMsg && isExpanded && (
+                      <div className="mt-2 space-y-1.5 border-t border-border pt-2">
+                        <div className="text-[10px] font-semibold text-muted-foreground mb-1">
+                          Tools loaded: {meta?.toolsLoaded?.length || 0} → Used: {meta?.toolsUsed?.length || 0}
+                        </div>
+                        {/* Tool names list */}
+                        {meta?.toolsLoaded && meta.toolsLoaded.length > 0 && !toolResults.length && (
+                          <div className="flex flex-wrap gap-1">
+                            {meta.toolsLoaded.map(t => (
+                              <span key={t} className={cn(
+                                'text-[9px] px-1.5 py-0.5 rounded font-mono',
+                                meta.toolsUsed?.includes(t)
+                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                  : 'bg-muted text-muted-foreground'
+                              )}>
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Detailed tool results with args */}
+                        {toolResults.length > 0 && (
+                          <div className="space-y-1">
+                            {toolResults.map((r, i) => (
+                              <ToolResultDetail key={`${r.tool}-${i}`} result={r} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* User message timestamp */}
+                    {isUserMsg && msg.timestamp && (
+                      <span className="text-[10px] text-primary-foreground/60 mt-1 block">
+                        {format(new Date(msg.timestamp), 'h:mm a')}
+                      </span>
+                    )}
                   </div>
                 </div>
               );
@@ -219,6 +385,7 @@ export default function UnifiedAnalyticsView() {
   const [entityFilter, setEntityFilter] = useState('all');
   const [orgFilter, setOrgFilter] = useState('all');
   const [selectedConversation, setSelectedConversation] = useState<ConversationRecord | null>(null);
+  const [debugFilter, setDebugFilter] = useState<string>('all');
 
   // ── Analytics data ──
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -374,6 +541,27 @@ export default function UnifiedAnalyticsView() {
         !entityName.includes(q)
       ) return false;
     }
+    // Debug filters
+    if (debugFilter !== 'all') {
+      const msgs = Array.isArray(conv.messages) ? (conv.messages as ChatMessage[]) : [];
+      const botMsgs = msgs.filter(m => m.role === 'agent' || m.role === 'assistant');
+      if (debugFilter === 'failed_tools') {
+        const hasFailed = botMsgs.some(m => m.metadata?.toolResults?.some(r => !r.success));
+        if (!hasFailed) return false;
+      } else if (debugFilter === 'no_intent') {
+        const allMissing = botMsgs.length > 0 && botMsgs.every(m => !m.metadata?.intent?.name);
+        if (!allMissing) return false;
+      } else if (debugFilter === 'slow') {
+        const hasSlow = botMsgs.some(m => {
+          const t = parseFloat(m.metadata?.executionTime || '0');
+          return t > 10;
+        });
+        if (!hasSlow) return false;
+      } else if (debugFilter === 'keyword_fallback') {
+        const hasFallback = botMsgs.some(m => (m.metadata?.routingStrategy || '').includes('keyword') || (m.metadata?.routingStrategy || '').includes('fallback'));
+        if (!hasFallback) return false;
+      }
+    }
     return true;
   });
 
@@ -474,6 +662,16 @@ export default function UnifiedAnalyticsView() {
                 <SelectContent>
                   <SelectItem value="all">All Modes</SelectItem>
                   {uniqueModes.map(mode => <SelectItem key={mode} value={mode}>{mode}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={debugFilter} onValueChange={setDebugFilter}>
+                <SelectTrigger className="w-[150px] h-8 text-xs"><AlertTriangle size={12} className="mr-1 shrink-0" /><SelectValue placeholder="Debug" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Conversations</SelectItem>
+                  <SelectItem value="failed_tools">🔴 Failed Tools</SelectItem>
+                  <SelectItem value="no_intent">🟡 No Intent Match</SelectItem>
+                  <SelectItem value="slow">🟠 Slow (&gt;10s)</SelectItem>
+                  <SelectItem value="keyword_fallback">🟤 Keyword Fallback</SelectItem>
                 </SelectContent>
               </Select>
             </div>

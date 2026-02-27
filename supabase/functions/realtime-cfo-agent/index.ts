@@ -285,6 +285,11 @@ serve(async (req) => {
         let feedbackStrategy: string | null = null;
         let feedbackResponse: string | null = null;
         let feedbackTokenCost: number | null = null;
+        let feedbackCategory: string | null = null;
+        let feedbackEnrichmentsApplied: string[] = [];
+        let feedbackToolResults: { tool: string; input?: Record<string, unknown>; success: boolean; error?: string }[] = [];
+        let feedbackTokenBreakdown: { input_tokens: number; output_tokens: number; total_tokens: number } | null = null;
+        let feedbackErrorDetail: string | null = null;
 
         sendEvent("connected", { requestId: reqId, messageId });
         sendEvent("understanding_started", { query });
@@ -537,9 +542,14 @@ serve(async (req) => {
           feedbackIntentConfidence = bestIntent.confidence;
           feedbackModel = `${llmConfig.provider}/${llmConfig.model}`;
           feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
+          feedbackToolsLoaded = mcpResults.map(r => r.tool);
           feedbackStrategy = "fast_path_intent";
           feedbackResponse = finalResponse;
           feedbackTokenCost = response.usage?.total_tokens || null;
+          feedbackCategory = "fast";
+          feedbackToolResults = mcpResults.map(r => ({ tool: r.tool, input: r.input, success: r.success, error: r.error }));
+          feedbackEnrichmentsApplied = (resolutionFlow?.enrichments || []).map((e: { type: string }) => e.type);
+          feedbackTokenBreakdown = response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : null;
           // Cache write — fast path (skip if write ops were used)
           const fastToolsUsed = mcpResults.map(r => r.tool);
           if (!SIMPLE_DIRECT_LLM_MODE && !hasWriteOperations(fastToolsUsed)) {
@@ -603,6 +613,8 @@ serve(async (req) => {
             feedbackStrategy = "general_chat_bypass";
             feedbackResponse = finalResponse;
             feedbackTokenCost = response.usage?.total_tokens || null;
+            feedbackCategory = "general_chat";
+            feedbackTokenBreakdown = response.usage ? { input_tokens: response.usage.prompt_tokens || 0, output_tokens: response.usage.completion_tokens || 0, total_tokens: response.usage.total_tokens || 0 } : null;
 
           } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
@@ -777,6 +789,11 @@ serve(async (req) => {
             feedbackStrategy = toolSelection.strategy;
             feedbackResponse = finalResponse;
             feedbackTokenCost = inputTokens + outputTokens;
+            feedbackCategory = effectiveCategory as string;
+            feedbackToolResults = mcpResults.map(r => ({ tool: r.tool, input: r.input, success: r.success, error: r.error }));
+            const autoEnrichmentsForFeedback = detectAutoEnrichments(mcpResults);
+            feedbackEnrichmentsApplied = autoEnrichmentsForFeedback.map(e => e.type);
+            feedbackTokenBreakdown = { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens };
 
             // Cache write — LLM path (skip if write ops)
             const llmToolsUsed = mcpResults.map(r => r.tool);
@@ -810,12 +827,17 @@ serve(async (req) => {
             timestamp: new Date().toISOString(),
             metadata: {
               route: feedbackPath,
+              category: feedbackCategory,
+              routingStrategy: feedbackStrategy,
               intent: feedbackIntent ? { name: feedbackIntent, confidence: feedbackIntentConfidence } : null,
               toolsUsed: feedbackToolsUsed,
               toolsLoaded: feedbackToolsLoaded,
+              toolResults: feedbackToolResults,
+              enrichmentsApplied: feedbackEnrichmentsApplied,
               executionTime: `${(responseTimeMs / 1000).toFixed(2)}s`,
-              usage: { input_tokens: feedbackTokenCost || 0 },
+              usage: feedbackTokenBreakdown || { input_tokens: feedbackTokenCost || 0, output_tokens: 0, total_tokens: feedbackTokenCost || 0 },
               llmModel: feedbackModel,
+              errorDetail: feedbackErrorDetail,
             },
           };
 
