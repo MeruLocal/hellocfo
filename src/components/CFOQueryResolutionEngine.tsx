@@ -2575,6 +2575,8 @@ function IntentListView({
   const [showCasesGenInput, setShowCasesGenInput] = React.useState(false);
   const [selectedIntentIds, setSelectedIntentIds] = React.useState<Set<string>>(new Set());
   const [bulkGenProgress, setBulkGenProgress] = React.useState<{ running: boolean; current: number; total: number; completed: number; failed: number }>({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
+  const [refImporting, setRefImporting] = React.useState(false);
+  const [refImportResult, setRefImportResult] = React.useState<{ inserted: number; updated: number; total: number } | null>(null);
 
   const allSelected = intents.length > 0 && selectedIntentIds.size === intents.length;
   const someSelected = selectedIntentIds.size > 0 && selectedIntentIds.size < intents.length;
@@ -2657,6 +2659,43 @@ function IntentListView({
       console.error('Generate from cases error:', err);
       setCasesGenProgress(prev => ({ ...prev, running: false }));
       toast({ title: 'Generation failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
+    }
+  };
+  // Import reference data from pre-built JSON files
+  const handleImportReferenceData = async () => {
+    if (refImporting) return;
+    setRefImporting(true);
+    setRefImportResult(null);
+    try {
+      // Fetch both batch files
+      const [batch1Res, batch2Res] = await Promise.all([
+        fetch('/data/batch1_intents_with_phrases.json'),
+        fetch('/data/batch2_intents_with_phrases.json'),
+      ]);
+      const batch1 = await batch1Res.json();
+      const batch2 = await batch2Res.json();
+      const allIntents = [...batch1, ...batch2];
+
+      // Call edge function to upsert
+      const { data, error } = await supabase.functions.invoke('bulk-upsert-intents', {
+        body: { intents: allIntents },
+      });
+
+      if (error) throw error;
+
+      setRefImportResult({ inserted: data.inserted, updated: data.updated, total: data.total });
+      toast({
+        title: 'Reference data imported',
+        description: `${data.inserted} inserted, ${data.updated} updated out of ${data.total} intents`,
+      });
+
+      // Refresh intents list
+      window.location.reload();
+    } catch (err) {
+      console.error('Reference import error:', err);
+      toast({ title: 'Import failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
+    } finally {
+      setRefImporting(false);
     }
   };
 
@@ -2802,6 +2841,15 @@ function IntentListView({
           >
             <Wand2 size={16} /> Generate with AI
           </button>
+
+          <button
+            onClick={handleImportReferenceData}
+            disabled={refImporting}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {refImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {refImporting ? 'Importing...' : 'Import Reference Data'}
+          </button>
           
           <button
             onClick={onAddIntent}
@@ -2840,7 +2888,17 @@ function IntentListView({
         </div>
       )}
 
-      {/* Import/Generation Progress */}
+      {/* Reference Import Result */}
+      {refImportResult && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between">
+          <p className="font-medium text-emerald-700">
+            ✅ Reference import complete: {refImportResult.inserted} inserted, {refImportResult.updated} updated (total {refImportResult.total})
+          </p>
+          <button onClick={() => setRefImportResult(null)} className="text-xs text-emerald-500 hover:underline">Dismiss</button>
+        </div>
+      )}
+
+
       {(isImporting || generationProgress.total > 0) && (
         <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
           <div className="flex items-center gap-3">
