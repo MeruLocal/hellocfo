@@ -5,10 +5,11 @@ type AnySupabaseClient = any;
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
-  getSemanticCandidates,
+  lookupToolsFromRegistry,
+  HARD_CAP_TOOLS,
+  EMERGENCY_FALLBACK_TOOLS,
   type OpenAITool,
 } from "./tool-groups.ts";
-import { selectToolsSemantically } from "../_shared/semantic-tool-selector.ts";
 import { classifyQuery, type QueryCategory } from "./classifier.ts";
 import { selectModelTier, SYSTEM_PROMPTS } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
@@ -596,34 +597,37 @@ serve(async (req) => {
           } else {
             // LAYER 2: Select relevant tools via keyword matching against real MCP tools
             const toolSelection = SIMPLE_DIRECT_LLM_MODE
-              ? { toolNames: mcpTools.map((t) => t.name), matchedCategories: ["all_mcp_tools"], strategy: "direct_llm_all_mcp_tools" }
+              ? { toolNames: [...EMERGENCY_FALLBACK_TOOLS], matchedCategories: ["emergency_fallback"], strategy: "direct_llm_emergency_fallback" }
               : selectToolsForQuery(query, effectiveCategory, mcpTools);
 
-            // Semantic matching: find additional tools beyond static keyword categories
+            // tool_registry DB lookup: find additional tools beyond static keyword categories
             if (!SIMPLE_DIRECT_LLM_MODE && mcpTools.length > 0) {
-              const candidates = getSemanticCandidates(toolSelection.matchedCategories, mcpTools);
-              if (candidates.length > 0) {
-                const semantic = await selectToolsSemantically(query, candidates, reqId);
-                if (semantic.toolNames.length > 0) {
-                  for (const name of semantic.toolNames) {
-                    if (!toolSelection.toolNames.includes(name)) {
-                      toolSelection.toolNames.push(name);
-                    }
+              const registry = await lookupToolsFromRegistry(
+                supabase, query, toolSelection.matchedCategories, toolSelection.toolNames, reqId
+              );
+              if (registry.toolNames.length > 0) {
+                for (const name of registry.toolNames) {
+                  if (!toolSelection.toolNames.includes(name)) {
+                    toolSelection.toolNames.push(name);
                   }
-                  toolSelection.strategy = `${toolSelection.strategy}+${semantic.strategy}`;
-                  console.log(`[${reqId}] Semantic added ${semantic.toolNames.length} tools: ${semantic.toolNames.join(', ')}`);
                 }
+                toolSelection.strategy = `${toolSelection.strategy}+${registry.strategy}`;
+                console.log(`[${reqId}] Registry added ${registry.toolNames.length} tools`);
               }
             }
 
+            // Priority-ordered hard cap
+            const deduped = [...new Set(toolSelection.toolNames)];
+            toolSelection.toolNames = deduped.slice(0, HARD_CAP_TOOLS);
+
             let filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
 
-            // FALLBACK: If matching yielded 0 tools but MCP has tools, pass ALL of them.
-            const usingAllTools = filteredTools.length === 0 && mcpTools.length > 0;
-            if (usingAllTools) {
-              filteredTools = buildOpenAIToolsFromMcp(mcpTools, mcpTools.map(t => t.name));
-              console.log(`[${reqId}] No match — falling back to all ${filteredTools.length} MCP tools`);
+            // FALLBACK: If matching yielded 0 tools, use emergency fallback — NEVER all 698
+            if (filteredTools.length === 0 && mcpTools.length > 0) {
+              filteredTools = buildOpenAIToolsFromMcp(mcpTools, EMERGENCY_FALLBACK_TOOLS);
+              console.warn(`[${reqId}] Zero tools matched — using emergency fallback (${EMERGENCY_FALLBACK_TOOLS.length} tools)`);
             }
+            const usingAllTools = false; // Never fall back to all tools
 
             sendEvent("tools_filtered", {
               category: effectiveCategory,
