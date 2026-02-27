@@ -431,6 +431,93 @@ serve(async (req) => {
           return;
         }
 
+        // ─── Health Check ─────────────────────────────────────────────────
+        if (body.action === "health") {
+          clearInterval(heartbeatInterval);
+
+          const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+            Promise.race([
+              promise,
+              new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+            ]);
+
+          const checks: Record<string, unknown> = {};
+          const TIMEOUT = 5000;
+
+          // 1. Environment check (sync, no timeout needed)
+          const requiredEnvVars = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "MCP_BASE_URL"];
+          const missingKeys = requiredEnvVars.filter(k => !Deno.env.get(k));
+          checks.environment = { status: missingKeys.length === 0 ? "ok" : "fail", missingKeys };
+
+          // 2-4: Run DB, LLM, MCP checks in parallel
+          const [dbResult, mcpResult] = await Promise.allSettled([
+            // Database + LLM check (single Supabase client)
+            withTimeout((async () => {
+              const t0 = Date.now();
+              const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+              const { error: pingErr } = await sb.from("llm_configs").select("id").limit(1);
+              const dbLatency = Date.now() - t0;
+              if (pingErr) return { db: { status: "fail", error: pingErr.message, latencyMs: dbLatency }, llm: { status: "unknown" } };
+
+              const { data: cfg, error: cfgErr } = await sb.from("llm_configs").select("model, endpoint, api_key").eq("is_default", true).single();
+              const llm = cfgErr || !cfg?.api_key
+                ? { status: "fail", error: cfgErr?.message || "no default config or missing api_key" }
+                : { status: "ok", model: cfg.model, endpoint: cfg.endpoint ? "custom" : "default" };
+              return { db: { status: "ok", latencyMs: dbLatency }, llm };
+            })(), TIMEOUT),
+
+            // MCP check
+            withTimeout((async () => {
+              const mcpBase = Deno.env.get("MCP_BASE_URL");
+              const authToken = Deno.env.get("MCP_HELLOBOOKS_AUTH_TOKEN") || "";
+              const entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") || "health";
+              const orgId = Deno.env.get("MCP_HELLOBOOKS_ORG_ID") || "health";
+              if (!mcpBase) return { status: "fail", error: "MCP_BASE_URL not set" };
+              const t0 = Date.now();
+              const result = await createMCPClient(`health-${reqId}`, mcpBase, authToken, entityId, orgId);
+              const latencyMs = Date.now() - t0;
+              if (!result) return { status: "fail", latencyMs, error: "connection failed" };
+              result.client.close();
+              return { status: "ok", toolCount: result.tools.length, latencyMs };
+            })(), TIMEOUT),
+          ]);
+
+          // Unpack results
+          if (dbResult.status === "fulfilled") {
+            checks.database = dbResult.value.db;
+            checks.llm = dbResult.value.llm;
+          } else {
+            checks.database = { status: "fail", error: dbResult.reason?.message || "timeout" };
+            checks.llm = { status: "unknown" };
+          }
+          checks.mcp = mcpResult.status === "fulfilled"
+            ? mcpResult.value
+            : { status: "fail", error: mcpResult.reason?.message || "timeout" };
+
+          // Determine overall status
+          const dbOk = (checks.database as { status: string }).status === "ok";
+          const llmOk = (checks.llm as { status: string }).status === "ok";
+          const mcpOk = (checks.mcp as { status: string }).status === "ok";
+          const envOk = (checks.environment as { status: string }).status === "ok";
+
+          let overallStatus: "healthy" | "degraded" | "unhealthy";
+          if (dbOk && llmOk && mcpOk && envOk) overallStatus = "healthy";
+          else if (!dbOk || !llmOk) overallStatus = "unhealthy";
+          else overallStatus = "degraded";
+
+          const healthResponse = JSON.stringify({
+            status: overallStatus,
+            timestamp: new Date().toISOString(),
+            version: "1.0.0",
+            checks,
+            uptime: "edge_function",
+          });
+
+          controller.enqueue(encoder.encode(`data: ${healthResponse}\n\n`));
+          controller.close();
+          return;
+        }
+
         const {
           message: userMessage,
           conversation_id: conversationId = crypto.randomUUID(),
