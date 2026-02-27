@@ -5554,6 +5554,8 @@ export default function CFOQueryResolutionEngine() {
         aiConfidence: data.aiConfidence
       };
 
+      // Handle cascaded results - when training/entities/pipeline is regenerated,
+      // downstream sections (entities, pipeline, enrichments, response) are also auto-generated
       if (section === 'training' && data.trainingPhrases) {
         // Append new phrases to existing ones instead of replacing
         const existingPhrases: string[] = intent.trainingPhrases || [];
@@ -5567,12 +5569,35 @@ export default function CFOQueryResolutionEngine() {
           return true;
         });
       }
+
+      // For cascading sections (training, entities, pipeline), also apply downstream results
+      if ((section === 'training' || section === 'entities' || section === 'pipeline') && 
+          (data.entities || data.dataPipeline || data.enrichments || data.responseConfig)) {
+        if (data.entities) result.entities = data.entities;
+        
+        const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
+          ...node,
+          mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
+          parameters: node.parameters || []
+        }));
+        
+        result.resolutionFlow = {
+          ...(intent.resolutionFlow || {}),
+          dataPipeline: data.dataPipeline ? dataPipeline : (intent.resolutionFlow?.dataPipeline || []),
+          enrichments: data.enrichments || intent.resolutionFlow?.enrichments || [],
+          responseConfig: data.responseConfig || intent.resolutionFlow?.responseConfig || {
+            type: 'metric_with_trend',
+            template: '📊 Result: {data}',
+            followUpQuestions: []
+          }
+        };
+      }
       
-      if (section === 'entities' && data.entities) {
+      if (section === 'entities' && data.entities && !data.dataPipeline) {
         result.entities = data.entities;
       }
       
-      if (section === 'pipeline' && data.dataPipeline) {
+      if (section === 'pipeline' && data.dataPipeline && !data.enrichments) {
         const dataPipeline = data.dataPipeline.map((node: any) => ({
           ...node,
           mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
