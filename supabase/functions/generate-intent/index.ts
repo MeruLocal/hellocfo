@@ -918,6 +918,10 @@ serve(async (req) => {
     let totalUsage: UsageStats = { inputTokens: 0, outputTokens: 0, totalTokens: 0, latencyMs: 0 };
     let completedSections: string[] = [];
 
+    // Cascade logic: when generating training phrases, also generate downstream sections
+    // (entities, pipeline, enrichments, response) so the intent is fully configured
+    const shouldCascade = section === 'training' || section === 'entities' || section === 'pipeline';
+    
     // Generate training phrases
     if (section === 'training' || section === 'all') {
       console.log('[SECTION 1/5] Generating training phrases...');
@@ -935,7 +939,7 @@ serve(async (req) => {
     }
 
     // Generate entities
-    if (section === 'entities' || section === 'all') {
+    if (section === 'entities' || section === 'all' || (shouldCascade && section === 'training')) {
       console.log('[SECTION 2/5] Generating entities...');
       const phrases = result.trainingPhrases || existingPhrases || [];
       const prompt = generateEntitiesPrompt(intentName, moduleName, phrases, businessContext);
@@ -950,7 +954,7 @@ serve(async (req) => {
     }
 
     // Generate data pipeline with real MCP tools
-    if (section === 'pipeline' || section === 'all') {
+    if (section === 'pipeline' || section === 'all' || (shouldCascade && (section === 'training' || section === 'entities'))) {
       console.log('[SECTION 3/5] Generating data pipeline...');
       const entities = result.entities || existingEntities || [];
       const prompt = generatePipelinePrompt(intentName, moduleName, entities, mcpTools);
@@ -1002,7 +1006,7 @@ Invalid output to fix:\n${content}`;
     }
 
     // Generate enrichments with out-of-the-box enrichment types from database
-    if (section === 'enrichments' || section === 'all') {
+    if (section === 'enrichments' || section === 'all' || shouldCascade) {
       console.log('[SECTION 4/5] Generating enrichments...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       
@@ -1035,7 +1039,7 @@ Invalid output to fix:\n${content}`;
     }
 
     // Generate response template
-    if (section === 'response' || section === 'all') {
+    if (section === 'response' || section === 'all' || shouldCascade) {
       console.log('[SECTION 5/5] Generating response template...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
