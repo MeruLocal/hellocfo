@@ -497,6 +497,123 @@ export type Database = {
         }
         Relationships: []
       }
+      intent_test_cases: {
+        Row: {
+          created_at: string | null
+          expected_enrichments: string[] | null
+          expected_mcq_type: string | null
+          expected_prereq_chain: string[] | null
+          expected_prereq_outcome: string | null
+          expected_response_contains: string[] | null
+          expected_response_not_contains: string[] | null
+          expected_similarity_min: number | null
+          expected_tool_source: string | null
+          expected_tools: string[] | null
+          expected_write_validation: Json | null
+          id: string
+          intent_id: string | null
+          intent_name: string
+          is_active: boolean | null
+          last_run_at: string | null
+          last_run_result: string | null
+          test_level: number
+          test_phrase: string
+          unexpected_tools: string[] | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          expected_enrichments?: string[] | null
+          expected_mcq_type?: string | null
+          expected_prereq_chain?: string[] | null
+          expected_prereq_outcome?: string | null
+          expected_response_contains?: string[] | null
+          expected_response_not_contains?: string[] | null
+          expected_similarity_min?: number | null
+          expected_tool_source?: string | null
+          expected_tools?: string[] | null
+          expected_write_validation?: Json | null
+          id?: string
+          intent_id?: string | null
+          intent_name: string
+          is_active?: boolean | null
+          last_run_at?: string | null
+          last_run_result?: string | null
+          test_level: number
+          test_phrase: string
+          unexpected_tools?: string[] | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          expected_enrichments?: string[] | null
+          expected_mcq_type?: string | null
+          expected_prereq_chain?: string[] | null
+          expected_prereq_outcome?: string | null
+          expected_response_contains?: string[] | null
+          expected_response_not_contains?: string[] | null
+          expected_similarity_min?: number | null
+          expected_tool_source?: string | null
+          expected_tools?: string[] | null
+          expected_write_validation?: Json | null
+          id?: string
+          intent_id?: string | null
+          intent_name?: string
+          is_active?: boolean | null
+          last_run_at?: string | null
+          last_run_result?: string | null
+          test_level?: number
+          test_phrase?: string
+          unexpected_tools?: string[] | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      intent_test_runs: {
+        Row: {
+          created_at: string | null
+          duration_ms: number | null
+          failed: number | null
+          id: string
+          pass_rate: number | null
+          passed: number | null
+          results: Json | null
+          run_level: number
+          step_summary: Json | null
+          total_cases: number | null
+          triggered_by: string | null
+          warned: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          duration_ms?: number | null
+          failed?: number | null
+          id?: string
+          pass_rate?: number | null
+          passed?: number | null
+          results?: Json | null
+          run_level: number
+          step_summary?: Json | null
+          total_cases?: number | null
+          triggered_by?: string | null
+          warned?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          duration_ms?: number | null
+          failed?: number | null
+          id?: string
+          pass_rate?: number | null
+          passed?: number | null
+          results?: Json | null
+          run_level?: number
+          step_summary?: Json | null
+          total_cases?: number | null
+          triggered_by?: string | null
+          warned?: number | null
+        }
+        Relationships: []
+      }
       intents: {
         Row: {
           ai_confidence: number | null
