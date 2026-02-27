@@ -70,6 +70,8 @@ import { CasesLibraryView } from '@/components/CasesLibraryView';
 import { TEST_CASES } from '@/data/testCases';
 import UnifiedAnalyticsView from '@/components/UnifiedAnalyticsView';
 import MasterPlanView from '@/components/MasterPlanView';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 // Helper to convert PascalCase to spaced words
 const formatIntentName = (name: string): string => {
@@ -3222,8 +3224,151 @@ interface HelloBooksEntity {
   [key: string]: unknown;
 }
 
+// --- AI Tool Gap Analysis Panel ---
+interface GapCategory {
+  category: string;
+  priority: 'critical' | 'recommended' | 'nice-to-have';
+  missingTools: { name: string; description: string; rationale: string }[];
+}
+
+function ToolGapAnalysisPanel({ tools }: { tools: MCPTool[] }) {
+  const [gapData, setGapData] = useState<{ categories: GapCategory[]; summary: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const analyzeGaps = async () => {
+    if (tools.length === 0) {
+      toast({ title: 'No tools loaded', description: 'Load MCP tools first before analyzing gaps', variant: 'destructive' });
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('analyze-tool-gaps', {
+        body: { tools: tools.map(t => t.name) },
+      });
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(data.error);
+      setGapData(data);
+      setIsOpen(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Analysis failed';
+      setError(msg);
+      toast({ title: 'Gap analysis failed', description: msg, variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const priorityConfig = {
+    critical: { label: 'CRITICAL', className: 'bg-destructive/10 text-destructive border-destructive/30' },
+    recommended: { label: 'RECOMMENDED', className: 'bg-amber-500/10 text-amber-600 border-amber-500/30' },
+    'nice-to-have': { label: 'NICE-TO-HAVE', className: 'bg-blue-500/10 text-blue-600 border-blue-500/30' },
+  };
+
+  const totalMissing = gapData?.categories.reduce((sum, c) => sum + c.missingTools.length, 0) || 0;
+
+  return (
+    <div className="mt-6 border rounded-lg bg-muted/20">
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <div className="flex items-center justify-between p-4">
+          <CollapsibleTrigger asChild>
+            <button className="flex items-center gap-2 text-left flex-1 hover:opacity-80 transition-opacity">
+              <Sparkles size={18} className="text-primary" />
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">AI Tool Gap Analysis</h3>
+                <p className="text-xs text-muted-foreground">Compare your tools against GAAP/IFRS & standard accounting software</p>
+              </div>
+              {gapData && (
+                <Badge variant="secondary" className="ml-2">{totalMissing} gaps found</Badge>
+              )}
+              <ChevronDown size={16} className={`ml-auto text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+          </CollapsibleTrigger>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={analyzeGaps}
+            disabled={loading || tools.length === 0}
+            className="ml-3 shrink-0"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Sparkles size={14} className="mr-1" />}
+            {loading ? 'Analyzing...' : 'Analyze Gaps'}
+          </Button>
+        </div>
+
+        <CollapsibleContent>
+          <div className="px-4 pb-4">
+            {error && (
+              <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm mb-3">
+                {error}
+              </div>
+            )}
+
+            {loading && (
+              <div className="text-center py-8">
+                <Loader2 size={28} className="mx-auto mb-3 animate-spin text-primary" />
+                <p className="text-sm font-medium text-foreground">Analyzing tool inventory...</p>
+                <p className="text-xs text-muted-foreground mt-1">Comparing against GAAP/IFRS standards & accounting software capabilities</p>
+              </div>
+            )}
+
+            {gapData && !loading && (
+              <div className="space-y-4">
+                {/* Summary */}
+                <div className="p-3 rounded-md bg-primary/5 border border-primary/20 text-sm text-foreground">
+                  {gapData.summary}
+                </div>
+
+                {/* Categories */}
+                {gapData.categories
+                  .sort((a, b) => {
+                    const order = { critical: 0, recommended: 1, 'nice-to-have': 2 };
+                    return (order[a.priority] ?? 3) - (order[b.priority] ?? 3);
+                  })
+                  .map((cat, idx) => {
+                    const config = priorityConfig[cat.priority] || priorityConfig['nice-to-have'];
+                    return (
+                      <div key={idx} className="border rounded-md overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 bg-muted/40">
+                          <span className="text-sm font-medium text-foreground">
+                            {cat.category} <span className="text-muted-foreground">({cat.missingTools.length} missing)</span>
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${config.className}`}>
+                            {config.label}
+                          </span>
+                        </div>
+                        <div className="divide-y">
+                          {cat.missingTools.map((tool, tIdx) => (
+                            <div key={tIdx} className="px-3 py-2 text-sm">
+                              <div className="font-mono text-xs text-primary">{tool.name}</div>
+                              <div className="text-foreground mt-0.5">{tool.description}</div>
+                              <div className="text-xs text-muted-foreground mt-0.5 italic">{tool.rationale}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+
+            {!gapData && !loading && !error && (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                Click "Analyze Gaps" to compare your {tools.length} tools against accounting standards
+              </p>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
+}
+
+
 function MCPToolsView({ 
-  tools, 
+  tools,
   isLoading,
   error,
   onRefresh
@@ -3595,6 +3740,9 @@ function MCPToolsView({
           <p className="text-sm opacity-60 mt-1">{isLoggedIn ? 'Select entity & org, then click Fetch Tools' : 'Login to get started'}</p>
         </div>
       )}
+
+      {/* AI Tool Gap Analysis Panel */}
+      <ToolGapAnalysisPanel tools={tools} />
     </div>
   );
 }
