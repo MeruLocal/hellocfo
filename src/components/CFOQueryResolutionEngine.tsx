@@ -67,6 +67,7 @@ import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
 import { CasesLibraryView } from '@/components/CasesLibraryView';
 import { TEST_CASES } from '@/data/testCases';
 import UnifiedAnalyticsView from '@/components/UnifiedAnalyticsView';
+import MasterPlanView from '@/components/MasterPlanView';
 
 // Helper to convert PascalCase to spaced words
 const formatIntentName = (name: string): string => {
@@ -4233,6 +4234,7 @@ export default function CFOQueryResolutionEngine() {
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
     { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
     { id: 'analytics', label: 'Analytics & History', icon: <BarChart3 size={18} /> },
+    { id: 'master-plan', label: 'Master Plan', icon: <FileText size={18} /> },
     { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
     ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
@@ -4448,6 +4450,7 @@ export default function CFOQueryResolutionEngine() {
         
         {activeTab === 'analytics' && <UnifiedAnalyticsView />}
         {activeTab === 'api-console' && <ApiConsole />}
+        {activeTab === 'master-plan' && <MasterPlanView />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
             <UsersManagement />
