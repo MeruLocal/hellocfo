@@ -3122,8 +3122,8 @@ function MCPToolsView({
   const { getToolAnalytics } = useToolAnalytics();
 
   // Login state
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('cfoagent@gmail.com');
+  const [password, setPassword] = useState("lWBBjYy4O%K19u's27&[");
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [authToken, setAuthToken] = useState('');
