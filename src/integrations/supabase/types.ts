@@ -1142,11 +1142,16 @@ export type Database = {
           enrichments_applied: string[] | null
           entity_id: string
           error_message: string | null
+          estimated_cost_usd: number | null
+          guardrails_triggered: string[] | null
           id: string
           input_tokens: number | null
           intent_confidence: number | null
           intent_matched: string | null
           is_write_operation: boolean | null
+          mcq_resolved: boolean | null
+          mcq_shown: boolean | null
+          mcq_type: string | null
           model_tier: string | null
           model_used: string | null
           output_tokens: number | null
@@ -1154,6 +1159,8 @@ export type Database = {
           request_id: string
           response_time_ms: number | null
           route_path: string
+          step_results: Json | null
+          step_timings: Json | null
           tool_selection_strategy: string | null
           tools_failed: string[] | null
           tools_loaded: string[] | null
@@ -1170,11 +1177,16 @@ export type Database = {
           enrichments_applied?: string[] | null
           entity_id: string
           error_message?: string | null
+          estimated_cost_usd?: number | null
+          guardrails_triggered?: string[] | null
           id?: string
           input_tokens?: number | null
           intent_confidence?: number | null
           intent_matched?: string | null
           is_write_operation?: boolean | null
+          mcq_resolved?: boolean | null
+          mcq_shown?: boolean | null
+          mcq_type?: string | null
           model_tier?: string | null
           model_used?: string | null
           output_tokens?: number | null
@@ -1182,6 +1194,8 @@ export type Database = {
           request_id: string
           response_time_ms?: number | null
           route_path: string
+          step_results?: Json | null
+          step_timings?: Json | null
           tool_selection_strategy?: string | null
           tools_failed?: string[] | null
           tools_loaded?: string[] | null
@@ -1198,11 +1212,16 @@ export type Database = {
           enrichments_applied?: string[] | null
           entity_id?: string
           error_message?: string | null
+          estimated_cost_usd?: number | null
+          guardrails_triggered?: string[] | null
           id?: string
           input_tokens?: number | null
           intent_confidence?: number | null
           intent_matched?: string | null
           is_write_operation?: boolean | null
+          mcq_resolved?: boolean | null
+          mcq_shown?: boolean | null
+          mcq_type?: string | null
           model_tier?: string | null
           model_used?: string | null
           output_tokens?: number | null
@@ -1210,6 +1229,8 @@ export type Database = {
           request_id?: string
           response_time_ms?: number | null
           route_path?: string
+          step_results?: Json | null
+          step_timings?: Json | null
           tool_selection_strategy?: string | null
           tools_failed?: string[] | null
           tools_loaded?: string[] | null

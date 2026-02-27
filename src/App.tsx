@@ -8,6 +8,7 @@ import Auth from "./pages/Auth";
 import Landing from "./pages/Landing";
 import ApiTestConsole from "./pages/ApiTestConsole";
 import NotFound from "./pages/NotFound";
+import PipelineDebugger from "./pages/PipelineDebugger";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ const App = () => (
           <Route path="/dashboard" element={<Index />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/api-console" element={<ApiTestConsole />} />
+          <Route path="/debug/pipeline" element={<PipelineDebugger />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
