@@ -3,11 +3,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   selectToolsForQuery,
   buildOpenAIToolsFromMcp,
-  detectFollowUp,
   type OpenAITool,
-  type FollowUpResult,
 } from "./tool-groups.ts";
-import { SYSTEM_PROMPT, selectModelTier } from "./model-selector.ts";
+import { SYSTEM_PROMPT } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
@@ -177,124 +175,6 @@ function detectDetailLookup(query: string): DetailLookupIntent | null {
     const match = query.match(pattern);
     if (match) {
       return { docType: match[1].toLowerCase().replace(/\s+/g, '_'), docRef: match[2] };
-    }
-  }
-  return null;
-}
-
-
-// ─── Follow-up / Confirmation Detection ──────────────────────────────────────
-
-const CONFIRMATION_PATTERNS = [
-  /\b(yes|yep|yeah|haan|ha|kar\s*do|ok|okay|sure|correct|sahi|theek|confirm|confirmed)\b/i,
-  /\bplease\s+(try|create|do|make|send|retry)\b/i,
-  /\btry\s+again\b/i,
-  /\b(do\s+it|go\s+ahead|proceed|retry|execute)\b/i,
-];
-
-interface PendingAction {
-  toolName: string;
-  args: Record<string, unknown>;
-  summary: string;
-}
-
-function isConfirmationMessage(query: string): boolean {
-  const q = query.trim();
-  const wordCount = q.split(/\s+/).length;
-  const hasConfirmKeyword = CONFIRMATION_PATTERNS.some(p => p.test(q));
-  if (!hasConfirmKeyword) return false;
-
-  // Pure short confirmations: "yes", "haan", "ok kar do", "sure, go ahead"
-  if (wordCount <= 3) return true;
-
-  // For longer messages (4+ words), only treat as confirmation if the query
-  // does NOT contain view/query keywords that indicate a new data request.
-  // "Yes, show aging details" = follow-up data request, NOT confirmation.
-  // "Yes, and also for Sharma" = confirmation (continuing previous action).
-  // "Yes, create it" = confirmation.
-  const viewKeywords = /\b(show|list|get|view|display|fetch|report|compare|analyze|what|how|who|which|dikhao|batao|dikha)\b/i;
-  if (viewKeywords.test(q)) {
-    // Has both confirmation + view keywords — check if there's a write/action intent
-    const writeKeywords = /\b(create|update|send|delete|add|make|banao|generate|file|record|pay|void|cancel)\b/i;
-    if (writeKeywords.test(q)) return true; // "yes, create and show" → confirmation
-    return false; // "yes, show aging details" → NOT confirmation, it's a follow-up
-  }
-
-  // Confirmation with additional context: "yes, invoice number is INV-123"
-  if (wordCount <= 25) return true;
-  return false;
-}
-
-/** Extract extra fields from a confirmation message (e.g., "invoice number is INV-123, yes confirm") */
-function extractFieldsFromConfirmation(query: string): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  // Invoice number
-  const invMatch = query.match(/invoice\s*(?:number|no|#)?\s*(?:is|:)?\s*([A-Z0-9][\w-]+)/i);
-  if (invMatch) fields.invoice_number = invMatch[1];
-  // Bill number
-  const billMatch = query.match(/bill\s*(?:number|no|#)?\s*(?:is|:)?\s*([A-Z0-9][\w-]+)/i);
-  if (billMatch) fields.bill_number = billMatch[1];
-  return fields;
-}
-
-function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction | null {
-  // Walk backwards to find the last assistant message that proposed an action
-  for (let i = conversationHistory.length - 1; i >= 0; i--) {
-    const msg = conversationHistory[i];
-    if (msg.role !== 'assistant') continue;
-    const content = msg.content || '';
-    const meta = msg.metadata || {};
-
-    // Check if metadata has pending tool info (persisted from previous turn)
-    if (meta.pendingTool && meta.pendingArgs) {
-      return {
-        toolName: String(meta.pendingTool),
-        args: meta.pendingArgs as Record<string, unknown>,
-        summary: String(meta.pendingSummary || content.slice(0, 300)),
-      };
-    }
-
-    // Check if metadata has toolsUsed with write tools
-    const prevCategory = meta.category as string | undefined;
-    const prevToolsUsed = (meta.toolsUsed as string[]) || [];
-    if ((prevCategory === 'unified' || prevCategory === 'bookkeeper') && prevToolsUsed.length > 0) {
-      const writeTools = prevToolsUsed.filter(t => /^(create_|update_|delete_|void_|cancel_)/.test(t));
-      if (writeTools.length > 0) {
-        return {
-          toolName: writeTools[0],
-          args: {},
-          summary: content.slice(0, 300),
-        };
-      }
-    }
-
-    // Heuristic: if assistant said it will create/retry and mentioned specific details
-    const createMatch = content.match(/create\s+(invoice|bill|payment|customer|vendor)/i);
-    if (createMatch) {
-      return {
-        toolName: `create_${createMatch[1].toLowerCase()}`,
-        args: {},
-        summary: content.slice(0, 300),
-      };
-    }
-
-    // If assistant mentioned "confirm" or "retry"
-    if (/confirm|retry|try again|I'll.*create|shall I|would you like me to/i.test(content)) {
-      // Try to infer tool from content
-      const actionMatch = content.match(/(create|update|delete|void|cancel)\s+(?:the\s+)?(?:this\s+)?(invoice|bill|payment|customer|vendor|credit.?note)/i);
-      if (actionMatch) {
-        return {
-          toolName: `${actionMatch[1].toLowerCase()}_${actionMatch[2].toLowerCase().replace(/\s+/g, '_')}`,
-          args: {},
-          summary: content.slice(0, 300),
-        };
-      }
-      // Generic pending action
-      return {
-        toolName: '',
-        args: {},
-        summary: content.slice(0, 300),
-      };
     }
   }
   return null;
@@ -1182,16 +1062,6 @@ serve(async (req) => {
 
   const startTime = Date.now();
 
-  // ─── Confirmation Detection ─────────────────────────────────────────────
-  const isConfirmation = isConfirmationMessage(query);
-  const pendingAction = isConfirmation ? extractPendingAction(conversationHistory) : null;
-  // Merge any extra fields from the confirmation message into pending args
-  if (isConfirmation && pendingAction) {
-    const extraFields = extractFieldsFromConfirmation(query);
-    Object.assign(pendingAction.args, extraFields);
-    console.log(`[api] Confirmation with pending action: ${pendingAction.toolName}, extra fields:`, extraFields);
-  }
-
   // ============================
   // Setup SSE stream
   const encoder = new TextEncoder();
@@ -1235,9 +1105,6 @@ serve(async (req) => {
     let mcpClientInstance: StreamableMCPClient | null = null;
     // Hoisted so finally block can access real tool inputs/results
     let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
-    // Hoisted for feedback logging in finally block
-    let followUpResult: FollowUpResult = { isFollowUp: false };
-    let modelTier: { tier: string; reason: string } = { tier: 'cheap', reason: 'default' };
 
     try {
       sendEvent('connected', {
@@ -1282,7 +1149,7 @@ serve(async (req) => {
       }
       feedbackCategory = 'unified';
 
-      if (!mcpClientInstance && !isConfirmation) {
+      if (!mcpClientInstance) {
         const missingParts: string[] = [];
         if (!mcpAuthToken) missingParts.push('H-Authorization');
         if (!mcpEntityId) missingParts.push('entityId');
@@ -1300,7 +1167,6 @@ serve(async (req) => {
           success: false, query, path: 'error', response: errorMsg,
           category: 'unified',
           subCategory: 'error',
-          modelTier: 'cheap',
           toolCategories: [],
           responseType: 'error' as ResponseType,
           matchedIntent: null, reasoning: 'MCP not connected',
@@ -1312,19 +1178,6 @@ serve(async (req) => {
         feedbackResponse = errorMsg;
         return;
       }
-
-      // ─── Follow-up Detection ──────────────────────────────────────────
-      followUpResult = (!isConfirmation && conversationHistory.length >= 2)
-        ? detectFollowUp(query, conversationHistory as { role: string; content: string; metadata?: { toolsUsed?: string[]; toolsLoaded?: string[] } }[])
-        : { isFollowUp: false };
-
-      if (followUpResult.isFollowUp) {
-        console.log(`[api] Follow-up detected: ${followUpResult.reason}, reusing tools: ${followUpResult.reuseToolGroup?.join(', ')}`);
-      }
-
-      // ─── Model Tier Selection ─────────────────────────────────────────
-      modelTier = selectModelTier(query);
-      console.log(`[api] Model tier: ${modelTier.tier} — ${modelTier.reason}`);
 
       const queryRequestedPageSize = extractRequestedPageSize(query);
       const queryIsPaginationFollowUp = isPaginationFollowUp(query);
@@ -1412,40 +1265,36 @@ serve(async (req) => {
         path: 'llm',
         category: 'unified',
         confidence: 1.0,
-        isConfirmation,
-        isFollowUp: followUpResult.isFollowUp,
         isPaginationFollowUp: queryIsPaginationFollowUp,
       });
 
       // ============================
-      // LAYER 1: Intent matching against DB (skip for confirmations)
+      // LAYER 1: Intent matching against DB
       // ============================
       let bestIntent: { id: string; name: string; description: string; confidence: number; resolution_flow?: Intent['resolution_flow'] } | null = null;
 
-      if (!isConfirmation) {
-        for (const intent of (intents as Intent[]) || []) {
-          const queryLower = query.toLowerCase();
-          const trainingPhrases = intent.training_phrases || [];
+      for (const intent of (intents as Intent[]) || []) {
+        const queryLower = query.toLowerCase();
+        const trainingPhrases = intent.training_phrases || [];
 
-          for (const phrase of trainingPhrases) {
-            const phraseLower = (typeof phrase === 'string' ? phrase : '').toLowerCase();
-            if (!phraseLower) continue;
+        for (const phrase of trainingPhrases) {
+          const phraseLower = (typeof phrase === 'string' ? phrase : '').toLowerCase();
+          if (!phraseLower) continue;
 
-            if (queryLower === phraseLower) {
-              bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: 0.95, resolution_flow: intent.resolution_flow };
-              break;
-            }
-            if (queryLower.includes(phraseLower) || phraseLower.includes(queryLower)) {
-              const similarity = Math.min(queryLower.length, phraseLower.length) / Math.max(queryLower.length, phraseLower.length);
-              const candidateConfidence = 0.7 + similarity * 0.25;
-              if (!bestIntent || candidateConfidence > bestIntent.confidence) {
-                bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: candidateConfidence, resolution_flow: intent.resolution_flow };
-              }
+          if (queryLower === phraseLower) {
+            bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: 0.95, resolution_flow: intent.resolution_flow };
+            break;
+          }
+          if (queryLower.includes(phraseLower) || phraseLower.includes(queryLower)) {
+            const similarity = Math.min(queryLower.length, phraseLower.length) / Math.max(queryLower.length, phraseLower.length);
+            const candidateConfidence = 0.7 + similarity * 0.25;
+            if (!bestIntent || candidateConfidence > bestIntent.confidence) {
+              bestIntent = { id: intent.id, name: intent.name, description: intent.description, confidence: candidateConfidence, resolution_flow: intent.resolution_flow };
             }
           }
-
-          if (bestIntent?.confidence === 0.95) break;
         }
+
+        if (bestIntent?.confidence === 0.95) break;
       }
 
       // Use adaptive threshold when intent is matched (feeds RL pipeline)
@@ -1470,7 +1319,7 @@ serve(async (req) => {
       }
 
       // ========== LLM PATH ==========
-      if (bestIntent && !isConfirmation) {
+      if (bestIntent) {
         sendEvent('intent_detected', {
           intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
           reasoning: `Intent matched — using LLM path`,
@@ -1479,7 +1328,7 @@ serve(async (req) => {
       }
 
       {
-          // Bookkeeper or CFO path with filtered tools
+          // Tool selection based on query keywords
           let toolSelection: ReturnType<typeof selectToolsForQuery>;
           let filteredTools: OpenAITool[];
 
@@ -1489,30 +1338,6 @@ serve(async (req) => {
               matchedCategories: ['all_mcp_tools'],
               strategy: 'direct_llm_all_mcp_tools',
             };
-            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
-          } else if (isConfirmation && pendingAction && pendingAction.toolName) {
-            // For confirmations, load the tool group relevant to the pending action
-            toolSelection = selectToolsForQuery(pendingAction.summary || query, 'unified', mcpTools);
-            // Also ensure the specific pending tool is included
-            if (!toolSelection.toolNames.includes(pendingAction.toolName)) {
-              toolSelection.toolNames.push(pendingAction.toolName);
-            }
-            filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
-          } else if (followUpResult.isFollowUp && followUpResult.reuseToolGroup && followUpResult.reuseToolGroup.length > 0) {
-            // Follow-up: reuse tools from previous turn for context continuity
-            const validReuseTools = followUpResult.reuseToolGroup.filter(t => mcpTools.some(m => m.name === t));
-            if (validReuseTools.length > 0) {
-              toolSelection = {
-                toolNames: validReuseTools,
-                matchedCategories: ['follow_up_reuse'],
-                strategy: 'follow_up_reuse',
-              };
-              console.log(`[api] Follow-up: reusing ${validReuseTools.length} tools from previous turn`);
-            } else {
-              // None of the previous tools are available in MCP, fall back to normal selection
-              toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
-              console.log(`[api] Follow-up: previous tools unavailable, falling back to keyword selection`);
-            }
             filteredTools = buildOpenAIToolsFromMcp(mcpTools, toolSelection.toolNames);
           } else {
             toolSelection = selectToolsForQuery(query, effectiveCategory, mcpTools);
@@ -1540,7 +1365,6 @@ serve(async (req) => {
             category: effectiveCategory, toolCount: filteredTools.length,
             totalMcpTools: mcpTools.length, tools: filteredTools.map(t => t.function.name),
             strategy: toolSelection.strategy, groupsSelected: toolSelection.matchedCategories,
-            isConfirmation,
           });
 
           const categoryPrompt = SIMPLE_DIRECT_LLM_MODE
@@ -1562,19 +1386,8 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             paginationContext = `\n\n📄 PAGINATION CONTEXT: The user wants the NEXT page of results. Previous state: ${stateDesc}. Call the same list tool(s) with the next page/offset. Do NOT repeat the first page.`;
           }
 
-          // Build system prompt with confirmation context
-          let confirmationContext = '';
-          if (isConfirmation && pendingAction) {
-            const extraFieldsStr = Object.keys(pendingAction.args).length > 0
-              ? ` Additional fields provided by user in this message: ${JSON.stringify(pendingAction.args)}.`
-              : '';
-            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user just confirmed a previous action. You MUST immediately execute the action using tools. The pending tool is "${pendingAction.toolName || 'inferred from history'}".${extraFieldsStr} The previous context was: "${pendingAction.summary}". Do NOT ask for confirmation again. Do NOT generate fake data. Do NOT say you cannot create — call the appropriate tool NOW with all details from conversation history. If invoice_number is not specified, omit it to let the system auto-generate.`;
-          } else if (isConfirmation) {
-            confirmationContext = `\n\n⚡ CONFIRMATION CONTEXT: The user said "${query}" which is a confirmation/retry. Look at the conversation history to find what action was being discussed and execute it immediately using the available tools. Extract all parameters (customer, items, amounts, dates, tax) from the conversation history. Do NOT ask for more details unless a truly required field (customer name, amount, items) is completely missing. Do NOT generate fake data. Call the tool NOW.`;
-          }
-
           // ─── Detail lookup context (created-doc resolver) ───
-          const detailLookup = (!SIMPLE_DIRECT_LLM_MODE && !isConfirmation) ? detectDetailLookup(query) : null;
+          const detailLookup = !SIMPLE_DIRECT_LLM_MODE ? detectDetailLookup(query) : null;
           let detailLookupContext = '';
           if (detailLookup) {
             const createdDocs = extractCreatedDocs(conversationHistory);
@@ -1589,17 +1402,10 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             }
           }
 
-          // ─── Follow-up context for LLM ───
-          let followUpContext = '';
-          if (followUpResult.isFollowUp) {
-            followUpContext = `\n\n🔄 FOLLOW-UP CONTEXT: This is a short follow-up message to the previous conversation. The user is building on what was discussed before. Look at the conversation history carefully to understand what they are referring to. Use the same tools and data context from the previous turn. If the user says "show more", "details", "first one", "compare", etc., resolve these references from the conversation history.`;
-          }
-
           const bulkListContext = '';
-          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}${followUpContext}`;
+          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${paginationContext}${bulkListContext}${detailLookupContext}`;
 
-          // For confirmations, include more history
-          const historySlice = Math.min(isConfirmation ? 20 : 15, conversationHistory.length);
+          const historySlice = Math.min(15, conversationHistory.length);
           const useResponsesApi = hasDocumentAttachments(attachments);
 
           // Build canonical message history for the Responses API tool-call loop
@@ -1817,20 +1623,16 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           sendComplete({
             success: true, query, path: 'llm', category: effectiveCategory,
             subCategory: 'general',
-            modelTier: modelTier.tier,
             toolCategories: toolSelection.matchedCategories || [],
             responseType: finalResponseType,
             matchedIntent: bestIntent ? { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence } : null,
             extractedEntities: {},
-            reasoning: isConfirmation
-              ? `Confirmation flow: executed pending action`
-              : (bestIntent ? `Low confidence (${(bestIntent.confidence * 100).toFixed(0)}%), used ${effectiveCategory} tools` : `Classified as ${effectiveCategory}`),
+            reasoning: bestIntent ? `Intent matched (${(bestIntent.confidence * 100).toFixed(0)}%), used ${effectiveCategory} tools` : `Classified as ${effectiveCategory}`,
             pipelineSteps: mcpResults.map(r => ({ tool: r.tool, description: r.success ? 'Completed' : `Error: ${r.error}` })),
             enrichments: finalEnrichments,
             toolResults: mcpResults.map(r => ({ tool: r.tool, success: r.success, error: r.error, attempts: r.attempts })),
             response: responseText,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-            isConfirmation,
             isWriteOperation: isWriteOp,
             ...(createdDocsForComplete.length > 0 ? { createdDocs: createdDocsForComplete } : {}),
           });
@@ -1841,7 +1643,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
           feedbackToolsLoaded = filteredTools.map(t => t.function.name);
           feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
-          feedbackStrategy = isConfirmation ? 'confirmation_retry' : toolSelection.strategy;
+          feedbackStrategy = toolSelection.strategy;
           feedbackResponse = responseText;
       }
     } catch (pErr) {
@@ -1860,7 +1662,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
         path: 'error',
         category: feedbackCategory || 'unknown',
         subCategory: 'error',
-        modelTier: modelTier.tier,
         toolCategories: [],
         responseType: 'error' as ResponseType,
         response: safeMessage,
@@ -1946,7 +1747,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             toolsLoaded: feedbackToolsLoaded,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
             llmModel: feedbackModel,
-            isConfirmation,
             ...(pendingToolForMeta ? {
               pendingTool: pendingToolForMeta,
               pendingArgs: pendingArgsForMeta || {},
@@ -2033,7 +1833,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
         tool_selection_strategy: feedbackStrategy,
         response_time_ms: responseTimeMs,
         token_cost: feedbackTokenCost,
-        implicit_signals: { ...implicitSignals, source: "api", isConfirmation, isFollowUp: followUpResult.isFollowUp, modelTier: modelTier.tier },
+        implicit_signals: { ...implicitSignals, source: "api" },
       }, "api");
 
       // RL logging
