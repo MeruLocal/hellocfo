@@ -449,60 +449,25 @@ function resolveToolNames(
 
   const available = new Set(mcpTools.map(t => t.name));
   const matchedStatic = staticNames.filter(name => available.has(name));
-  const dynamic = getDynamicToolNames(categoryNames, mcpTools);
 
-  const merged: string[] = [];
-  for (const name of [...matchedStatic, ...dynamic]) {
-    if (!merged.includes(name)) merged.push(name);
-  }
-
-  // Final safety: if dynamic/static matching found nothing, fall back to all MCP tools.
-  if (merged.length === 0) return mcpTools.map(t => t.name);
-  return merged;
+  // No more fuzzy/dynamic matching — semantic matching is done externally
+  // via selectToolsSemantically() and merged by the calling edge function.
+  if (matchedStatic.length === 0) return [];
+  return matchedStatic;
 }
 
-function getDynamicToolNames(
-  categoryNames: string[],
+/**
+ * Returns candidate MCP tools that are NOT covered by the given static categories.
+ * These are the tools that need semantic matching.
+ */
+export function getSemanticCandidates(
+  matchedCategories: string[],
   mcpTools: Array<{ name: string; description: string; inputSchema: unknown }>,
-): string[] {
-  const result: string[] = [];
-  const stopWords = new Set([
-    "and", "the", "for", "with", "from", "into", "over", "under", "this", "that",
-    "list", "view", "show", "get", "all", "data", "report", "reports", "summary",
-  ]);
-
-  for (const catName of categoryNames) {
-    const cat = TOOL_CATEGORIES.find(c => c.name === catName);
-    if (!cat) continue;
-
-    const nameHints = cat.name.toLowerCase().split(/[_\s]+/).filter(Boolean);
-    const keywordHints = cat.keywords.map(k => k.toLowerCase()).filter(Boolean);
-    const descHints = cat.description
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter(Boolean)
-      .filter(w => w.length >= 4 && !stopWords.has(w));
-
-    for (const tool of mcpTools) {
-      const text = `${tool.name} ${tool.description || ""}`.toLowerCase();
-      let score = 0;
-
-      for (const hint of keywordHints) {
-        if (hint.length < 3) continue;
-        if (text.includes(hint)) score += 3;
-      }
-      for (const hint of nameHints) {
-        if (hint.length < 3) continue;
-        if (text.includes(hint)) score += 2;
-      }
-      for (const hint of descHints) {
-        if (text.includes(hint)) score += 1;
-      }
-
-      if (score >= 3 && !result.includes(tool.name)) result.push(tool.name);
-    }
-  }
-  return result;
+): Array<{ name: string; description: string }> {
+  const staticNames = new Set(getAllToolNames(matchedCategories));
+  return mcpTools
+    .filter(t => !staticNames.has(t.name))
+    .map(t => ({ name: t.name, description: t.description || "" }));
 }
 
 /**
