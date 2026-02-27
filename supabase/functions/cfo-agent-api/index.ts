@@ -1132,6 +1132,10 @@ serve(async (req) => {
     let feedbackResponse: string | null = null;
     let feedbackTokenCost: number | null = null;
     let feedbackCategory: string = 'unified';
+    let feedbackToolResults: { tool: string; input?: Record<string, unknown>; success: boolean; error?: string }[] = [];
+    let feedbackTokenBreakdown: { input_tokens: number; output_tokens: number; total_tokens: number } | null = null;
+    let feedbackErrorDetail: string | null = null;
+    let feedbackEnrichmentsApplied: string[] = [];
     let mcpClientInstance: StreamableMCPClient | null = null;
     // Hoisted so finally block can access real tool inputs/results
     let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
@@ -1716,6 +1720,9 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
           feedbackStrategy = toolSelection.strategy;
           feedbackResponse = responseText;
+          feedbackToolResults = mcpResults.map(r => ({ tool: r.tool, input: r.input, success: r.success, error: r.error }));
+          feedbackEnrichmentsApplied = finalEnrichments.map(e => e.type);
+          feedbackTokenBreakdown = feedbackTokenCost ? { input_tokens: Math.floor(feedbackTokenCost * 0.6), output_tokens: Math.floor(feedbackTokenCost * 0.4), total_tokens: feedbackTokenCost } : null;
       }
     } catch (pErr) {
       const errMsg = pErr instanceof Error ? pErr.message : String(pErr);
@@ -1723,6 +1730,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
       console.error("[api] Processing error: " + errMsg);
       if (errStack) console.error("[api] Stack: " + errStack);
       const safeMessage = getUserFacingErrorMessage(pErr);
+      feedbackErrorDetail = errMsg;
       feedbackPath = "error";
       feedbackResponse = safeMessage;
       sendEvent('error', { message: safeMessage, code: 'PROCESSING_ERROR' });
@@ -1813,11 +1821,16 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           metadata: {
             route: feedbackPath,
             category: feedbackCategory,
+            routingStrategy: feedbackStrategy,
             intent: feedbackIntent ? { name: feedbackIntent, confidence: feedbackIntentConfidence } : null,
             toolsUsed: feedbackToolsUsed,
             toolsLoaded: feedbackToolsLoaded,
+            toolResults: feedbackToolResults,
+            enrichmentsApplied: feedbackEnrichmentsApplied,
             executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
+            usage: feedbackTokenBreakdown || { input_tokens: feedbackTokenCost || 0, output_tokens: 0, total_tokens: feedbackTokenCost || 0 },
             llmModel: feedbackModel,
+            errorDetail: feedbackErrorDetail,
             ...(pendingToolForMeta ? {
               pendingTool: pendingToolForMeta,
               pendingArgs: pendingArgsForMeta || {},
