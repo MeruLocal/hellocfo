@@ -1,49 +1,74 @@
 
 
-# Gap Analysis: Backend Status and Frontend Updates
+# Sidebar Consolidation Plan
 
-## Summary of All 17 Gaps — What's Already Built
+## Current State (11 items)
+1. Intent Library
+2. MCP Tools
+3. Enrichments
+4. Business Context
+5. Country Config
+6. LLM Settings
+7. Test Console
+8. Analytics & History
+9. Master Plan
+10. API Console
+11. Users (admin only)
 
-### Backend Status
+This is too flat -- users must scan all 11 items to find what they need.
 
-| Gap | Description | Backend Status | Frontend Status |
-|-----|-------------|---------------|-----------------|
-| GAP 1 | Multi-Turn Conversation Context | **✅ IMPLEMENTED** — `extractConversationContext` + `buildConversationContextPrompt` in `mcq-engine.ts`, injected into both edge functions' system prompts. | N/A (backend-only) |
-| GAP 2 | MCQ Timeout + Abandonment | **✅ IMPLEMENTED** — `autoCancelPendingMCQ` in `mcq-engine.ts`, called at start of both edge functions. Frontend MCQCard shows expiry timer + greyed-out "Expired" state. | ✅ Expiry visual + timer |
-| GAP 3 | Free-Text Override During MCQ | **✅ IMPLEMENTED** — Frontend auto-cancels pending MCQ cards (sets status "overridden") when user sends new message. Backend auto-cancels DB state via `autoCancelPendingMCQ`. | ✅ Overridden visual |
-| GAP 4 | MCQ Chain Fatigue (MAX=2) | **✅ IMPLEMENTED** — `MAX_MCQ_CHAIN = 2` in `mcq-engine.ts`. Frontend `RealtimeCFOAgent` tracks `mcqChainCount` and suppresses MCQ cards after limit. | ✅ Chain suppression |
-| GAP 5 | Error Recovery / Circuit Breaker | **NOT implemented** — no circuit breaker pattern, failure counting, or coordinated fallback. | N/A |
-| GAP 6 | Response Caching | **FULLY implemented** — `response-cache.ts` exists. Gated behind `!SIMPLE_DIRECT_LLM_MODE` flag. | N/A (transparent) |
-| GAP 7 | Feedback Loop from MCQ Selections | **PARTIALLY implemented** — `rl-logger.ts` exists but MCQ selections not fed back as training signals. | N/A |
-| GAP 8 | Attachment/File Handling | **PARTIALLY implemented** — PDF handling via Responses API works. Missing: Excel/CSV parsing, file size validation. | N/A |
-| GAP 9 | Rate Limiting | **NOT implemented** | N/A |
-| GAP 10 | Cost Monitoring | **NOT implemented** | N/A |
-| GAP 11 | Proactive Suggestions | **NOT implemented** | N/A |
-| GAP 12 | Voice Input | **PARTIALLY implemented** — `audio-transcribe` edge function exists. | Needs frontend integration |
-| GAP 13 | Multi-language | **NOT implemented** | N/A |
-| GAP 14 | Scheduled Reports | **NOT implemented** | N/A |
-| GAP 15 | Collaborative Features | **NOT implemented** | N/A |
-| GAP 16 | Undo for Write Ops | **NOT implemented** | N/A |
-| GAP 17 | Batch Operations | **NOT implemented** | N/A |
+## Proposed Grouping (6 top-level items)
 
----
+We will reorganize into **grouped sections** with collapsible sub-items where related tabs are merged under a single parent.
 
-## What Was Implemented (Phase 1 + Phase 2)
+```text
+SIDEBAR LAYOUT
+--------------
+[AI Engine]                        (section label)
+  Intent Library         (42)      -- standalone, primary workflow
+  Test Console                     -- standalone, primary workflow
 
-### Frontend Changes (No New Screens)
-- **`MCQCard.tsx`**: Added expiry timer (2-min countdown), greyed-out states for Expired/Overridden/Cancelled
-- **`RealtimeCFOAgent.tsx`**: MCQ chain counter (max 2), free-text override (cancels active MCQs on new message), createdAt timestamp on MCQ cards
-- **`types.ts`**: Added `MCQStatus` type, `createdAt` and `status` to `MCQData`
-- **`MessageBubble.tsx`**: Passes `createdAt` and `status` to MCQCard
+[Configuration]                    (section label, collapsible)
+  MCP Tools              (156)     -- was standalone
+  Enrichments            (8)       -- was standalone
+  Business Context                 -- was standalone
+  Country Config                   -- was standalone
+  LLM Settings                     -- was standalone
 
-### Backend Changes
-- **`mcq-engine.ts`**: Added `MAX_MCQ_CHAIN`, `autoCancelPendingMCQ`, `extractConversationContext`, `buildConversationContextPrompt`
-- **`cfo-agent-api/index.ts`**: Auto-cancel pending MCQ on new query, multi-turn context injection into system prompt
-- **`realtime-cfo-agent/index.ts`**: Same as above
+[Operations]                       (section label)
+  Analytics & History              -- already merged
+  API Console                      -- standalone
+  Master Plan                      -- standalone
 
-### What Stays As-Is (Already Working)
-- Response caching (GAP 6) — fully implemented
-- MCQ infrastructure (save/load/resolve/cancel) — backend complete
-- Tool selection with hard cap + emergency fallback — just implemented
-- Attachment upload + audio transcribe — basic flow works
-- RL logger — logging infrastructure exists
+[Admin]                            (section label, admin only)
+  Users                            -- admin only
+```
+
+### What changes:
+- **5 config tabs** (MCP Tools, Enrichments, Business Context, Country Config, LLM Settings) collapse into a single **"Configuration"** group that defaults to collapsed -- these are rarely changed day-to-day
+- **Intent Library** and **Test Console** stay prominent at the top as the primary working tabs
+- **Operations** groups the monitoring/reference tabs together
+- **Admin** section only renders for admin users (already the case, just visually separated)
+- Each group uses a section label with a subtle divider -- no nested routing, just visual grouping
+- The collapsed "Configuration" group can be expanded with a chevron click to reveal its 5 sub-items
+
+### Benefits:
+- Reduces visual scan from 11 flat items to **4 logical groups**
+- Most-used items (Intents, Test) are always visible at top
+- Rarely-changed config is tucked away but one click to expand
+- No functionality removed -- everything stays accessible
+
+## Technical Details
+
+### Files Modified
+| File | Change |
+|------|--------|
+| `src/components/CFOQueryResolutionEngine.tsx` | Replace flat `sidebarTabs.map()` with grouped sections using collapsible config group via Radix Collapsible. Add section labels with dividers. |
+
+### Implementation
+- Use the existing `@radix-ui/react-collapsible` (already installed) for the Configuration group
+- Add a `configOpen` state boolean, default `false`
+- Section labels rendered as small uppercase text (like the conversation sidebar's "Today"/"Yesterday" labels)
+- Active tab highlighting works the same way -- if any config sub-item is active, auto-expand the Configuration group
+- No new components needed, just restructuring the sidebar JSX in the main render
+
