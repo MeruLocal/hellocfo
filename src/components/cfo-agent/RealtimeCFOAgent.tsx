@@ -26,7 +26,8 @@ import {
   EnrichmentPlan,
   ToolResult,
   RouteClassification,
-  ToolsFilteredInfo
+  ToolsFilteredInfo,
+  MCQData,
 } from './types';
 import type { Intent, BusinessContext, CountryConfig, LLMConfig } from '@/hooks/useCFOData';
 import type { MCPTool } from '@/hooks/useMCPTools';
@@ -177,6 +178,36 @@ export function RealtimeCFOAgent({
           route: prev.route ? { ...prev.route, crossOver: true } : undefined,
         }));
         break;
+
+      case 'mcq_prompt': {
+        const mcqData = data as unknown as MCQData;
+        // Insert an MCQ card as an agent message
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage && lastMessage.role === 'agent' && lastMessage.isStreaming) {
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...lastMessage,
+                content: mcqData.question,
+                mcqData: { ...mcqData, selectedValue: null },
+                isStreaming: false,
+              }
+            ];
+          }
+          return [...prev, {
+            id: crypto.randomUUID(),
+            role: 'agent' as const,
+            content: mcqData.question,
+            timestamp: new Date(),
+            mcqData: { ...mcqData, selectedValue: null },
+            isStreaming: false,
+          }];
+        });
+        setIsProcessing(false);
+        setCurrentPhase('');
+        break;
+      }
 
       case 'response_generating':
         setCurrentPhase('response');
@@ -394,6 +425,33 @@ export function RealtimeCFOAgent({
     }
   };
 
+  const handleMCQSelect = useCallback((messageId: string, option: { label: string; value: string; description?: string }) => {
+    setMessages(prev => prev.map(msg => {
+      if (msg.id === messageId && msg.mcqData) {
+        return { ...msg, mcqData: { ...msg.mcqData, selectedValue: option.value } };
+      }
+      return msg;
+    }));
+
+    // If it was a cancellation, just mark it
+    if (option.value === 'cancel') return;
+
+    // Re-send the selected option as a user message to continue the flow
+    setInputValue(option.label);
+    setTimeout(() => {
+      setInputValue('');
+      const userMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: option.label,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, userMessage]);
+      // Trigger sendMessage logic with the selection
+      setInputValue('');
+    }, 100);
+  }, []);
+
   const clearChat = () => {
     setMessages([]);
     setCurrentUnderstanding({});
@@ -543,7 +601,11 @@ export function RealtimeCFOAgent({
         ) : (
           <div className="space-y-6">
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble
+                key={message.id}
+                message={message}
+                onMCQSelect={message.mcqData ? (option) => handleMCQSelect(message.id, option) : undefined}
+              />
             ))}
             
             {/* Live Thinking Panel */}
