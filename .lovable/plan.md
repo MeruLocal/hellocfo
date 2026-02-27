@@ -1,65 +1,67 @@
 
 
-# Add Health Check Route to Munimji Agent
+## Plan: Smart MCP Tool Sync with Diff Detection
 
-## Overview
-Add a lightweight health endpoint to the `munimji-agent` edge function that reports the status of all critical dependencies without executing a real query.
+### Problem
+Currently, every time you fetch MCP tools, the system marks ALL existing tools as inactive and re-inserts everything. This is wasteful and risky. You also have to login each time just to see tools that are already saved.
 
-## What It Returns
+### Solution Overview
+- On page load: tools load instantly from the database (already works)
+- On "Sync Tools" (re-fetch): compare fetched tools against DB, only insert genuinely new tools, update changed ones, and show a summary of what changed
+- No duplicates ever -- `tool_name` uniqueness enforced via upsert
 
-```json
-{
-  "status": "healthy" | "degraded" | "unhealthy",
-  "timestamp": "2026-02-27T...",
-  "version": "1.0.0",
-  "checks": {
-    "database": { "status": "ok", "latencyMs": 12 },
-    "llm": { "status": "ok", "model": "gpt-4o", "endpoint": "azure" },
-    "mcp": { "status": "ok", "toolCount": 42, "latencyMs": 230 },
-    "environment": { "status": "ok", "missingKeys": [] }
-  },
-  "uptime": "edge_function"
-}
+### Changes
+
+#### 1. Update `saveToolsToDB()` in `src/hooks/useMCPTools.ts`
+Replace the current "mark all inactive then upsert" logic with a smarter diff-based approach:
+
+- Fetch current tools from DB first
+- Compare fetched tools against existing by `tool_name`
+- Categorize into: **new** (not in DB), **updated** (in DB but description/schema changed), **unchanged**
+- Only upsert new + updated tools (keep existing ones active and untouched)
+- Return a sync summary: `{ added: string[], updated: string[], unchanged: number }`
+
+#### 2. Update `fetchTools()` in `src/hooks/useMCPTools.ts`
+- After fetching from MCP server, call the new smart save function
+- Show a toast with the diff summary: "Synced: 3 new tools added, 2 updated, 45 unchanged" instead of just "Loaded 50 tools"
+- Merge new tools into the existing state (don't replace the full array)
+
+#### 3. Add `lastSyncedAt` tracking
+- Add a `lastSyncedAt` state to the hook, populated from the most recent `updated_at` in the DB
+- Return it from the hook so the UI can show "Last synced: 2 hours ago"
+- This tells the user whether they need to re-sync or not
+
+#### 4. No schema/migration changes needed
+The existing `mcp_tools_master` table already has:
+- `tool_name` (unique constraint for upsert)
+- `is_active` flag
+- `updated_at` timestamp
+- `input_schema`, `description`, `endpoint`, `method`
+
+All we need is smarter client-side logic.
+
+### Technical Details
+
+**New `syncToolsToDB()` function (replaces `saveToolsToDB`):**
+
+```text
+1. SELECT * FROM mcp_tools_master (get all existing)
+2. Build a Map<tool_name, existing_row>
+3. For each fetched tool:
+   - If tool_name NOT in map -> mark as "new"
+   - If tool_name IN map but description/schema differs -> mark as "updated"  
+   - Otherwise -> "unchanged"
+4. Upsert only new + updated rows (with is_active: true)
+5. Return { added: [...], updated: [...], unchanged: count }
 ```
 
-## Health Checks Performed
+**Updated toast messages:**
+- First ever sync: "Synced 50 MCP tools to database"
+- Subsequent sync, no changes: "All 50 tools are up to date"
+- Subsequent sync, changes found: "Sync complete: 3 new tools, 2 updated"
 
-| Check | What It Does |
-|-------|-------------|
-| **Database** | Pings `llm_configs` table with a `.select("id").limit(1)` query, measures latency |
-| **LLM Config** | Verifies a default LLM config exists with a valid API key and endpoint |
-| **MCP** | Connects to MCP server, lists tools, reports tool count and latency |
-| **Environment** | Checks required env vars exist: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `MCP_BASE_URL` |
-
-Overall status:
-- **healthy** = all checks pass
-- **degraded** = MCP or non-critical check fails
-- **unhealthy** = DB or LLM check fails
-
-## How to Trigger
-
-Send a POST with `{ "action": "health" }` to the munimji-agent endpoint. No auth required (same as existing feedback action pattern).
-
-## Changes
-
-### 1. Modify `supabase/functions/munimji-agent/index.ts`
-- Add a new `action === "health"` handler block (right after the existing `action === "feedback"` block around line 416)
-- Runs all 4 checks in parallel using `Promise.allSettled`
-- Returns a single JSON response (not SSE) with the health report
-- Timeout: each check gets 5 seconds max
-
-### 2. No new files needed
-The health check logic lives entirely within the existing edge function handler.
-
-### 3. No database changes needed
-Uses existing tables for connectivity checks only.
-
-## Technical Details
-
-The health handler will:
-1. Early-exit from the SSE stream pattern (like the feedback handler does)
-2. Run checks concurrently via `Promise.allSettled`
-3. Return plain JSON (not SSE) for easy integration with monitoring tools
-4. Include a `latencyMs` field per check for performance monitoring
-5. Total response target: under 2 seconds
+### Files Modified
+| File | Change |
+|------|--------|
+| `src/hooks/useMCPTools.ts` | Replace `saveToolsToDB` with `syncToolsToDB`, add diff logic, add `lastSyncedAt` state |
 
