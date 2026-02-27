@@ -3190,6 +3190,13 @@ function IntentListView({
 // ============================================================================
 
 // MCP Tools View
+interface HelloBooksOrg {
+  _id: string;
+  Name: string;
+  BusinessId?: string;
+  Status?: string;
+}
+
 interface HelloBooksEntity {
   _id: string;
   Name: string;
@@ -3218,7 +3225,8 @@ function MCPToolsView({
   const [authToken, setAuthToken] = useState('');
   const [userName, setUserName] = useState('');
 
-  // Entity/Org state
+  // Organization state
+  const [organizations, setOrganizations] = useState<HelloBooksOrg[]>([]);
   const [entities, setEntities] = useState<HelloBooksEntity[]>([]);
   const [entitiesLoading, setEntitiesLoading] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState('');
@@ -3252,9 +3260,14 @@ function MCPToolsView({
       });
 
       if (entErr) throw entErr;
+      // Map organizations from response
+      if (entData?.organizations && Array.isArray(entData.organizations)) {
+        setOrganizations(entData.organizations);
+      }
+      // Map entities from response
       if (entData?.entities && Array.isArray(entData.entities)) {
         setEntities(entData.entities);
-        toast({ title: `Found ${entData.entities.length} entities` });
+        toast({ title: `Found ${entData.entities.length} entities across ${entData.organizations?.length || 0} orgs` });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Login failed';
@@ -3269,6 +3282,7 @@ function MCPToolsView({
   const handleLogout = () => {
     setAuthToken('');
     setUserName('');
+    setOrganizations([]);
     setEntities([]);
     setSelectedEntityId('');
     setSelectedOrgId('');
@@ -3284,10 +3298,7 @@ function MCPToolsView({
     }
   };
 
-  // Derive unique orgs from entities
-  const uniqueOrgs = Array.from(
-    new Map(entities.map(e => [e.OrganizationId, e.OrganizationId])).values()
-  );
+  // Filter entities by selected org
   const filteredEntities = selectedOrgId
     ? entities.filter(e => e.OrganizationId === selectedOrgId)
     : entities;
@@ -3370,9 +3381,9 @@ function MCPToolsView({
                   className="w-full px-3 py-2 border rounded-md text-sm bg-background"
                 >
                   <option value="">Select organization...</option>
-                  {uniqueOrgs.map(orgId => (
-                    <option key={orgId} value={orgId}>
-                      {orgId}
+                  {organizations.map(org => (
+                    <option key={org._id} value={org._id}>
+                      {org.Name}{org.BusinessId ? ` (${org.BusinessId})` : ''}
                     </option>
                   ))}
                 </select>
