@@ -53,3 +53,6 @@ verify_jwt = false
 
 [functions.hellobooks-proxy]
 verify_jwt = false
+
+[functions.analyze-tool-gaps]
+verify_jwt = false
