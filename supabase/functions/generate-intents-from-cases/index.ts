@@ -45,10 +45,16 @@ const CATEGORY_TO_MODULE: Record<string, string> = {
   "Task Management": "task_management",
   Tasks: "task_management",
   "Your Workspace": "your_workspace",
+  Banking: "banking",
+  Finance: "reports",
+  "Financial Reports": "reports",
+  Payroll: "payroll",
+  "Multi-Currency": "multi_currency",
 };
 
 // Map sub-category → sub-module IDs (best-effort)
 const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
+  // Sales
   Revenue: "invoices",
   Invoices: "invoices",
   Orders: "sales_orders",
@@ -56,13 +62,31 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Payments: "customer_advance",
   Returns: "invoice_credit_notes",
   Discounts: "invoices",
+  Estimates: "estimates",
+  Quotations: "estimates",
+  "Delivery Challans": "delivery_challans",
+  "Sales Returns": "invoice_credit_notes",
+  "Credit Notes": "invoice_credit_notes",
+
+  // Purchases
   Vendors: "vendors",
   Bills: "bills",
+  "Purchase Orders": "purchase_orders",
+  "Purchase Returns": "bill_credit_notes",
+  "Debit Notes": "bill_credit_notes",
+  "Vendor Payments": "vendor_advance",
+  "Vendor Advances": "vendor_advance",
+
+  // Inventory
   "Stock Levels": "inventory",
   Reorder: "inventory",
   Valuation: "inventory",
   Movement: "inventory",
   Aging: "inventory",
+  Items: "inventory",
+  Warehouses: "inventory",
+
+  // GST
   "GSTR-1": "gst_workspace",
   "Input Credit": "gst_workspace",
   ITC: "gst_workspace",
@@ -71,15 +95,22 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Compliance: "gst_workspace",
   Filing: "gst_workspace",
   HSN: "hsn_sac_summary",
+
+  // Taxes
   TDS: "tds_report",
   TCS: "tcs_report",
   "Income Tax": "tds_report",
   "Professional Tax": "pf_report",
+  "Tax Returns": "tds_report",
+
+  // Fixed Assets
   Register: "fixed_assets",
   Depreciation: "fixed_assets",
   Additions: "fixed_assets",
   Disposal: "fixed_assets",
   CWIP: "fixed_assets",
+
+  // Expense Claims
   Pending: "expense_claim",
   Summary: "expense_claim",
   Approval: "expense_claim",
@@ -87,6 +118,9 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Reimbursement: "expense_claim",
   Policy: "expense_claim",
   Travel: "expense_claim",
+  Claims: "expense_claim",
+
+  // Reports
   "P&L": "financial_statements",
   "Cash Flow": "financial_statements",
   "Balance Sheet": "financial_statements",
@@ -98,24 +132,41 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Payables: "aged_payables",
   Custom: "all_reports",
   Financial: "financial_statements",
+  Analytics: "all_reports",
+  Trends: "all_reports",
+  "Profit & Loss": "financial_statements",
+
+  // Accounting Masters
   "Chart of Accounts": "chart_of_accounts",
   Ledger: "accounts_by_payee",
   Journal: "manual_journal_entries",
   "Cost Center": "tracking_options",
   "Period End": "manual_journal_entries",
+  Accounts: "chart_of_accounts",
+  "General Ledger": "accounts_by_payee",
+
+  // Eway Bills
   Generation: "eway_bills",
   Expiring: "eway_bills",
   Cancelled: "eway_bills",
   Transit: "eway_bills",
+
+  // Drive
   Files: "drive",
   Storage: "drive",
   Shared: "drive",
   Access: "drive",
   Organization: "drive",
+  Documents: "drive",
+  Attachments: "drive",
+
+  // Comments
   Recent: "comment",
   Mentions: "comment",
   Activity: "comment",
   Threads: "comment",
+
+  // Task Management
   "My Tasks": "board",
   Overdue: "board",
   Team: "board",
@@ -123,12 +174,51 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Assignment: "board",
   Progress: "board",
   Deadlines: "backlogs",
-  Dashboard: "banking",
-  Notifications: "banking",
-  Favorites: "banking",
-  Settings: "banking",
-  Alerts: "banking",
+
+  // Your Workspace
+  Dashboard: "dashboard",
+  Notifications: "notifications",
+  Favorites: "favorites",
+  Settings: "settings",
+  Alerts: "notifications",
+  KPIs: "dashboard",
+  "Quick Actions": "dashboard",
+
+  // Banking
+  "Bank Accounts": "banking",
+  "Bank Reconciliation": "banking",
+  Transactions: "banking",
+  Deposits: "banking",
+  Withdrawals: "banking",
+
+  // Multi-Currency
+  "Exchange Rates": "multi_currency",
+  "Currency Conversion": "multi_currency",
+  "Foreign Currency": "multi_currency",
 };
+
+// Intelligent fallback: derive sub-module from category when no mapping exists
+function deriveSubModule(category: string, subCategory: string): string {
+  // First try direct mapping
+  const mapped = SUB_CATEGORY_TO_SUB_MODULE[subCategory];
+  if (mapped) return mapped;
+
+  // Normalize and try again
+  const normalized = subCategory.trim();
+  const normalizedMapped = SUB_CATEGORY_TO_SUB_MODULE[normalized];
+  if (normalizedMapped) return normalizedMapped;
+
+  // Derive from category: use category as module prefix + subcategory as suffix
+  const moduleId = CATEGORY_TO_MODULE[category] || "general";
+  // Convert subcategory to snake_case id
+  const subId = subCategory
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, "_")
+    .trim();
+
+  return subId || moduleId;
+}
 
 // ── OpenAI GPT-5.2 helper ──────────────────────────────────────────────
 
@@ -354,7 +444,7 @@ serve(async (req) => {
           }
 
           const moduleId = CATEGORY_TO_MODULE[tc.category] || "reports";
-          const subModuleId = SUB_CATEGORY_TO_SUB_MODULE[tc.subCategory] || "";
+          const subModuleId = deriveSubModule(tc.category, tc.subCategory);
 
           // Build intent record
           const intentRecord = {
