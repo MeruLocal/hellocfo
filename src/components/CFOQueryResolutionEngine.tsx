@@ -10,6 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { UsersManagement } from '@/components/UsersManagement';
+import { PipelineDebugPage } from '@/components/pipeline-debug';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -4441,10 +4442,10 @@ export default function CFOQueryResolutionEngine() {
                 <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
               </button>
             ))}
-            <a href="/debug/pipeline" target="_blank" rel="noopener noreferrer" className="w-full px-4 py-2.5 flex items-center gap-2 text-sm transition-colors hover:bg-slate-700 text-slate-300">
-              <GitBranch size={18} /> Pipeline Debugger
-              <span className="ml-auto text-[10px] px-1.5 py-0.5 bg-emerald-600/20 text-emerald-400 rounded">NEW</span>
-            </a>
+            <button onClick={() => setActiveTab('pipeline-debug')} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'pipeline-debug' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+              <span className="flex items-center gap-2"><GitBranch size={18} /> Pipeline Debugger</span>
+              <span className="text-[10px] px-1.5 py-0.5 bg-emerald-600/20 text-emerald-400 rounded">NEW</span>
+            </button>
           </div>
 
           {/* Admin */}
@@ -4594,6 +4595,7 @@ export default function CFOQueryResolutionEngine() {
         {activeTab === 'analytics' && <UnifiedAnalyticsView />}
         {activeTab === 'api-console' && <ApiConsole />}
         {activeTab === 'master-plan' && <MasterPlanView />}
+        {activeTab === 'pipeline-debug' && <PipelineDebugPage />}
         {activeTab === 'users' && isAdmin && (
           <div className="p-6">
             <UsersManagement />

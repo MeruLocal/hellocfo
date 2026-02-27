@@ -152,9 +152,9 @@ export function PipelineDebugPage() {
     : null;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-200 flex flex-col">
+    <div className="flex flex-col h-full text-zinc-200">
       {/* Header */}
-      <header className="border-b border-zinc-800 px-6 py-3 flex items-center justify-between bg-zinc-950">
+      <div className="border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-2 w-2 rounded-full bg-emerald-500" />
           <h1 className="text-sm font-bold tracking-wide uppercase text-zinc-300">Pipeline Debugger</h1>
@@ -165,7 +165,7 @@ export function PipelineDebugPage() {
             Total: {run.totalDurationMs}ms | Route: {run.routePath || '—'} | Model: {run.model || '—'}
           </span>
         )}
-      </header>
+      </div>
 
       {/* Progress Bar */}
       {run && <PipelineProgressBar steps={PIPELINE_STEPS} stepStates={stepStates} />}
