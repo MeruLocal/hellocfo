@@ -100,7 +100,7 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
               <SelectContent>
                 {organizations.map(o => (
                   <SelectItem key={o.org_id} value={o.org_id} className="text-xs">
-                    {o.org_name || o.org_id}
+                    {typeof o.org_name === 'string' ? o.org_name : o.org_id}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -115,7 +115,7 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
               <SelectContent>
                 {filteredEntities.map(e => (
                   <SelectItem key={e.entity_id} value={e.entity_id} className="text-xs">
-                    {e.entity_name || e.entity_id}
+                    {typeof e.entity_name === 'string' ? e.entity_name : e.entity_id}
                   </SelectItem>
                 ))}
               </SelectContent>

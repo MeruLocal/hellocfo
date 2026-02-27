@@ -16,8 +16,10 @@ export function EntityName({ entityId, orgId, showOrg = false, className = "" }:
     return <Skeleton className="h-4 w-24" />;
   }
 
-  const entityName = entity?.entity_name || entityId;
-  const orgName = entity?.org_name || orgId;
+  const rawName = entity?.entity_name;
+  const entityName = typeof rawName === 'string' ? rawName : entityId;
+  const rawOrg = entity?.org_name;
+  const orgName = typeof rawOrg === 'string' ? rawOrg : orgId;
   const hasDetails = entity?.gstin || entity?.pan || entity?.state;
 
   const content = (
@@ -64,5 +66,6 @@ export function EntityNameCompact({ entityId, orgId }: EntityNameCompactProps) {
     return <Skeleton className="h-3 w-20 inline-block" />;
   }
 
-  return <span>{entity?.entity_name || entityId}</span>;
+  const name = entity?.entity_name;
+  return <span>{typeof name === 'string' ? name : entityId}</span>;
 }

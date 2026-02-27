@@ -76,7 +76,7 @@ export function EntityOrgSelect({
           <SelectContent className="bg-background border shadow-lg z-50">
             {organizations.map((org) => (
               <SelectItem key={org.org_id} value={org.org_id}>
-                {org.org_name}
+                {typeof org.org_name === 'string' ? org.org_name : org.org_id}
               </SelectItem>
             ))}
           </SelectContent>
@@ -96,7 +96,7 @@ export function EntityOrgSelect({
             {filteredEntities.map((entity) => (
               <SelectItem key={entity.entity_id} value={entity.entity_id}>
                 <div className="flex flex-col">
-                  <span className="font-medium">{entity.entity_name}</span>
+                  <span className="font-medium">{typeof entity.entity_name === 'string' ? entity.entity_name : entity.entity_id}</span>
                   {entity.gstin && (
                     <span className="text-xs text-muted-foreground">
                       GSTIN: {entity.gstin}
@@ -154,8 +154,8 @@ export function EntitySelect({
         {entities.map((entity) => (
           <SelectItem key={`${entity.org_id}-${entity.entity_id}`} value={entity.entity_id}>
             <div className="flex items-center gap-2">
-              <span className="font-medium">{entity.entity_name}</span>
-              <span className="text-xs text-muted-foreground">({entity.org_name})</span>
+              <span className="font-medium">{typeof entity.entity_name === 'string' ? entity.entity_name : entity.entity_id}</span>
+              <span className="text-xs text-muted-foreground">({typeof entity.org_name === 'string' ? entity.org_name : entity.org_id})</span>
             </div>
           </SelectItem>
         ))}
