@@ -32,17 +32,36 @@ export function useAllEntities() {
   return useQuery({
     queryKey: ["all-entities"],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("get-entity-details", {
-        body: { action: "list_all" },
-      });
+      const { data, error } = await supabase
+        .from("entities")
+        .select("entity_id, name, org_id, gstin, currency, is_default")
+        .order("name");
 
       if (error) throw error;
+
+      const rows = data || [];
+
+      // Derive unique organizations
+      const orgMap = new Map<string, Organization>();
+      for (const row of rows) {
+        if (row.org_id && !orgMap.has(row.org_id)) {
+          orgMap.set(row.org_id, { org_id: row.org_id, org_name: row.org_id });
+        }
+      }
+
+      const entities: EntityDetails[] = rows.map(r => ({
+        entity_id: r.entity_id,
+        entity_name: r.name,
+        org_id: r.org_id || '',
+        gstin: r.gstin || undefined,
+      }));
+
       return {
-        entities: (data?.entities || []) as EntityDetails[],
-        organizations: (data?.organizations || []) as Organization[],
+        entities,
+        organizations: Array.from(orgMap.values()),
       };
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
 }
