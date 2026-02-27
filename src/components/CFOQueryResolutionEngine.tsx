@@ -59,7 +59,8 @@ import {
   MessageSquare, FlaskConical, ChevronDown, ChevronRight, ChevronUp, Copy, Code,
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
-  ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3
+  ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3,
+  CheckCircle2, LockKeyhole
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
@@ -3100,6 +3101,12 @@ function IntentListView({
 // ============================================================================
 
 // MCP Tools View
+interface HelloBooksEntity {
+  _id: string;
+  Name: string;
+  OrganizationId: string;
+}
+
 function MCPToolsView({ 
   tools, 
   isLoading,
@@ -3113,55 +3120,231 @@ function MCPToolsView({
 }) {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const { getToolAnalytics } = useToolAnalytics();
+
+  // Login state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [authToken, setAuthToken] = useState('');
-  const [entityId, setEntityId] = useState('');
-  const [orgId, setOrgId] = useState('');
+  const [userName, setUserName] = useState('');
+
+  // Entity/Org state
+  const [entities, setEntities] = useState<HelloBooksEntity[]>([]);
+  const [entitiesLoading, setEntitiesLoading] = useState(false);
+  const [selectedEntityId, setSelectedEntityId] = useState('');
+  const [selectedOrgId, setSelectedOrgId] = useState('');
+
+  const isLoggedIn = !!authToken;
+
+  const handleLogin = async () => {
+    if (!email || !password) return;
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch('https://devapi.hellobooks.ai/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.token) {
+        throw new Error(data.message || 'Login failed');
+      }
+      setAuthToken(data.token);
+      setUserName(data.user?.Name || email);
+      toast({ title: `Logged in as ${data.user?.Name || email}` });
+
+      // Fetch entities
+      setEntitiesLoading(true);
+      const entRes = await fetch('https://devapi.hellobooks.ai/user/getallusers', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${data.token}`, 'Content-Type': 'application/json' },
+      });
+      const entData = await entRes.json();
+      if (entData.entities && Array.isArray(entData.entities)) {
+        setEntities(entData.entities);
+        toast({ title: `Found ${entData.entities.length} entities` });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Login failed';
+      setLoginError(msg);
+      toast({ title: 'Login failed', description: msg, variant: 'destructive' });
+    } finally {
+      setLoginLoading(false);
+      setEntitiesLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setAuthToken('');
+    setUserName('');
+    setEntities([]);
+    setSelectedEntityId('');
+    setSelectedOrgId('');
+    setEmail('');
+    setPassword('');
+  };
+
+  const handleEntitySelect = (entityId: string) => {
+    const entity = entities.find(e => e._id === entityId);
+    if (entity) {
+      setSelectedEntityId(entity._id);
+      setSelectedOrgId(entity.OrganizationId);
+    }
+  };
+
+  // Derive unique orgs from entities
+  const uniqueOrgs = Array.from(
+    new Map(entities.map(e => [e.OrganizationId, e.OrganizationId])).values()
+  );
+  const filteredEntities = selectedOrgId
+    ? entities.filter(e => e.OrganizationId === selectedOrgId)
+    : entities;
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">MCP Tools</h2>
-          <p className="text-sm text-gray-500">Available tools from HelloBooks MCP Server</p>
+          <h2 className="text-xl font-bold text-foreground">MCP Tools</h2>
+          <p className="text-sm text-muted-foreground">Available tools from HelloBooks MCP Server</p>
         </div>
-        <div className="flex gap-2 items-end">
-          <input placeholder="Auth Token" value={authToken} onChange={e => setAuthToken(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
-          <input placeholder="Entity ID" value={entityId} onChange={e => setEntityId(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
-          <input placeholder="Org ID" value={orgId} onChange={e => setOrgId(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
-          <button
-            onClick={() => onRefresh({ authToken, entityId, orgId })}
-            disabled={isLoading || !authToken || !entityId || !orgId}
-            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
-            {isLoading ? 'Loading...' : 'Fetch Tools'}
-          </button>
-        </div>
+        {isLoggedIn && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+              <CheckCircle2 size={14} /> {userName}
+            </span>
+            <button onClick={handleLogout} className="text-xs text-muted-foreground hover:text-destructive underline">
+              Logout
+            </button>
+          </div>
+        )}
       </div>
 
-      {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
+      {/* Step 1: Login */}
+      {!isLoggedIn && (
+        <div className="mb-6 p-4 border rounded-lg bg-muted/30">
+          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+            <LockKeyhole size={14} /> Step 1: Login to HelloBooks
+          </h3>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Email</label>
+              <input
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md text-sm bg-background"
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Password</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md text-sm bg-background"
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              />
+            </div>
+          </div>
+          {loginError && <p className="text-xs text-destructive mb-2">{loginError}</p>}
+          <button
+            onClick={handleLogin}
+            disabled={loginLoading || !email || !password}
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            {loginLoading ? 'Logging in...' : 'Login'}
+          </button>
+        </div>
+      )}
+
+      {/* Step 2: Select Entity/Org */}
+      {isLoggedIn && (
+        <div className="mb-6 p-4 border rounded-lg bg-muted/30">
+          <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+            <Building2 size={14} /> Step 2: Select Organization & Entity
+          </h3>
+          {entitiesLoading ? (
+            <p className="text-sm text-muted-foreground">Loading entities...</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Organization</label>
+                <select
+                  value={selectedOrgId}
+                  onChange={e => { setSelectedOrgId(e.target.value); setSelectedEntityId(''); }}
+                  className="w-full px-3 py-2 border rounded-md text-sm bg-background"
+                >
+                  <option value="">Select organization...</option>
+                  {uniqueOrgs.map(orgId => (
+                    <option key={orgId} value={orgId}>
+                      {orgId}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Entity</label>
+                <select
+                  value={selectedEntityId}
+                  onChange={e => handleEntitySelect(e.target.value)}
+                  disabled={!selectedOrgId}
+                  className="w-full px-3 py-2 border rounded-md text-sm bg-background disabled:opacity-50"
+                >
+                  <option value="">{selectedOrgId ? 'Select entity...' : 'Select org first...'}</option>
+                  {filteredEntities.map(entity => (
+                    <option key={entity._id} value={entity._id}>
+                      {entity.Name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Fetch Tools */}
+          <button
+            onClick={() => onRefresh({ authToken, entityId: selectedEntityId, orgId: selectedOrgId })}
+            disabled={isLoading || !selectedEntityId || !selectedOrgId}
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isLoading ? 'Fetching Tools...' : 'Fetch MCP Tools'}
+          </button>
+        </div>
+      )}
+
+      {error && <div className="mb-4 p-3 bg-destructive/10 text-destructive rounded text-sm">{error}</div>}
+
+      {tools.length > 0 && (
+        <p className="text-xs text-muted-foreground mb-3">{tools.length} tools loaded</p>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {tools.map(tool => {
           const analytics = getToolAnalytics(tool.id);
           return (
-            <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-white">
-                <div className="flex items-start justify-between">
+            <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-card">
+              <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-medium text-sm text-gray-900">{tool.name}</h3>
+                    <h3 className="font-medium text-sm text-foreground">{tool.name}</h3>
                     <MCPToolUsageBadge toolName={tool.id} analytics={analytics} />
                   </div>
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">{tool.description}</p>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tool.description}</p>
                 </div>
               </div>
               {tool.parameters.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {tool.parameters.slice(0, 4).map(p => (
-                    <span key={p.name} className={`text-xs px-1.5 py-0.5 rounded ${p.required ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                    <span key={p.name} className={`text-xs px-1.5 py-0.5 rounded ${p.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
                       {p.name}
                     </span>
                   ))}
-                  {tool.parameters.length > 4 && <span className="text-xs text-gray-400">+{tool.parameters.length - 4}</span>}
+                  {tool.parameters.length > 4 && <span className="text-xs text-muted-foreground">+{tool.parameters.length - 4}</span>}
                 </div>
               )}
             </div>
@@ -3170,10 +3353,10 @@ function MCPToolsView({
       </div>
 
       {tools.length === 0 && !isLoading && (
-        <div className="text-center py-12 text-gray-500">
-          <Database size={32} className="mx-auto mb-2 text-gray-300" />
+        <div className="text-center py-12 text-muted-foreground">
+          <Database size={32} className="mx-auto mb-2 opacity-30" />
           <p>No MCP tools loaded</p>
-          <p className="text-sm text-gray-400 mt-1">Enter credentials and click Fetch Tools</p>
+          <p className="text-sm opacity-60 mt-1">{isLoggedIn ? 'Select entity & org, then click Fetch Tools' : 'Login to get started'}</p>
         </div>
       )}
     </div>
