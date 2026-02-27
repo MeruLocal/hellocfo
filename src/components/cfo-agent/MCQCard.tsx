@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, XCircle, HelpCircle, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, HelpCircle, AlertTriangle, Clock, Ban } from 'lucide-react';
+import type { MCQStatus } from './types';
 
 export interface MCQOption {
   label: string;
@@ -23,7 +24,11 @@ interface MCQCardProps {
   onSelect: (option: MCQOption) => void;
   disabled?: boolean;
   selectedValue?: string | null;
+  createdAt?: string;
+  status?: MCQStatus;
 }
+
+const MCQ_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
 
 const MCQ_ICONS: Record<MCQType, React.ReactNode> = {
   entity_resolution: <HelpCircle size={16} className="text-blue-500" />,
@@ -39,13 +44,70 @@ const MCQ_LABELS: Record<MCQType, string> = {
   disambiguation: 'Clarify',
 };
 
-export function MCQCard({ mcqType, question, options, onSelect, disabled, selectedValue }: MCQCardProps) {
+function useExpiryTimer(createdAt?: string) {
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!createdAt) return;
+    const created = new Date(createdAt).getTime();
+    if (isNaN(created)) return;
+
+    const update = () => {
+      const remaining = MCQ_EXPIRY_MS - (Date.now() - created);
+      setRemainingMs(Math.max(0, remaining));
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [createdAt]);
+
+  return remainingMs;
+}
+
+function formatTimer(ms: number): string {
+  const seconds = Math.ceil(ms / 1000);
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+export function MCQCard({ mcqType, question, options, onSelect, disabled, selectedValue, createdAt, status }: MCQCardProps) {
+  const remainingMs = useExpiryTimer(createdAt);
+  
+  const isExpired = status === 'expired' || (remainingMs !== null && remainingMs <= 0 && !selectedValue && status !== 'resolved');
+  const isOverridden = status === 'overridden';
+  const isCancelled = status === 'cancelled';
+  const isInactive = isExpired || isOverridden || isCancelled || (selectedValue !== null && selectedValue !== undefined);
+  
+  const overlayLabel = isExpired ? 'Expired' : isOverridden ? 'Overridden' : isCancelled ? 'Cancelled' : null;
+
   return (
-    <div className="rounded-xl border border-border bg-card p-4 space-y-3 max-w-md">
+    <div className={cn(
+      "rounded-xl border border-border bg-card p-4 space-y-3 max-w-md transition-opacity",
+      isInactive && "opacity-60"
+    )}>
       {/* Header */}
-      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        {MCQ_ICONS[mcqType]}
-        <span>{MCQ_LABELS[mcqType]}</span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          {MCQ_ICONS[mcqType]}
+          <span>{MCQ_LABELS[mcqType]}</span>
+        </div>
+        
+        {/* Timer or Status Badge */}
+        {overlayLabel ? (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+            <Ban size={10} />
+            {overlayLabel}
+          </span>
+        ) : remainingMs !== null && !selectedValue ? (
+          <span className={cn(
+            "flex items-center gap-1 text-xs px-2 py-0.5 rounded-full",
+            remainingMs < 30000 ? "text-destructive bg-destructive/10" : "text-muted-foreground bg-muted"
+          )}>
+            <Clock size={10} />
+            {formatTimer(remainingMs)}
+          </span>
+        ) : null}
       </div>
 
       {/* Question */}
@@ -65,7 +127,7 @@ export function MCQCard({ mcqType, question, options, onSelect, disabled, select
                 isSelected && "ring-2 ring-primary/50"
               )}
               onClick={() => onSelect(option)}
-              disabled={disabled || (selectedValue !== null && selectedValue !== undefined)}
+              disabled={disabled || isInactive}
             >
               <div className="flex items-start gap-2 w-full">
                 <div className="mt-0.5">
@@ -90,7 +152,7 @@ export function MCQCard({ mcqType, question, options, onSelect, disabled, select
       </div>
 
       {/* Cancel for write confirmations */}
-      {mcqType === 'write_confirmation' && !selectedValue && (
+      {mcqType === 'write_confirmation' && !isInactive && (
         <div className="flex justify-end">
           <Button
             variant="ghost"

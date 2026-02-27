@@ -1,9 +1,12 @@
-// MCQ Engine — Gap 3, 4, 5, 6 (Phase 0.5)
+// MCQ Engine — Gap 2, 3, 4, 5, 6 (Phase 0.5)
 // Manages Multiple Choice Question state for entity resolution,
 // parameter resolution, and write confirmations
 
 // deno-lint-ignore no-explicit-any
 type SupabaseClient = any;
+
+/** Maximum MCQ cards per single query flow before suppression (GAP 4) */
+export const MAX_MCQ_CHAIN = 2;
 
 export interface MCQOption {
   label: string;
@@ -268,4 +271,77 @@ export function buildMCQSSEEvent(state: MCQState): {
       context: state.context,
     },
   };
+}
+
+/**
+ * Auto-cancel any pending MCQ for a conversation (GAP 2 + GAP 3).
+ * Called at the start of processing a new query.
+ */
+export async function autoCancelPendingMCQ(
+  supabase: SupabaseClient,
+  conversationId: string,
+  reqId: string,
+): Promise<{ cancelled: boolean; mcqId?: string }> {
+  const pending = await loadPendingMCQ(supabase, conversationId, reqId);
+  if (!pending || !pending.id) return { cancelled: false };
+
+  await cancelMCQ(supabase, pending.id, reqId);
+  console.log(`[${reqId}] MCQ: auto-cancelled ${pending.id} (${pending.mcqType}) — new query received`);
+  return { cancelled: true, mcqId: pending.id };
+}
+
+/**
+ * Extract multi-turn conversation context from the last assistant message (GAP 1).
+ * Returns structured context to inject into LLM system prompt.
+ */
+export interface ConversationContext {
+  lastIntent?: string;
+  lastEntities?: Record<string, unknown>;
+  lastTool?: string;
+  lastResultSummary?: string;
+  mcqAbandoned?: boolean;
+}
+
+export function extractConversationContext(
+  // deno-lint-ignore no-explicit-any
+  conversationHistory: Array<{ role: string; content: string; metadata?: any }>,
+): ConversationContext {
+  const ctx: ConversationContext = {};
+
+  // Walk backwards to find the last assistant message with metadata
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg.role !== 'assistant' && msg.role !== 'agent') continue;
+    const meta = msg.metadata;
+    if (!meta || typeof meta !== 'object') continue;
+
+    if (meta.intent && typeof meta.intent === 'object') {
+      ctx.lastIntent = (meta.intent as { name?: string }).name || undefined;
+    }
+    if (meta.toolsUsed && Array.isArray(meta.toolsUsed) && meta.toolsUsed.length > 0) {
+      ctx.lastTool = meta.toolsUsed[meta.toolsUsed.length - 1];
+    }
+    // Use the content as a brief summary
+    if (typeof msg.content === 'string' && msg.content.length > 0) {
+      ctx.lastResultSummary = msg.content.slice(0, 200);
+    }
+    break; // Only look at the most recent assistant message
+  }
+
+  return ctx;
+}
+
+/**
+ * Build a multi-turn context injection string for the LLM system prompt.
+ */
+export function buildConversationContextPrompt(ctx: ConversationContext): string {
+  const parts: string[] = [];
+
+  if (ctx.lastIntent) parts.push(`Last intent: ${ctx.lastIntent}`);
+  if (ctx.lastTool) parts.push(`Last tool used: ${ctx.lastTool}`);
+  if (ctx.lastResultSummary) parts.push(`Last result summary: ${ctx.lastResultSummary}`);
+  if (ctx.mcqAbandoned) parts.push(`Note: User abandoned a previous MCQ prompt without answering.`);
+
+  if (parts.length === 0) return '';
+  return `\n\n📋 CONVERSATION CONTEXT (from previous turn):\n${parts.join('\n')}\nUse this context to understand follow-up queries like "and for last quarter?", "show me more", etc.`;
 }

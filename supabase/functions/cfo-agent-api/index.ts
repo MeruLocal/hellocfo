@@ -16,7 +16,7 @@ import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
 import { validateWriteToolArgs, type WriteToolTracker, buildWriteToolSummary } from "../_shared/write-validator.ts";
 import { logQueryRouting, type RoutingLogEntry } from "../_shared/routing-logger.ts";
-import { loadPendingMCQ, resolveMCQ, saveMCQState, buildMCQSSEEvent, type MCQState } from "../_shared/mcq-engine.ts";
+import { loadPendingMCQ, resolveMCQ, saveMCQState, buildMCQSSEEvent, autoCancelPendingMCQ, extractConversationContext, buildConversationContextPrompt, MAX_MCQ_CHAIN, type MCQState } from "../_shared/mcq-engine.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1072,6 +1072,14 @@ serve(async (req) => {
     }
   }
 
+  // GAP 2+3: Auto-cancel any pending MCQ from previous turn
+  const mcqCancelResult = await autoCancelPendingMCQ(supabase, effectiveConversationId, "api");
+
+  // GAP 1: Extract multi-turn conversation context
+  const conversationCtx = extractConversationContext(conversationHistory as Array<{ role: string; content: string; metadata?: unknown }>);
+  if (mcqCancelResult.cancelled) conversationCtx.mcqAbandoned = true;
+  const multiTurnContextPrompt = buildConversationContextPrompt(conversationCtx);
+
   // Get LLM config
   const { data: llmConfig, error: llmError } = await supabase
     .from("llm_configs").select("*").eq("is_default", true).single();
@@ -1466,7 +1474,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           }
 
           const bulkListContext = '';
-          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${paginationContext}${bulkListContext}${detailLookupContext}`;
+          let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${paginationContext}${bulkListContext}${detailLookupContext}${multiTurnContextPrompt}`;
 
           const historySlice = Math.min(15, conversationHistory.length);
           const useResponsesApi = hasDocumentAttachments(attachments);

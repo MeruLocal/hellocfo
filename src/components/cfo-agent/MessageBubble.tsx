@@ -70,6 +70,8 @@ export function MessageBubble({ message, onMCQSelect }: MessageBubbleProps) {
               options={message.mcqData.options}
               onSelect={onMCQSelect}
               selectedValue={message.mcqData.selectedValue}
+              createdAt={message.mcqData.createdAt}
+              status={message.mcqData.status}
             />
           </div>
         )}
