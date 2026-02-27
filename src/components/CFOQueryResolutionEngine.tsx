@@ -5324,24 +5324,7 @@ export default function CFOQueryResolutionEngine() {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
-    // Validate LLM config before calling API
-    if (!llmConfig?.apiKey) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API key in LLM Settings before generating intents.',
-        variant: 'destructive'
-      });
-      throw new Error('LLM configuration not set');
-    }
-    
-    if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API endpoint in LLM Settings for Azure Anthropic.',
-        variant: 'destructive'
-      });
-      throw new Error('LLM endpoint not set');
-    }
+    // LLM config is optional - edge function falls back to GPT-5.2 secrets if no API key configured
     
     // Set progress at start
     setGenerationProgress({ current: 1, total: 5, step: 'Generating training phrases...' });
@@ -5487,24 +5470,7 @@ export default function CFOQueryResolutionEngine() {
     const intent = intents.find(i => i.id === intentId);
     if (!intent) throw new Error('Intent not found');
     
-    // Validate LLM config before calling API
-    if (!llmConfig?.apiKey) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API key in LLM Settings before regenerating.',
-        variant: 'destructive'
-      });
-      throw new Error('LLM configuration not set');
-    }
-    
-    if (llmConfig.provider === 'azure-anthropic' && !llmConfig.endpoint) {
-      toast({
-        title: 'LLM Configuration Required',
-        description: 'Please configure your API endpoint in LLM Settings for Azure Anthropic.',
-        variant: 'destructive'
-      });
-      throw new Error('LLM endpoint not set');
-    }
+    // LLM config is optional - edge function falls back to GPT-5.2 secrets if no API key configured
     
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
@@ -5544,14 +5510,14 @@ export default function CFOQueryResolutionEngine() {
             currency: businessContext.currency,
             entitySize: businessContext.entitySize
           } : undefined,
-          llmConfig: {
+          llmConfig: llmConfig ? {
             provider: llmConfig.provider,
             endpoint: llmConfig.endpoint,
             model: llmConfig.model,
             apiKey: llmConfig.apiKey,
             temperature: llmConfig.temperature,
             maxTokens: llmConfig.maxTokens
-          }
+          } : undefined
         }
       });
 
