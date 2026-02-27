@@ -3580,6 +3580,14 @@ function MCPToolsView({
         })}
       </div>
 
+      {isLoading && tools.length === 0 && (
+        <div className="text-center py-12 text-muted-foreground">
+          <Loader2 size={32} className="mx-auto mb-3 animate-spin text-primary" />
+          <p className="font-medium">Loading MCP Tools...</p>
+          <p className="text-sm opacity-60 mt-1">Fetching tools from database</p>
+        </div>
+      )}
+
       {tools.length === 0 && !isLoading && (
         <div className="text-center py-12 text-muted-foreground">
           <Database size={32} className="mx-auto mb-2 opacity-30" />
@@ -4334,7 +4342,7 @@ export default function CFOQueryResolutionEngine() {
 
   // Sidebar groups
   const configTabs = [
-    { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: allMcpTools.length },
+    { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: isFetchingMcpTools ? undefined : allMcpTools.length, loading: isFetchingMcpTools },
     { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={18} />, count: enrichmentTypes.length },
     { id: 'business', label: 'Business Context', icon: <Building2 size={18} /> },
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
@@ -4416,7 +4424,13 @@ export default function CFOQueryResolutionEngine() {
                 {configTabs.map(tab => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
                     <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
-                    {tab.count !== undefined && <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>}
+                    {'loading' in tab && (tab as any).loading ? (
+                      <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" />
+                      </span>
+                    ) : tab.count !== undefined ? (
+                      <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>
+                    ) : null}
                   </button>
                 ))}
               </CollapsibleContent>
