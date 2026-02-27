@@ -179,8 +179,13 @@ FOR EACH ENTITY PROVIDE:
 
 GUIDELINES:
 - Use camelCase for entity names
-- Set appropriate defaults (e.g., limit: "10", period: "30d")
-- Include helpful follow-up prompts for required entities
+- ALWAYS set smart, context-dependent defaults so the agent NEVER asks the user for period/date:
+  • period/date_range for TRANSACTIONAL intents (invoices, bills, payments, expenses): default to "MTD" (current month)
+  • period/date_range for ANALYTICAL/REPORTING intents (P&L, cash flow, KPIs, aging, trends, ratios): default to "YTD" (current financial year)
+  • limit for top/bottom queries: default to "10"
+  • limit for list queries: default to "25"
+- Mark period/date parameters as required: false — the agent should use defaults silently
+- Include helpful follow-up prompts for truly required entities only (e.g., customer name, amount)
 - Consider ${businessContext?.currency || 'USD'} for currency-related entities
 
 CRITICAL: If there are no training phrases provided, or if the intent/phrases are too vague to determine meaningful entities, return an EMPTY array []. Do NOT invent or assume entities. Only extract entities that are clearly implied by the training phrases or intent description.
