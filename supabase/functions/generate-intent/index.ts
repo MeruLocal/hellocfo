@@ -584,7 +584,16 @@ const callAI = async (
   if (provider === 'openai' || provider === 'azure-openai') {
     const isAzure = provider === 'azure-openai';
     console.log(`[AI CALL] Using ${isAzure ? 'Azure OpenAI' : 'OpenAI'} endpoint...`);
-    const openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
+    
+    let openaiEndpoint: string;
+    if (isAzure && endpoint) {
+      // Azure OpenAI requires: https://<resource>.openai.azure.com/openai/deployments/<deployment>/chat/completions?api-version=...
+      const baseUrl = endpoint.replace(/\/+$/, '').replace(/\/openai\/v1\/?$/, '');
+      openaiEndpoint = `${baseUrl}/openai/deployments/${model}/chat/completions?api-version=2024-12-01-preview`;
+      console.log(`[AI CALL] Azure OpenAI constructed endpoint: ${openaiEndpoint.substring(0, 80)}...`);
+    } else {
+      openaiEndpoint = endpoint || 'https://api.openai.com/v1/chat/completions';
+    }
     
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
