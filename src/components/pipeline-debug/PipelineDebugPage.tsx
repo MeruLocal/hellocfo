@@ -152,7 +152,7 @@ export function PipelineDebugPage() {
     : null;
 
   return (
-    <div className="flex flex-col h-full text-zinc-200">
+    <div className="flex flex-col h-full text-zinc-200 bg-zinc-950">
       {/* Header */}
       <div className="border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
