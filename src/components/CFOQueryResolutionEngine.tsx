@@ -5,6 +5,7 @@
 // ============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -4224,20 +4225,19 @@ export default function CFOQueryResolutionEngine() {
     URL.revokeObjectURL(url);
   };
 
-  // Sidebar tabs (include Users tab only for admins)
-  const sidebarTabs = [
-    { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
+  // Sidebar groups
+  const configTabs = [
     { id: 'mcp', label: 'MCP Tools', icon: <Box size={18} />, count: allMcpTools.length },
     { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={18} />, count: enrichmentTypes.length },
     { id: 'business', label: 'Business Context', icon: <Building2 size={18} /> },
     { id: 'countries', label: 'Country Config', icon: <Globe size={18} /> },
     { id: 'llm', label: 'LLM Settings', icon: <Brain size={18} /> },
-    { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
-    { id: 'analytics', label: 'Analytics & History', icon: <BarChart3 size={18} /> },
-    { id: 'master-plan', label: 'Master Plan', icon: <FileText size={18} /> },
-    { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
-    ...(isAdmin ? [{ id: 'users', label: 'Users', icon: <Users size={18} /> }] : []),
   ];
+  const configTabIds = configTabs.map(t => t.id);
+  const isConfigActive = configTabIds.includes(activeTab);
+  const [configOpen, setConfigOpen] = useState(isConfigActive);
+  // Auto-expand config group when a config tab is active
+  useEffect(() => { if (isConfigActive) setConfigOpen(true); }, [isConfigActive]);
 
   // Loading state
   if (isLoading) {
@@ -4299,20 +4299,59 @@ export default function CFOQueryResolutionEngine() {
 
         {/* Navigation */}
         <nav className="flex-1 py-3 overflow-y-auto">
-          {sidebarTabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${
-                activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'
-              }`}
-            >
+          {/* AI Engine */}
+          <p className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">AI Engine</p>
+          {[
+            { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
+            { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
               <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
-              {tab.count !== undefined && (
-                <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>
-              )}
+              {tab.count !== undefined && <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>}
             </button>
           ))}
+
+          {/* Configuration (collapsible) */}
+          <div className="mt-2 border-t border-slate-700/50">
+            <Collapsible open={configOpen} onOpenChange={setConfigOpen}>
+              <CollapsibleTrigger className="w-full px-4 pt-3 pb-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors">
+                <span>Configuration</span>
+                <ChevronDown size={12} className={`transition-transform duration-200 ${configOpen ? 'rotate-180' : ''}`} />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                {configTabs.map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                    <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
+                    {tab.count !== undefined && <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>}
+                  </button>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+
+          {/* Operations */}
+          <div className="mt-2 border-t border-slate-700/50">
+            <p className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Operations</p>
+            {[
+              { id: 'analytics', label: 'Analytics & History', icon: <BarChart3 size={18} /> },
+              { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
+              { id: 'master-plan', label: 'Master Plan', icon: <FileText size={18} /> },
+            ].map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Admin */}
+          {isAdmin && (
+            <div className="mt-2 border-t border-slate-700/50">
+              <p className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Admin</p>
+              <button onClick={() => setActiveTab('users')} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'users' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                <span className="flex items-center gap-2"><Users size={18} /> Users</span>
+              </button>
+            </div>
+          )}
         </nav>
 
         {/* LLM Status */}
