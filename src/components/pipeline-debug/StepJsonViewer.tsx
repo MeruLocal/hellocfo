@@ -24,21 +24,21 @@ export function StepJsonViewer({ label, data, defaultOpen = false }: StepJsonVie
   };
 
   return (
-    <div className="border border-zinc-700 rounded-md overflow-hidden">
+    <div className="border rounded-md overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center justify-between w-full px-3 py-1.5 text-xs font-mono text-zinc-400 hover:bg-zinc-800/50 transition-colors"
+        className="flex items-center justify-between w-full px-3 py-1.5 text-xs font-mono text-muted-foreground hover:bg-muted/30 transition-colors"
       >
         <span className="flex items-center gap-1">
           {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           {label}
         </span>
-        <button onClick={handleCopy} className="p-1 hover:text-zinc-200 transition-colors">
-          {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+        <button onClick={handleCopy} className="p-1 hover:text-foreground transition-colors">
+          {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
         </button>
       </button>
       {open && (
-        <pre className="px-3 py-2 text-xs font-mono text-zinc-300 bg-zinc-950 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre">
+        <pre className="px-3 py-2 text-xs font-mono text-foreground bg-muted/20 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre border-t">
           {jsonStr}
         </pre>
       )}
