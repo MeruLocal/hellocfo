@@ -31,6 +31,7 @@ import {
 import { format, isToday, isYesterday, isThisWeek, formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { EntityNameCompact } from '@/components/whatsapp/EntityName';
+import { PipelineHealthBar } from '@/components/chat-history/PipelineHealthBar';
 
 interface ConversationRecord {
   id: string;
@@ -136,6 +137,9 @@ function MessagePanel({
         )}
         <span>Created {format(new Date(conversation.created_at), 'MMM d, h:mm a')}</span>
       </div>
+
+      {/* Pipeline Health */}
+      <PipelineHealthBar messages={messages} />
 
       {/* Messages */}
       <ScrollArea className="flex-1">
