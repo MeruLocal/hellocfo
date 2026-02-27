@@ -3254,21 +3254,39 @@ function MCPToolsView({
       setUserName(loginData.user?.Name || email);
       toast({ title: `Logged in as ${loginData.user?.Name || email}` });
 
-      // Fetch entities via proxy
+      // Fetch organizations & entities via organization/read API
       setEntitiesLoading(true);
       const { data: entData, error: entErr } = await supabase.functions.invoke('hellobooks-proxy', {
-        body: { action: 'getallusers', token: loginData.token },
+        body: { action: 'get_organizations', token: loginData.token },
       });
 
       if (entErr) throw entErr;
-      // Map organizations from response
+
+      // Map from /organization/read response format
       if (entData?.organizations && Array.isArray(entData.organizations)) {
-        setOrganizations(entData.organizations);
-      }
-      // Map entities from response
-      if (entData?.entities && Array.isArray(entData.entities)) {
-        setEntities(entData.entities);
-        toast({ title: `Found ${entData.entities.length} entities across ${entData.organizations?.length || 0} orgs` });
+        const mappedOrgs: HelloBooksOrg[] = entData.organizations.map((org: any) => ({
+          _id: org._id,
+          Name: org.Name,
+          BusinessId: org.BusinessId,
+          Status: org.Status,
+        }));
+        setOrganizations(mappedOrgs);
+
+        // Flatten entities from all organizations
+        const mappedEntities: HelloBooksEntity[] = [];
+        for (const org of entData.organizations) {
+          if (org.Entities && Array.isArray(org.Entities)) {
+            for (const entity of org.Entities) {
+              mappedEntities.push({
+                _id: entity._id || entity.id,
+                Name: entity.Name,
+                OrganizationId: org._id,
+              });
+            }
+          }
+        }
+        setEntities(mappedEntities);
+        toast({ title: `Found ${mappedEntities.length} entities across ${mappedOrgs.length} orgs` });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Login failed';
