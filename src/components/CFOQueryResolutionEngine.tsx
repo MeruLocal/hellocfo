@@ -4383,20 +4383,7 @@ export default function CFOQueryResolutionEngine() {
           <p className="text-xs text-slate-400 mt-1">Query Resolution Platform v3.0</p>
         </div>
 
-        {/* Context Badge */}
-        {businessContext && (
-          <div className="p-3 mx-3 mt-3 bg-slate-900 rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-slate-400">Active Context</p>
-              <span className="text-xs">{countryConfigs.find(c => c.code === businessContext.country)?.flag}</span>
-            </div>
-            <div className="text-sm font-medium">{businessContext.industry.replace('_', ' ')}</div>
-            <div className="flex gap-1 mt-2 flex-wrap">
-              <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.entitySize}</span>
-              <span className="px-2 py-0.5 bg-slate-700 rounded text-xs">{businessContext.currency}</span>
-            </div>
-          </div>
-        )}
+
 
         {/* Navigation */}
         <nav className="flex-1 py-3 overflow-y-auto">
