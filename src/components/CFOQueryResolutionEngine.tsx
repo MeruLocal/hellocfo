@@ -2571,6 +2571,55 @@ function IntentListView({
   const [casesGenProgress, setCasesGenProgress] = React.useState<{ running: boolean; current: number; total: number; created: number; skipped: number; failed: number }>({ running: false, current: 0, total: 0, created: 0, skipped: 0, failed: 0 });
   const [casesGenCount, setCasesGenCount] = React.useState<number>(10);
   const [showCasesGenInput, setShowCasesGenInput] = React.useState(false);
+  const [selectedIntentIds, setSelectedIntentIds] = React.useState<Set<string>>(new Set());
+  const [bulkGenProgress, setBulkGenProgress] = React.useState<{ running: boolean; current: number; total: number; completed: number; failed: number }>({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
+
+  const allSelected = intents.length > 0 && selectedIntentIds.size === intents.length;
+  const someSelected = selectedIntentIds.size > 0 && selectedIntentIds.size < intents.length;
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIntentIds(new Set());
+    } else {
+      setSelectedIntentIds(new Set(intents.map(i => i.id)));
+    }
+  };
+
+  const toggleSelectIntent = (id: string) => {
+    setSelectedIntentIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkGenerate = async () => {
+    if (bulkGenProgress.running || selectedIntentIds.size === 0) return;
+    const selected = intents.filter(i => selectedIntentIds.has(i.id));
+    setBulkGenProgress({ running: true, current: 0, total: selected.length, completed: 0, failed: 0 });
+
+    let completed = 0;
+    let failed = 0;
+
+    for (let i = 0; i < selected.length; i++) {
+      setBulkGenProgress(prev => ({ ...prev, current: i + 1 }));
+      try {
+        await onGenerateFlow(selected[i].id);
+        completed++;
+      } catch {
+        failed++;
+      }
+      setBulkGenProgress(prev => ({ ...prev, completed, failed }));
+    }
+
+    setBulkGenProgress(prev => ({ ...prev, running: false }));
+    setSelectedIntentIds(new Set());
+    toast({ 
+      title: 'Bulk Generation Complete', 
+      description: `${completed} succeeded, ${failed} failed out of ${selected.length} intents` 
+    });
+  };
 
   const handleGenerateFromCases = async () => {
     if (casesGenProgress.running) return;
@@ -2860,10 +2909,76 @@ function IntentListView({
         </div>
       </div>
 
+      {/* Bulk Generation Progress */}
+      {bulkGenProgress.running && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-3">
+            <Loader2 size={20} className="animate-spin text-blue-600" />
+            <div className="flex-1">
+              <p className="font-medium text-blue-700">
+                Generating {bulkGenProgress.current} of {bulkGenProgress.total} selected intents...
+              </p>
+              <div className="mt-2">
+                <div className="h-2.5 bg-blue-200 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                    style={{ width: `${(bulkGenProgress.current / bulkGenProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-blue-600 mt-1">
+                  ✅ {bulkGenProgress.completed} completed · ❌ {bulkGenProgress.failed} failed
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {!bulkGenProgress.running && bulkGenProgress.total > 0 && bulkGenProgress.completed > 0 && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+          <p className="font-medium text-blue-700">
+            ✅ Bulk generation complete: {bulkGenProgress.completed} succeeded, {bulkGenProgress.failed} failed
+          </p>
+          <button onClick={() => setBulkGenProgress({ running: false, current: 0, total: 0, completed: 0, failed: 0 })} className="text-xs text-blue-500 hover:underline">Dismiss</button>
+        </div>
+      )}
+
+      {/* Bulk Action Bar */}
+      {selectedIntentIds.size > 0 && !bulkGenProgress.running && (
+        <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center justify-between">
+          <span className="text-sm font-medium text-indigo-700">
+            {selectedIntentIds.size} intent{selectedIntentIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleBulkGenerate}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
+            >
+              <Wand2 size={14} />
+              Generate All ({selectedIntentIds.size})
+            </button>
+            <button
+              onClick={() => setSelectedIntentIds(new Set())}
+              className="px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Intent Table */}
       <div className="bg-white rounded-xl shadow-sm border">
         <div className="grid grid-cols-12 gap-4 px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-600">
-          <div className="col-span-4">Intent Name</div>
+          <div className="col-span-1 flex items-center">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => { if (el) el.indeterminate = someSelected; }}
+              onChange={toggleSelectAll}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+            />
+          </div>
+          <div className="col-span-3">Intent Name</div>
           <div className="col-span-2">Module</div>
           <div className="col-span-2">Sub-Module</div>
           <div className="col-span-1 text-center">Phrases</div>
@@ -2883,14 +2998,24 @@ function IntentListView({
               const module = modules.find(m => m.id === intent.moduleId);
               const subModule = module?.subModules.find(s => s.id === intent.subModuleId);
               const isConfigured = intent.generatedBy === 'ai' || intent.generatedBy === 'manual';
+              const isSelected = selectedIntentIds.has(intent.id);
               
               return (
                 <div
                   key={intent.id}
                   onClick={() => onSelectIntent(intent.id)}
-                  className="grid grid-cols-12 gap-4 px-4 py-3 items-center hover:bg-gray-50 cursor-pointer transition-colors"
+                  className={`grid grid-cols-12 gap-4 px-4 py-3 items-center hover:bg-gray-50 cursor-pointer transition-colors ${isSelected ? 'bg-indigo-50/50' : ''}`}
                 >
-                  <div className="col-span-4">
+                  <div className="col-span-1 flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => { e.stopPropagation(); toggleSelectIntent(intent.id); }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                  </div>
+                  <div className="col-span-3">
                     <div className="font-medium text-gray-900">{formatIntentName(intent.name)}</div>
                     <div className="text-sm text-gray-500 truncate">{intent.description}</div>
                   </div>
@@ -2994,2263 +3119,165 @@ function MCPToolsView({
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-bold text-gray-900">MCP Tools</h1>
-      </div>
-      <p className="text-gray-500 mb-4">Available data sources for resolution flows</p>
-
-      {/* Credentials Form */}
-      <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">HelloBooks MCP Credentials</h3>
-        <div className="grid grid-cols-3 gap-3 mb-3">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">H-Authorization Token</label>
-            <input
-              type="password"
-              placeholder="Bearer token..."
-              value={authToken}
-              onChange={e => setAuthToken(e.target.value)}
-              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Entity ID</label>
-            <input
-              type="text"
-              placeholder="entity_id..."
-              value={entityId}
-              onChange={e => setEntityId(e.target.value)}
-              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Org ID</label>
-            <input
-              type="text"
-              placeholder="org_id..."
-              value={orgId}
-              onChange={e => setOrgId(e.target.value)}
-              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">MCP Tools</h2>
+          <p className="text-sm text-gray-500">Available tools from HelloBooks MCP Server</p>
         </div>
-        <button
-          onClick={() => onRefresh({ authToken, entityId, orgId })}
-          disabled={isLoading || !authToken || !entityId || !orgId}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-          {isLoading ? 'Connecting...' : 'Fetch MCP Tools'}
-        </button>
+        <div className="flex gap-2 items-end">
+          <input placeholder="Auth Token" value={authToken} onChange={e => setAuthToken(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
+          <input placeholder="Entity ID" value={entityId} onChange={e => setEntityId(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
+          <input placeholder="Org ID" value={orgId} onChange={e => setOrgId(e.target.value)} className="px-2 py-1 border rounded text-xs w-32" />
+          <button
+            onClick={() => onRefresh({ authToken, entityId, orgId })}
+            disabled={isLoading || !authToken || !entityId || !orgId}
+            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isLoading ? 'Loading...' : 'Fetch Tools'}
+          </button>
+        </div>
       </div>
 
-      {/* HelloBooks Badge */}
-      {tools.length > 0 && (
-        <div className="mb-4">
-          <span className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white">
-            🔌 HelloBooks MCP ({tools.length})
-          </span>
-        </div>
-      )}
+      {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
 
-      {/* Error State */}
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div className="flex items-center gap-2 text-red-700">
-            <AlertCircle size={16} />
-            <span className="font-medium">Error loading HelloBooks tools</span>
-          </div>
-          <p className="text-sm text-red-600 mt-1">{error}</p>
-        </div>
-      )}
-
-      {/* Loading State */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-12">
-          <div className="flex items-center gap-3 text-gray-500">
-            <Loader2 size={24} className="animate-spin" />
-            <span>Connecting to HelloBooks MCP server...</span>
-          </div>
-        </div>
-      )}
-
-      {/* Tools List */}
-      {!isLoading && (
-        <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-1 space-y-2 max-h-[500px] overflow-y-auto">
-            {tools.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                Enter credentials above and click "Fetch MCP Tools".
-              </div>
-            ) : (
-              tools.map(tool => (
-                <button
-                  key={tool.id}
-                  onClick={() => setSelectedTool(tool)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                    selectedTool?.id === tool.id
-                      ? 'bg-purple-100 text-purple-700'
-                      : 'hover:bg-gray-100'
-                  }`}
-                >
-                  <div className="font-medium">@{tool.id}</div>
-                  <div className="text-xs text-gray-500 truncate">{tool.description}</div>
-                  <MCPToolUsageBadge toolName={tool.id} analytics={getToolAnalytics(tool.id)} />
-                </button>
-              ))
-            )}
-          </div>
-          <div className="col-span-2">
-            {selectedTool ? (
-              <div className="p-4 border rounded-lg bg-white">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                    HelloBooks
-                  </span>
-                  <h3 className="font-bold text-lg">@{selectedTool.id}</h3>
-                </div>
-                <p className="text-gray-600 mb-4">{selectedTool.description}</p>
-                
-                <div className="mb-4">
-                  <div className="text-sm font-medium text-gray-700 mb-2">Endpoint</div>
-                  <code className="text-sm bg-gray-100 px-2 py-1 rounded">{selectedTool.method} {selectedTool.endpoint}</code>
-                </div>
-                
-                <div className="mb-4">
-                  <div className="text-sm font-medium text-gray-700 mb-2">Parameters ({selectedTool.parameters.length})</div>
-                  {selectedTool.parameters.length === 0 ? (
-                    <p className="text-sm text-gray-500">No parameters</p>
-                  ) : (
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {selectedTool.parameters.map(p => (
-                        <div key={p.name} className="text-sm flex items-center gap-2">
-                          <code className="bg-gray-100 px-1 rounded">{p.name}</code>
-                          <span className="text-gray-500">({p.type})</span>
-                          {p.required && <span className="text-red-500 text-xs">required</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                
-                <div>
-                  <div className="text-sm font-medium text-gray-700 mb-2">Response Fields</div>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedTool.responseFields.map(f => (
-                      <code key={f} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{f}</code>
-                    ))}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {tools.map(tool => {
+          const analytics = getToolAnalytics(tool.id);
+          return (
+            <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-white">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium text-sm text-gray-900">{tool.name}</h3>
+                    <MCPToolUsageBadge usageCount={analytics?.usageCount || 0} avgFeedback={analytics?.avgFeedbackScore || null} />
                   </div>
+                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">{tool.description}</p>
                 </div>
               </div>
-            ) : (
-              <div className="p-8 text-center text-gray-500">
-                Select a tool to view details
-              </div>
-            )}
-          </div>
+              {tool.parameters.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {tool.parameters.slice(0, 4).map(p => (
+                    <span key={p.name} className={`text-xs px-1.5 py-0.5 rounded ${p.required ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {p.name}
+                    </span>
+                  ))}
+                  {tool.parameters.length > 4 && <span className="text-xs text-gray-400">+{tool.parameters.length - 4}</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {tools.length === 0 && !isLoading && (
+        <div className="text-center py-12 text-gray-500">
+          <Database size={32} className="mx-auto mb-2 text-gray-300" />
+          <p>No MCP tools loaded</p>
+          <p className="text-sm text-gray-400 mt-1">Enter credentials and click Fetch Tools</p>
         </div>
       )}
     </div>
   );
 }
 
-// Enrichments View with CRUD
-function EnrichmentsView({ 
+// Enrichments View
+function EnrichmentsView({
   enrichmentTypes,
-  onAdd,
-  onUpdate,
-  onDelete
-}: { 
+  isLoading
+}: {
   enrichmentTypes: EnrichmentType[];
-  onAdd: (enrichment: Omit<EnrichmentType, 'sortOrder'>) => Promise<boolean>;
-  onUpdate: (id: string, updates: Partial<EnrichmentType>) => Promise<boolean>;
-  onDelete: (id: string) => Promise<boolean>;
+  isLoading: boolean;
 }) {
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({
-    id: '',
-    name: '',
-    icon: '✨',
-    description: '',
-    configFields: [] as string[],
-    isActive: true
-  });
-  const [newConfigField, setNewConfigField] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-
-  const resetForm = () => {
-    setFormData({
-      id: '',
-      name: '',
-      icon: '✨',
-      description: '',
-      configFields: [],
-      isActive: true
-    });
-    setNewConfigField('');
-  };
-
-  const openAddModal = () => {
-    resetForm();
-    setEditingId(null);
-    setIsAddModalOpen(true);
-  };
-
-  const openEditModal = (enrichment: EnrichmentType) => {
-    setFormData({
-      id: enrichment.id,
-      name: enrichment.name,
-      icon: enrichment.icon,
-      description: enrichment.description,
-      configFields: [...enrichment.configFields],
-      isActive: enrichment.isActive ?? true
-    });
-    setEditingId(enrichment.id);
-    setIsAddModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setIsAddModalOpen(false);
-    setEditingId(null);
-    resetForm();
-  };
-
-  const addConfigField = () => {
-    if (newConfigField.trim() && !formData.configFields.includes(newConfigField.trim())) {
-      setFormData(prev => ({
-        ...prev,
-        configFields: [...prev.configFields, newConfigField.trim()]
-      }));
-      setNewConfigField('');
-    }
-  };
-
-  const removeConfigField = (field: string) => {
-    setFormData(prev => ({
-      ...prev,
-      configFields: prev.configFields.filter(f => f !== field)
-    }));
-  };
-
-  const handleSubmit = async () => {
-    if (!formData.name.trim()) {
-      toast({ title: 'Name is required', variant: 'destructive' });
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      if (editingId) {
-        await onUpdate(editingId, {
-          name: formData.name,
-          icon: formData.icon,
-          description: formData.description,
-          configFields: formData.configFields,
-          isActive: formData.isActive
-        });
-      } else {
-        const id = formData.id.trim() || formData.name.toLowerCase().replace(/\s+/g, '_');
-        await onAdd({
-          id,
-          name: formData.name,
-          icon: formData.icon,
-          description: formData.description,
-          configFields: formData.configFields,
-          isActive: formData.isActive
-        });
-      }
-      closeModal();
-    } catch (err) {
-      console.error('Failed to save enrichment:', err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this enrichment type?')) {
-      await onDelete(id);
-    }
-  };
-
-  const emojiOptions = ['✨', '📈', '🎯', '⏱️', '📊', '🏆', '🚨', '💡', '🔮', '⚠️', '💵', '📉', '🔄', '📋', '🎨'];
+  if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-gray-400" /></div>;
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Enrichment Functions</h1>
-          <p className="text-gray-500">Intelligence functions for data enrichment</p>
-        </div>
-        <button
-          onClick={openAddModal}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
-        >
-          <Plus size={18} /> Add Enrichment
-        </button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {enrichmentTypes.map(type => (
-          <div key={type.id} className={`p-4 border rounded-lg bg-white ${!type.isActive ? 'opacity-60' : ''}`}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">{type.icon}</span>
-                <div>
-                  <div className="font-medium flex items-center gap-2">
-                    {type.name}
-                    {!type.isActive && (
-                      <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded">Inactive</span>
-                    )}
-                  </div>
-                  <div className="text-sm text-gray-500 font-mono">!{type.id}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => openEditModal(type)}
-                  className="p-2 text-gray-500 hover:bg-gray-100 rounded"
-                >
-                  <Edit size={16} />
-                </button>
-                <button
-                  onClick={() => handleDelete(type.id)}
-                  className="p-2 text-red-500 hover:bg-red-50 rounded"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
+      <h2 className="text-xl font-bold text-gray-900 mb-4">Enrichment Types</h2>
+      <p className="text-sm text-gray-500 mb-6">Available out-of-the-box enrichment functions for intent pipelines</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {enrichmentTypes.map(et => (
+          <div key={et.id} className="p-4 border rounded-lg bg-white">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-lg">{et.icon}</span>
+              <h3 className="font-medium text-gray-900">{et.name}</h3>
             </div>
-            <p className="text-sm text-gray-600 mb-3">{type.description}</p>
-            <div className="flex flex-wrap gap-1">
-              {type.configFields.map(f => (
-                <span key={f} className="text-xs bg-gray-100 px-2 py-0.5 rounded">{f}</span>
-              ))}
-            </div>
+            <p className="text-xs text-gray-500">{et.description}</p>
           </div>
         ))}
       </div>
-
-      {/* Add/Edit Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b">
-              <h2 className="text-xl font-bold">
-                {editingId ? 'Edit Enrichment Type' : 'Add Enrichment Type'}
-              </h2>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {/* ID (only for new) */}
-              {!editingId && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    ID (optional, auto-generated from name)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.id}
-                    onChange={(e) => setFormData(prev => ({ ...prev, id: e.target.value }))}
-                    placeholder="e.g., trend_analysis"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-                  />
-                </div>
-              )}
-
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="e.g., Trend Analysis"
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-
-              {/* Icon */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Icon</label>
-                <div className="flex flex-wrap gap-2">
-                  {emojiOptions.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, icon: emoji }))}
-                      className={`text-2xl p-2 rounded-lg border transition-colors ${
-                        formData.icon === emoji 
-                          ? 'border-blue-500 bg-blue-50' 
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Describe what this enrichment does..."
-                  rows={3}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-
-              {/* Config Fields */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Config Fields</label>
-                <div className="flex flex-wrap gap-2 mb-2">
-                  {formData.configFields.map(field => (
-                    <span key={field} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-sm">
-                      {field}
-                      <button onClick={() => removeConfigField(field)} className="text-gray-500 hover:text-red-500">
-                        <X size={14} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newConfigField}
-                    onChange={(e) => setNewConfigField(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addConfigField())}
-                    placeholder="Add config field..."
-                    className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={addConfigField}
-                    className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                  >
-                    <Plus size={18} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Active Toggle */}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-gray-700">Active</label>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.isActive}
-                    onChange={(e) => setFormData(prev => ({ ...prev, isActive: e.target.checked }))}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
-              </div>
-            </div>
-
-            <div className="p-6 border-t flex justify-end gap-3">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isSaving}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isSaving && <Loader2 size={16} className="animate-spin" />}
-                {editingId ? 'Update' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// Country Config View with CRUD
-function CountryConfigView({ 
+// Country Config View 
+function CountryConfigView({
   countryConfigs,
   onAdd,
   onUpdate,
   onDelete
-}: { 
+}: {
   countryConfigs: CountryConfig[];
-  onAdd: (config: CountryConfig) => Promise<boolean>;
-  onUpdate: (code: string, updates: Partial<CountryConfig>) => Promise<boolean>;
-  onDelete: (code: string) => Promise<boolean>;
+  onAdd: (config: CountryConfig) => Promise<CountryConfig | null>;
+  onUpdate: (code: string, updates: Partial<CountryConfig>) => Promise<void>;
+  onDelete: (code: string) => Promise<void>;
 }) {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingCode, setEditingCode] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [formData, setFormData] = useState<CountryConfig>({
-    code: '',
-    name: '',
-    flag: '🏳️',
-    currency: '',
-    currencySymbol: '',
-    sizeThresholds: {
-      micro: { max: 1000000 },
-      small: { min: 1000000, max: 10000000 },
-      medium: { min: 10000000, max: 100000000 },
-      large: { min: 100000000 }
-    },
-    displayThresholds: {
-      micro: '< 1M',
-      small: '1M - 10M',
-      medium: '10M - 100M',
-      large: '> 100M'
-    },
-    isActive: true
-  });
-
-  const flagOptions = ['🇮🇳', '🇺🇸', '🇬🇧', '🇸🇬', '🇦🇪', '🇿🇦', '🇨🇦', '🇦🇺', '🇩🇪', '🇫🇷', '🇯🇵', '🇨🇳', '🇧🇷', '🇲🇽', '🇳🇱', '🏳️'];
-
-  const resetForm = () => {
-    setFormData({
-      code: '',
-      name: '',
-      flag: '🏳️',
-      currency: '',
-      currencySymbol: '',
-      sizeThresholds: {
-        micro: { max: 1000000 },
-        small: { min: 1000000, max: 10000000 },
-        medium: { min: 10000000, max: 100000000 },
-        large: { min: 100000000 }
-      },
-      displayThresholds: {
-        micro: '< 1M',
-        small: '1M - 10M',
-        medium: '10M - 100M',
-        large: '> 100M'
-      },
-      isActive: true
-    });
-  };
-
-  const openAddModal = () => {
-    resetForm();
-    setEditingCode(null);
-    setIsModalOpen(true);
-  };
-
-  const openEditModal = (config: CountryConfig) => {
-    setFormData({ ...config });
-    setEditingCode(config.code);
-    setIsModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setIsModalOpen(false);
-    setEditingCode(null);
-    resetForm();
-  };
-
-  const handleSubmit = async () => {
-    if (!formData.code.trim() || !formData.name.trim()) {
-      toast({ title: 'Code and Name are required', variant: 'destructive' });
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      if (editingCode) {
-        await onUpdate(editingCode, formData);
-      } else {
-        await onAdd(formData);
-      }
-      closeModal();
-    } catch (err) {
-      console.error('Failed to save country config:', err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDelete = async (code: string) => {
-    if (confirm('Are you sure you want to delete this country configuration?')) {
-      await onDelete(code);
-    }
-  };
-
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Country Configuration</h1>
-          <p className="text-gray-500">Entity size classifications by country</p>
-        </div>
-        <button
-          onClick={openAddModal}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
-        >
-          <Plus size={18} /> Add Country
-        </button>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Country</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Currency</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Micro</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Small</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Medium</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Large</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Status</th>
-              <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {countryConfigs.map(config => (
-              <tr key={config.code} className={`hover:bg-gray-50 ${!config.isActive ? 'opacity-60' : ''}`}>
-                <td className="px-4 py-3">
-                  <span className="flex items-center gap-2">
-                    <span className="text-xl">{config.flag}</span>
-                    <div>
-                      <span className="font-medium">{config.name}</span>
-                      <span className="text-xs text-gray-500 ml-2">({config.code})</span>
-                    </div>
-                  </span>
-                </td>
-                <td className="px-4 py-3 font-mono text-sm">{config.currencySymbol} {config.currency}</td>
-                <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.micro}</td>
-                <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.small}</td>
-                <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.medium}</td>
-                <td className="px-4 py-3 text-sm text-gray-600">{config.displayThresholds.large}</td>
-                <td className="px-4 py-3">
-                  {config.isActive ? (
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Active</span>
-                  ) : (
-                    <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">Inactive</span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="flex justify-end gap-1">
-                    <button
-                      onClick={() => openEditModal(config)}
-                      className="p-2 text-blue-600 hover:bg-blue-50 rounded"
-                      title="Edit"
-                    >
-                      <Edit size={16} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(config.code)}
-                      className="p-2 text-red-500 hover:bg-red-50 rounded"
-                      title="Delete"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Add/Edit Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between">
-              <h2 className="text-xl font-bold">{editingCode ? 'Edit Country' : 'Add Country'}</h2>
-              <button onClick={closeModal} className="text-gray-500 hover:text-gray-700">
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                {/* Code */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Country Code *</label>
-                  <input
-                    type="text"
-                    value={formData.code}
-                    onChange={(e) => setFormData(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
-                    placeholder="e.g., US, IN, GB"
-                    maxLength={2}
-                    disabled={!!editingCode}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-                  />
-                </div>
-
-                {/* Name */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Country Name *</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g., United States"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              {/* Flag */}
+      <h2 className="text-xl font-bold text-gray-900 mb-4">Country Configurations</h2>
+      <div className="space-y-3">
+        {countryConfigs.map(cc => (
+          <div key={cc.code} className="p-4 border rounded-lg bg-white flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{cc.flag}</span>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Flag</label>
-                <div className="flex flex-wrap gap-2">
-                  {flagOptions.map(flag => (
-                    <button
-                      key={flag}
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, flag }))}
-                      className={`text-2xl p-2 rounded-lg border transition-colors ${
-                        formData.flag === flag 
-                          ? 'border-blue-500 bg-blue-50' 
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      {flag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Currency */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency Code</label>
-                  <input
-                    type="text"
-                    value={formData.currency}
-                    onChange={(e) => setFormData(prev => ({ ...prev, currency: e.target.value.toUpperCase() }))}
-                    placeholder="e.g., USD, INR"
-                    maxLength={3}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                {/* Currency Symbol */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency Symbol</label>
-                  <input
-                    type="text"
-                    value={formData.currencySymbol}
-                    onChange={(e) => setFormData(prev => ({ ...prev, currencySymbol: e.target.value }))}
-                    placeholder="e.g., $, ₹, £"
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              {/* Size Thresholds Display Labels */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Size Classification Labels</label>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-gray-500">Micro</label>
-                    <input
-                      type="text"
-                      value={formData.displayThresholds.micro}
-                      onChange={(e) => setFormData(prev => ({ 
-                        ...prev, 
-                        displayThresholds: { ...prev.displayThresholds, micro: e.target.value } 
-                      }))}
-                      placeholder="e.g., < 1M"
-                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500">Small</label>
-                    <input
-                      type="text"
-                      value={formData.displayThresholds.small}
-                      onChange={(e) => setFormData(prev => ({ 
-                        ...prev, 
-                        displayThresholds: { ...prev.displayThresholds, small: e.target.value } 
-                      }))}
-                      placeholder="e.g., 1M - 10M"
-                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500">Medium</label>
-                    <input
-                      type="text"
-                      value={formData.displayThresholds.medium}
-                      onChange={(e) => setFormData(prev => ({ 
-                        ...prev, 
-                        displayThresholds: { ...prev.displayThresholds, medium: e.target.value } 
-                      }))}
-                      placeholder="e.g., 10M - 100M"
-                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500">Large</label>
-                    <input
-                      type="text"
-                      value={formData.displayThresholds.large}
-                      onChange={(e) => setFormData(prev => ({ 
-                        ...prev, 
-                        displayThresholds: { ...prev.displayThresholds, large: e.target.value } 
-                      }))}
-                      placeholder="e.g., > 100M"
-                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Active Toggle */}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-gray-700">Active</label>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.isActive}
-                    onChange={(e) => setFormData(prev => ({ ...prev, isActive: e.target.checked }))}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
+                <h3 className="font-medium">{cc.name}</h3>
+                <p className="text-sm text-gray-500">{cc.currency} ({cc.currencySymbol})</p>
               </div>
             </div>
-
-            <div className="p-6 border-t flex justify-end gap-3">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isSaving}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isSaving && <Loader2 size={16} className="animate-spin" />}
-                {editingCode ? 'Update' : 'Create'}
-              </button>
-            </div>
+            <button onClick={() => onDelete(cc.code)} className="text-red-500 hover:text-red-700 text-sm">Remove</button>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }
 
-// Business Context Settings View with CRUD
-function BusinessContextView({ 
-  context, 
-  allContexts,
-  countryConfigs,
-  onChange,
+// Business Context View
+function BusinessContextView({
+  contexts,
+  activeContext,
+  onUpdate,
   onCreate,
   onDelete,
   onSetDefault
-}: { 
-  context: BusinessContext;
-  allContexts: BusinessContext[];
-  countryConfigs: CountryConfig[];
-  onChange: (updates: Partial<BusinessContext>, id?: string) => void;
-  onCreate: (context: Omit<BusinessContext, 'id'>) => Promise<boolean>;
-  onDelete: (id: string) => Promise<boolean>;
-  onSetDefault: (id: string) => Promise<boolean>;
+}: {
+  contexts: any[];
+  activeContext: any;
+  onUpdate: (updates: any) => Promise<void>;
+  onCreate: (context: any) => Promise<any>;
+  onDelete: (id: string) => Promise<void>;
+  onSetDefault: (id: string) => Promise<void>;
 }) {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingContext, setEditingContext] = useState<BusinessContext | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [activeView, setActiveView] = useState<'edit' | 'list'>('edit');
-
-  const industries = [
-    { id: 'real_estate', name: 'Real Estate', subIndustries: ['residential_construction', 'commercial_construction', 'property_management'] },
-    { id: 'manufacturing', name: 'Manufacturing', subIndustries: ['automotive', 'electronics', 'textiles', 'food_processing'] },
-    { id: 'retail', name: 'Retail', subIndustries: ['ecommerce', 'brick_and_mortar', 'wholesale'] },
-    { id: 'services', name: 'Services', subIndustries: ['consulting', 'it_services', 'healthcare', 'education'] },
-    { id: 'technology', name: 'Technology', subIndustries: ['software', 'hardware', 'saas', 'fintech'] },
-    { id: 'financial_services', name: 'Financial Services', subIndustries: ['banking', 'insurance', 'investment'] }
-  ];
-
-  const complianceOptions: Record<string, string[]> = {
-    IN: ['GST', 'TDS', 'RERA', 'Companies Act', 'SEBI'],
-    US: ['GAAP', 'SOX', 'SEC', 'IRS'],
-    GB: ['VAT', 'HMRC', 'Companies House', 'FCA'],
-    SG: ['GST', 'IRAS', 'ACRA', 'MAS'],
-    AE: ['VAT', 'FTA', 'DIFC', 'ADGM'],
-    ZA: ['VAT', 'SARS', 'CIPC', 'JSE'],
-    CA: ['GST/HST', 'CRA', 'OSC', 'PIPEDA']
-  };
-
-  const getDefaultFormData = (): Omit<BusinessContext, 'id'> => ({
-    name: '',
-    country: countryConfigs[0]?.code || 'IN',
-    industry: 'technology',
-    subIndustry: undefined,
-    entitySize: 'small',
-    annualRevenue: undefined,
-    employeeCount: undefined,
-    fiscalYearEnd: 'march',
-    currency: countryConfigs[0]?.currency || 'INR',
-    complianceFrameworks: [],
-    isDefault: false
-  });
-
-  const [formData, setFormData] = useState<Omit<BusinessContext, 'id'>>(getDefaultFormData());
-
-  const openAddModal = () => {
-    setFormData(getDefaultFormData());
-    setEditingContext(null);
-    setIsModalOpen(true);
-  };
-
-  const openEditModal = (ctx: BusinessContext) => {
-    setFormData({
-      name: ctx.name || '',
-      country: ctx.country,
-      industry: ctx.industry,
-      subIndustry: ctx.subIndustry,
-      entitySize: ctx.entitySize,
-      annualRevenue: ctx.annualRevenue,
-      employeeCount: ctx.employeeCount,
-      fiscalYearEnd: ctx.fiscalYearEnd,
-      currency: ctx.currency,
-      complianceFrameworks: ctx.complianceFrameworks,
-      isDefault: ctx.isDefault
-    });
-    setEditingContext(ctx);
-    setIsModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setIsModalOpen(false);
-    setEditingContext(null);
-  };
-
-  const handleSubmit = async () => {
-    setIsSaving(true);
-    try {
-      if (editingContext?.id) {
-        await onChange(formData, editingContext.id);
-      } else {
-        await onCreate(formData);
-      }
-      closeModal();
-    } catch (err) {
-      console.error('Failed to save context:', err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this business context?')) {
-      await onDelete(id);
-    }
-  };
-
-  const selectedCountry = countryConfigs.find(c => c.code === context.country);
-  const formSelectedCountry = countryConfigs.find(c => c.code === formData.country);
-  const selectedIndustry = industries.find(i => i.id === context.industry);
-  const formSelectedIndustry = industries.find(i => i.id === formData.industry);
-
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Business Context</h1>
-          <p className="text-gray-500">Configure your organization's context for AI-powered insights</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-            <button
-              onClick={() => setActiveView('edit')}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                activeView === 'edit' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Current Context
-            </button>
-            <button
-              onClick={() => setActiveView('list')}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                activeView === 'list' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              All Contexts ({allContexts.length})
-            </button>
-          </div>
-          <button
-            onClick={openAddModal}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700"
-          >
-            <Plus size={18} /> Add Context
-          </button>
-        </div>
-      </div>
-
-      {activeView === 'list' ? (
-        /* All Contexts List View */
-        <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Country</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Industry</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Entity Size</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600">Status</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {allContexts.map(ctx => {
-                const country = countryConfigs.find(c => c.code === ctx.country);
-                const ind = industries.find(i => i.id === ctx.industry);
-                return (
-                  <tr key={ctx.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <span className="font-medium">{ctx.name || 'Unnamed Context'}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="flex items-center gap-2">
-                        <span>{country?.flag}</span>
-                        <span>{country?.name}</span>
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{ind?.name || ctx.industry}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600 capitalize">{ctx.entitySize}</td>
-                    <td className="px-4 py-3">
-                      {ctx.isDefault ? (
-                        <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Default</span>
-                      ) : (
-                        <button
-                          onClick={() => ctx.id && onSetDefault(ctx.id)}
-                          className="text-xs text-blue-600 hover:underline"
-                        >
-                          Set as Default
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          onClick={() => openEditModal(ctx)}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded"
-                          title="Edit"
-                        >
-                          <Edit size={16} />
-                        </button>
-                        {!ctx.isDefault && (
-                          <button
-                            onClick={() => ctx.id && handleDelete(ctx.id)}
-                            className="p-2 text-red-500 hover:bg-red-50 rounded"
-                            title="Delete"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        /* Current Context Edit View */
-        <div className="max-w-3xl space-y-6">
-          {/* Context Name */}
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <FileText size={18} /> Context Details
-            </h3>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Context Name</label>
-              <input
-                type="text"
-                value={context.name || ''}
-                onChange={(e) => onChange({ name: e.target.value })}
-                placeholder="e.g., Main Business, US Operations"
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          {/* Location & Currency */}
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <Globe size={18} /> Location & Currency
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
+      <h2 className="text-xl font-bold text-gray-900 mb-4">Business Contexts</h2>
+      <div className="space-y-3">
+        {contexts.map(ctx => (
+          <div key={ctx.id} className={`p-4 border rounded-lg bg-white ${ctx.id === activeContext?.id ? 'border-blue-500 ring-1 ring-blue-200' : ''}`}>
+            <div className="flex items-center justify-between">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
-                <select
-                  value={context.country}
-                  onChange={(e) => {
-                    const newCountry = countryConfigs.find(c => c.code === e.target.value);
-                    onChange({ 
-                      country: e.target.value, 
-                      currency: newCountry?.currency || context.currency,
-                      complianceFrameworks: []
-                    });
-                  }}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  {countryConfigs.map(c => (
-                    <option key={c.code} value={c.code}>{c.flag} {c.name}</option>
-                  ))}
-                </select>
+                <h3 className="font-medium">{ctx.name || ctx.industry}</h3>
+                <p className="text-sm text-gray-500">{ctx.country} · {ctx.currency} · {ctx.entitySize}</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Currency</label>
-                <div className="px-3 py-2 border rounded-lg bg-gray-50 text-gray-700">
-                  {selectedCountry?.currencySymbol} {selectedCountry?.currency}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Industry */}
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <Building2 size={18} /> Industry
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
-                <select
-                  value={context.industry}
-                  onChange={(e) => onChange({ industry: e.target.value, subIndustry: undefined })}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  {industries.map(i => (
-                    <option key={i.id} value={i.id}>{i.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Sub-Industry</label>
-                <select
-                  value={context.subIndustry || ''}
-                  onChange={(e) => onChange({ subIndustry: e.target.value || undefined })}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  <option value="">Select sub-industry...</option>
-                  {selectedIndustry?.subIndustries.map(s => (
-                    <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Entity Size */}
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <Layers size={18} /> Entity Size
-            </h3>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Size Classification</label>
-                <select
-                  value={context.entitySize}
-                  onChange={(e) => onChange({ entitySize: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  <option value="micro">Micro - {selectedCountry?.displayThresholds.micro}</option>
-                  <option value="small">Small - {selectedCountry?.displayThresholds.small}</option>
-                  <option value="medium">Medium - {selectedCountry?.displayThresholds.medium}</option>
-                  <option value="large">Large - {selectedCountry?.displayThresholds.large}</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Annual Revenue</label>
-                <input
-                  type="number"
-                  value={context.annualRevenue || ''}
-                  onChange={(e) => onChange({ annualRevenue: parseInt(e.target.value) || undefined })}
-                  placeholder="Enter annual revenue"
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Employee Count</label>
-                <input
-                  type="number"
-                  value={context.employeeCount || ''}
-                  onChange={(e) => onChange({ employeeCount: parseInt(e.target.value) || undefined })}
-                  placeholder="Number of employees"
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Fiscal Year End</label>
-                <select
-                  value={context.fiscalYearEnd}
-                  onChange={(e) => onChange({ fiscalYearEnd: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  <option value="march">March</option>
-                  <option value="december">December</option>
-                  <option value="june">June</option>
-                  <option value="september">September</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Compliance Frameworks */}
-          <div className="bg-white p-6 rounded-xl border">
-            <h3 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
-              <FileText size={18} /> Compliance Frameworks
-            </h3>
-            <p className="text-sm text-gray-500 mb-4">Select applicable compliance frameworks for {selectedCountry?.name}</p>
-            <div className="flex flex-wrap gap-2">
-              {(complianceOptions[context.country] || []).map(framework => {
-                const isSelected = context.complianceFrameworks.includes(framework);
-                return (
-                  <button
-                    key={framework}
-                    onClick={() => {
-                      if (isSelected) {
-                        onChange({ complianceFrameworks: context.complianceFrameworks.filter(f => f !== framework) });
-                      } else {
-                        onChange({ complianceFrameworks: [...context.complianceFrameworks, framework] });
-                      }
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                      isSelected
-                        ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    {isSelected && <Check size={14} className="inline mr-1" />}
-                    {framework}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Context Summary */}
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="font-medium text-blue-900 mb-2">Current Context Summary</h4>
-            <div className="text-sm text-blue-700 space-y-1">
-              <p>📍 {selectedCountry?.flag} {selectedCountry?.name} ({context.currency})</p>
-              <p>🏭 {context.industry.replace(/_/g, ' ')} {context.subIndustry ? `→ ${context.subIndustry.replace(/_/g, ' ')}` : ''}</p>
-              <p>📊 {context.entitySize.charAt(0).toUpperCase() + context.entitySize.slice(1)} Entity ({selectedCountry?.displayThresholds[context.entitySize as keyof typeof selectedCountry.displayThresholds]})</p>
-              <p>📅 Fiscal Year End: {context.fiscalYearEnd.charAt(0).toUpperCase() + context.fiscalYearEnd.slice(1)}</p>
-              {context.complianceFrameworks.length > 0 && (
-                <p>📋 Compliance: {context.complianceFrameworks.join(', ')}</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add/Edit Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between">
-              <h2 className="text-xl font-bold">{editingContext ? 'Edit Context' : 'Add Business Context'}</h2>
-              <button onClick={closeModal} className="text-gray-500 hover:text-gray-700">
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Context Name</label>
-                <input
-                  type="text"
-                  value={formData.name || ''}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="e.g., Main Business, US Operations"
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Country */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Country</label>
-                  <select
-                    value={formData.country}
-                    onChange={(e) => {
-                      const newCountry = countryConfigs.find(c => c.code === e.target.value);
-                      setFormData(prev => ({ 
-                        ...prev, 
-                        country: e.target.value,
-                        currency: newCountry?.currency || prev.currency,
-                        complianceFrameworks: []
-                      }));
-                    }}
-                    className="w-full px-3 py-2 border rounded-lg bg-white"
-                  >
-                    {countryConfigs.map(c => (
-                      <option key={c.code} value={c.code}>{c.flag} {c.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Industry */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Industry</label>
-                  <select
-                    value={formData.industry}
-                    onChange={(e) => setFormData(prev => ({ ...prev, industry: e.target.value, subIndustry: undefined }))}
-                    className="w-full px-3 py-2 border rounded-lg bg-white"
-                  >
-                    {industries.map(i => (
-                      <option key={i.id} value={i.id}>{i.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Sub-Industry */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Sub-Industry</label>
-                  <select
-                    value={formData.subIndustry || ''}
-                    onChange={(e) => setFormData(prev => ({ ...prev, subIndustry: e.target.value || undefined }))}
-                    className="w-full px-3 py-2 border rounded-lg bg-white"
-                  >
-                    <option value="">Select sub-industry...</option>
-                    {formSelectedIndustry?.subIndustries.map(s => (
-                      <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Entity Size */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Entity Size</label>
-                  <select
-                    value={formData.entitySize}
-                    onChange={(e) => setFormData(prev => ({ ...prev, entitySize: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-lg bg-white"
-                  >
-                    <option value="micro">Micro</option>
-                    <option value="small">Small</option>
-                    <option value="medium">Medium</option>
-                    <option value="large">Large</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Annual Revenue */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Annual Revenue</label>
-                  <input
-                    type="number"
-                    value={formData.annualRevenue || ''}
-                    onChange={(e) => setFormData(prev => ({ ...prev, annualRevenue: parseInt(e.target.value) || undefined }))}
-                    placeholder="Enter annual revenue"
-                    className="w-full px-3 py-2 border rounded-lg"
-                  />
-                </div>
-
-                {/* Employee Count */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Employee Count</label>
-                  <input
-                    type="number"
-                    value={formData.employeeCount || ''}
-                    onChange={(e) => setFormData(prev => ({ ...prev, employeeCount: parseInt(e.target.value) || undefined }))}
-                    placeholder="Number of employees"
-                    className="w-full px-3 py-2 border rounded-lg"
-                  />
-                </div>
-              </div>
-
-              {/* Fiscal Year End */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fiscal Year End</label>
-                <select
-                  value={formData.fiscalYearEnd}
-                  onChange={(e) => setFormData(prev => ({ ...prev, fiscalYearEnd: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg bg-white"
-                >
-                  <option value="march">March</option>
-                  <option value="december">December</option>
-                  <option value="june">June</option>
-                  <option value="september">September</option>
-                </select>
-              </div>
-
-              {/* Compliance Frameworks */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Compliance Frameworks</label>
-                <div className="flex flex-wrap gap-2">
-                  {(complianceOptions[formData.country] || []).map(framework => {
-                    const isSelected = formData.complianceFrameworks.includes(framework);
-                    return (
-                      <button
-                        key={framework}
-                        type="button"
-                        onClick={() => {
-                          if (isSelected) {
-                            setFormData(prev => ({ ...prev, complianceFrameworks: prev.complianceFrameworks.filter(f => f !== framework) }));
-                          } else {
-                            setFormData(prev => ({ ...prev, complianceFrameworks: [...prev.complianceFrameworks, framework] }));
-                          }
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                          isSelected
-                            ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >
-                        {isSelected && <Check size={14} className="inline mr-1" />}
-                        {framework}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 border-t flex justify-end gap-3">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isSaving}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isSaving && <Loader2 size={16} className="animate-spin" />}
-                {editingContext ? 'Update' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// LLM Config View - Compact & Minimal Design
-function LLMConfigView({ 
-  config, 
-  onChange 
-}: { 
-  config: LLMConfig; 
-  onChange: (updates: Partial<LLMConfig>) => void;
-}) {
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedConfig, setEditedConfig] = useState<Partial<LLMConfig>>({});
-  const [showUsageDetails, setShowUsageDetails] = useState(false);
-  
-  const { totalUsage, usageByModel, loading: usageLoading, refetch: refetchUsage } = useLLMUsageLogs();
-
-  const providers = [
-    { id: 'azure-anthropic', name: 'Azure', icon: '🔷' },
-    { id: 'openai', name: 'OpenAI', icon: '🟢' }
-  ];
-
-  const handleStartEdit = () => {
-    setEditedConfig({
-      provider: config.provider,
-      endpoint: config.endpoint,
-      model: config.model,
-      apiKey: config.apiKey,
-      temperature: config.temperature,
-      maxTokens: config.maxTokens
-    });
-    setIsEditing(true);
-  };
-
-  const handleSave = () => {
-    onChange(editedConfig);
-    setIsEditing(false);
-    toast({ title: 'Saved' });
-  };
-
-  const currentConfig = isEditing ? { ...config, ...editedConfig } : config;
-  const updateField = (updates: Partial<LLMConfig>) => {
-    if (isEditing) {
-      setEditedConfig(prev => ({ ...prev, ...updates }));
-    }
-  };
-
-  const testConnection = async () => {
-    setTestStatus('testing');
-    try {
-      const response = await fetch(`${currentConfig.endpoint}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': currentConfig.apiKey || '',
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: currentConfig.model,
-          max_tokens: 50,
-          messages: [{ role: 'user', content: 'Say OK' }]
-        })
-      });
-      setTestStatus(response.ok ? 'success' : 'error');
-    } catch {
-      setTestStatus('error');
-    }
-  };
-
-  const formatUsd = (amount: number) => `$${amount.toFixed(4)}`;
-
-  return (
-    <div className="p-6 max-w-3xl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">LLM Settings</h1>
-          <p className="text-sm text-gray-500">AI model configuration</p>
-        </div>
-        {!isEditing ? (
-          <button onClick={handleStartEdit} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-md hover:bg-gray-800">
-            Edit
-          </button>
-        ) : (
-          <div className="flex gap-2">
-            <button onClick={() => setIsEditing(false)} className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50">
-              Cancel
-            </button>
-            <button onClick={handleSave} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-md hover:bg-gray-800">
-              Save
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Cost Summary Card */}
-      <div className="mb-6 p-4 bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg text-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wide">Total Cost</p>
-            <p className="text-2xl font-bold">{formatUsd(totalUsage.totalCostUsd)}</p>
-          </div>
-          <div className="flex gap-6 text-right">
-            <div>
-              <p className="text-xs text-gray-400">Tokens</p>
-              <p className="font-semibold">{totalUsage.totalTokens.toLocaleString()}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-400">Requests</p>
-              <p className="font-semibold">{totalUsage.requestCount}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Configuration */}
-      <div className="space-y-4 mb-6">
-        {/* Provider */}
-        <div className="flex gap-2">
-          {providers.map(p => (
-            <button
-              key={p.id}
-              onClick={() => isEditing && updateField({ provider: p.id })}
-              disabled={!isEditing}
-              className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all ${
-                currentConfig.provider === p.id
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              } ${!isEditing ? 'opacity-70 cursor-default' : 'cursor-pointer'}`}
-            >
-              {p.icon} {p.name}
-            </button>
-          ))}
-        </div>
-
-        {/* Form Grid */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
-            <label className="text-xs text-gray-500 mb-1 block">Endpoint</label>
-            <input
-              type="text"
-              value={currentConfig.endpoint || ''}
-              onChange={(e) => updateField({ endpoint: e.target.value })}
-              disabled={!isEditing}
-              placeholder="https://..."
-              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Model</label>
-            <input
-              type="text"
-              value={currentConfig.model || ''}
-              onChange={(e) => updateField({ model: e.target.value })}
-              disabled={!isEditing}
-              placeholder="claude-3-opus"
-              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
-            <input
-              type="password"
-              value={currentConfig.apiKey || ''}
-              onChange={(e) => updateField({ apiKey: e.target.value })}
-              disabled={!isEditing}
-              placeholder="••••••••"
-              className="w-full px-3 py-2 text-sm border rounded-md font-mono bg-gray-50 disabled:opacity-60"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Temperature ({currentConfig.temperature})</label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={currentConfig.temperature}
-              onChange={(e) => updateField({ temperature: parseFloat(e.target.value) })}
-              disabled={!isEditing}
-              className="w-full disabled:opacity-60"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Max Tokens</label>
-            <input
-              type="number"
-              value={currentConfig.maxTokens}
-              onChange={(e) => updateField({ maxTokens: parseInt(e.target.value) || 4096 })}
-              disabled={!isEditing}
-              className="w-full px-3 py-2 text-sm border rounded-md bg-gray-50 disabled:opacity-60"
-            />
-          </div>
-        </div>
-
-        {/* Test Connection */}
-        <div className="flex items-center gap-3 pt-2">
-          <button
-            onClick={testConnection}
-            disabled={testStatus === 'testing' || !currentConfig.apiKey}
-            className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
-          >
-            {testStatus === 'testing' ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-            Test
-          </button>
-          {testStatus === 'success' && <span className="text-sm text-green-600">✓ Connected</span>}
-          {testStatus === 'error' && <span className="text-sm text-red-600">✗ Failed</span>}
-        </div>
-      </div>
-
-      {/* Usage by Model - Collapsible */}
-      {usageByModel.length > 0 && (
-        <div className="border rounded-lg overflow-hidden">
-          <button
-            onClick={() => setShowUsageDetails(!showUsageDetails)}
-            className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition-colors"
-          >
-            <span className="text-sm font-medium text-gray-700">Usage by Model</span>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={(e) => { e.stopPropagation(); refetchUsage(); }}
-                disabled={usageLoading}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <RefreshCw size={14} className={usageLoading ? 'animate-spin' : ''} />
-              </button>
-              {showUsageDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </div>
-          </button>
-          
-          {showUsageDetails && (
-            <div className="divide-y">
-              {usageByModel.map((usage, idx) => (
-                <div key={idx} className="px-4 py-2 flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${usage.provider === 'azure-anthropic' ? 'bg-blue-500' : 'bg-green-500'}`} />
-                    <span className="font-mono text-xs text-gray-600">{usage.model}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-gray-500">
-                    <span>{usage.requestCount} req</span>
-                    <span>{usage.totalTokens.toLocaleString()} tok</span>
-                    <span className="font-medium text-gray-900">{formatUsd(usage.estimatedCostUsd)}</span>
-                  </div>
-                </div>
-              ))}
-              <div className="px-4 py-2 flex items-center justify-between text-sm bg-gray-50 font-medium">
-                <span>Total</span>
-                <div className="flex items-center gap-4 text-gray-700">
-                  <span>{totalUsage.requestCount} req</span>
-                  <span>{totalUsage.totalTokens.toLocaleString()} tok</span>
-                  <span className="text-gray-900">{formatUsd(totalUsage.totalCostUsd)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {usageByModel.length === 0 && !usageLoading && (
-        <div className="text-center py-6 text-gray-400 text-sm">
-          No usage data yet
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Test Console View with LLM + MCP Integration
-function TestConsoleView({ 
-  intents, 
-  businessContext,
-  countryConfigs,
-  mcpTools,
-  llmConfig
-}: { 
-  intents: Intent[]; 
-  businessContext: BusinessContext;
-  countryConfigs: CountryConfig[];
-  mcpTools?: MCPTool[];
-  llmConfig?: LLMConfig;
-}) {
-  const [query, setQuery] = useState('');
-  const [isRunning, setIsRunning] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [testHistory, setTestHistory] = useState<any[]>([]);
-  const [useLLM, setUseLLM] = useState(true);
-  const [debugMode, setDebugMode] = useState(false);
-  const [showDebugLogs, setShowDebugLogs] = useState(false);
-
-  const runTest = async () => {
-    if (!query.trim()) return;
-    
-    setIsRunning(true);
-    const startTime = Date.now();
-    
-    try {
-      if (useLLM) {
-        // Use LLM with MCP tools via edge function
-        const { data, error } = await supabase.functions.invoke('test-with-mcp', {
-          body: {
-            query,
-            intents: intents.filter(i => i.isActive).map(i => ({
-              id: i.id,
-              name: i.name,
-              description: i.description,
-              moduleId: i.moduleId,
-              trainingPhrases: i.trainingPhrases,
-              entities: i.entities,
-              isActive: i.isActive,
-              resolutionFlow: i.resolutionFlow
-            })),
-            businessContext: {
-              country: businessContext.country,
-              industry: businessContext.industry,
-              entitySize: businessContext.entitySize,
-              currency: businessContext.currency,
-              fiscalYearEnd: businessContext.fiscalYearEnd
-            },
-            mcpTools: mcpTools || [],
-            llmConfig: llmConfig ? {
-              id: llmConfig.id,
-              provider: llmConfig.provider,
-              model: llmConfig.model,
-              api_key: llmConfig.apiKey,
-              endpoint: llmConfig.endpoint,
-              max_tokens: llmConfig.maxTokens,
-              temperature: llmConfig.temperature
-            } : undefined,
-            debug: debugMode
-          }
-        });
-
-        if (error) {
-          throw new Error(error.message);
-        }
-
-        const testResult = {
-          ...data,
-          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          usedLLM: true,
-          mcpToolsAvailable: (mcpTools || []).length
-        };
-
-        setResult(testResult);
-        setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
-      } else {
-        // Fallback to simple word matching (no LLM)
-        const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        let bestMatch: Intent | null = null;
-        let bestScore = 0;
-
-        for (const intent of intents) {
-          if (!intent.isActive) continue;
-          
-          for (const phrase of intent.trainingPhrases) {
-            const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
-            const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
-            
-            const matchingWords = queryWords.filter(qw => 
-              phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
-            );
-            
-            const score = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
-            
-            if (score > bestScore) {
-              bestScore = score;
-              bestMatch = intent;
-            }
-          }
-        }
-
-        const matchedIntent = bestScore > 0.2 ? bestMatch : null;
-        const confidence = Math.min(0.98, bestScore * 0.9 + 0.1);
-
-        const testResult: any = {
-          query,
-          timestamp: new Date().toISOString(),
-          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          usedLLM: false
-        };
-
-        if (matchedIntent) {
-          testResult.matchedIntent = {
-            id: matchedIntent.id,
-            name: matchedIntent.name,
-            module: matchedIntent.moduleId,
-            confidence
-          };
-          testResult.response = matchedIntent.resolutionFlow?.responseConfig?.template || 'No response template';
-          testResult.followUpQuestions = matchedIntent.resolutionFlow?.responseConfig?.followUpQuestions || [];
-        } else {
-          testResult.matchedIntent = null;
-        }
-
-        setResult(testResult);
-        setTestHistory(prev => [testResult, ...prev.slice(0, 9)]);
-      }
-    } catch (error) {
-      console.error('Test error:', error);
-      toast({
-        title: 'Test Failed',
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
-        variant: 'destructive'
-      });
-      
-      setResult({
-        query,
-        timestamp: new Date().toISOString(),
-        executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        usedLLM: useLLM
-      });
-    } finally {
-      setIsRunning(false);
-    }
-  };
-
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-bold text-gray-900">Test Console</h1>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={useLLM}
-              onChange={(e) => setUseLLM(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            <span className="flex items-center gap-1">
-              <Brain size={14} className="text-purple-500" />
-              Use AI (LLM + MCP)
-            </span>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={debugMode}
-              onChange={(e) => setDebugMode(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            <span className="flex items-center gap-1">
-              <Code size={14} className="text-orange-500" />
-              Debug Mode
-            </span>
-          </label>
-          {mcpTools && mcpTools.length > 0 && (
-            <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">
-              {mcpTools.length} MCP Tools
-            </span>
-          )}
-        </div>
-      </div>
-      <p className="text-gray-500 mb-6">
-        {useLLM 
-          ? 'AI-powered intent matching with MCP tool integration for real data' 
-          : 'Simple word-matching mode (no AI)'}
-      </p>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Test Area */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Query Input */}
-          <div className="bg-white p-6 rounded-xl border">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Query</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && runTest()}
-                placeholder="Enter a test query..."
-                className="flex-1 px-3 py-2 border rounded-lg"
-              />
-              <button
-                onClick={runTest}
-                disabled={isRunning || !query.trim()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                {useLLM ? 'Run AI Test' : 'Run Test'}
-              </button>
-            </div>
-
-            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-              <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
-              <div className="flex gap-4 text-sm text-gray-600">
-                <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
-                <span>📊 {businessContext.entitySize}</span>
-                <span>🏭 {businessContext.industry}</span>
-                <span>💰 {businessContext.currency}</span>
-              </div>
-            </div>
-            
-            {/* Quick Sample Queries */}
-            <div className="mt-4">
-              <div className="text-xs text-gray-500 mb-2">Sample Queries from Active Intents</div>
-              <div className="flex flex-wrap gap-2">
-                {intents.filter(i => i.isActive).slice(0, 3).flatMap(i => 
-                  i.trainingPhrases.slice(0, 1).map((phrase, idx) => (
-                    <button
-                      key={`${i.id}-${idx}`}
-                      onClick={() => { setQuery(phrase); }}
-                      className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors truncate max-w-[200px]"
-                      title={phrase}
-                    >
-                      {phrase}
-                    </button>
-                  ))
+              <div className="flex gap-2">
+                {ctx.id !== activeContext?.id && (
+                  <button onClick={() => onSetDefault(ctx.id)} className="text-blue-600 hover:text-blue-800 text-sm">Set Default</button>
                 )}
+                <button onClick={() => onDelete(ctx.id)} className="text-red-500 hover:text-red-700 text-sm">Delete</button>
               </div>
             </div>
           </div>
-
-          {/* Results */}
-          {result && (
-            <div className="bg-white rounded-xl border overflow-hidden">
-              <div className={`px-4 py-3 border-b flex items-center gap-2 ${
-                result.error ? 'bg-red-50' :
-                result.matchedIntent ? 'bg-green-50' : 'bg-amber-50'
-              }`}>
-                {result.error ? (
-                  <>
-                    <AlertCircle size={16} className="text-red-600" />
-                    <span className="font-medium text-red-700">Error</span>
-                  </>
-                ) : result.matchedIntent ? (
-                  <>
-                    <Check size={16} className="text-green-600" />
-                    <span className="font-medium text-green-700">Intent Matched</span>
-                  </>
-                ) : (
-                  <>
-                    <AlertCircle size={16} className="text-amber-600" />
-                    <span className="font-medium text-amber-700">No Intent Match</span>
-                  </>
-                )}
-                <div className="flex items-center gap-2 ml-auto text-sm">
-                  {result.usedLLM && (
-                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs flex items-center gap-1">
-                      <Brain size={12} />
-                      AI
-                    </span>
-                  )}
-                  {result.llmModel && (
-                    <span className="text-xs text-gray-500">{result.llmModel}</span>
-                  )}
-                  <span>⏱️ {result.executionTime}</span>
-                </div>
-              </div>
-              <div className="p-4 space-y-4">
-                {/* Error Display */}
-                {result.error && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <p className="text-sm text-red-700">{result.error}</p>
-                  </div>
-                )}
-
-                <div>
-                  <div className="text-xs text-gray-500 mb-1">Query</div>
-                  <div className="font-medium">{result.query}</div>
-                </div>
-                
-                {result.matchedIntent && (
-                  <>
-                    <div>
-                      <div className="text-xs text-gray-500 mb-1">Matched Intent</div>
-                      <div className="font-medium">
-                        {result.matchedIntent.name}
-                        <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                          result.matchedIntent.confidence >= 0.7 ? 'bg-green-100 text-green-700' :
-                          result.matchedIntent.confidence >= 0.5 ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-red-100 text-red-700'
-                        }`}>
-                          {Math.round(result.matchedIntent.confidence * 100)}% confidence
-                        </span>
-                        {result.matchedIntent.moduleId && (
-                          <span className="ml-2 text-xs text-gray-500">({result.matchedIntent.moduleId})</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* AI Reasoning */}
-                    {result.reasoning && (
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                          <Brain size={12} />
-                          AI Reasoning
-                        </div>
-                        <div className="text-sm bg-purple-50 p-3 rounded-lg border border-purple-100">
-                          {result.reasoning}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {Object.keys(result.extractedEntities || result.entities || {}).length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Extracted Entities</div>
-                        <div className="bg-gray-50 p-2 rounded">
-                          {Object.entries(result.extractedEntities || result.entities || {}).map(([key, value]) => (
-                            <div key={key} className="flex items-center gap-2 text-sm">
-                              <span className="font-mono text-purple-600">{key}:</span>
-                              <span className="font-mono text-gray-700">{JSON.stringify(value)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* MCP Tool Results */}
-                    {result.mcpToolResults && result.mcpToolResults.length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                          <Zap size={12} />
-                          MCP Tool Calls ({result.mcpToolResults.length})
-                        </div>
-                        <div className="space-y-2">
-                          {result.mcpToolResults.map((mcpResult: any, idx: number) => (
-                            <div key={idx} className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="font-mono text-sm font-medium text-blue-700">{mcpResult.tool}</span>
-                                {mcpResult.error && (
-                                  <span className="text-xs text-red-600">Error</span>
-                                )}
-                              </div>
-                              {mcpResult.args && Object.keys(mcpResult.args).length > 0 && (
-                                <pre className="text-xs text-gray-600 mb-1">{JSON.stringify(mcpResult.args, null, 2)}</pre>
-                              )}
-                              {mcpResult.result && (
-                                <pre className="text-xs bg-white p-2 rounded overflow-auto max-h-32">
-                                  {JSON.stringify(mcpResult.result, null, 2)}
-                                </pre>
-                              )}
-                              {mcpResult.error && (
-                                <p className="text-xs text-red-600">{mcpResult.error}</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Data Sources */}
-                    {result.dataSources && result.dataSources.length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Data Sources</div>
-                        <div className="flex flex-wrap gap-1">
-                          {result.dataSources.map((source: string, idx: number) => (
-                            <span key={idx} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
-                              {source}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div>
-                      <div className="text-xs text-gray-500 mb-1">Response</div>
-                      <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap border max-h-48">{result.response}</pre>
-                    </div>
-                    
-                    {result.followUpQuestions && result.followUpQuestions.length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Follow-up Questions</div>
-                        <div className="space-y-1">
-                          {result.followUpQuestions.map((q: string, i: number) => (
-                            <button
-                              key={i}
-                              onClick={() => setQuery(q)}
-                              className="block w-full text-left px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 rounded border transition-colors"
-                            >
-                              💬 {q}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Token Usage */}
-                    {result.usage && (
-                      <div className="pt-2 border-t">
-                        <div className="text-xs text-gray-500 flex items-center gap-4">
-                          <span>Tokens: {result.usage.total_tokens || 0}</span>
-                          <span>Input: {result.usage.input_tokens || result.usage.prompt_tokens || 0}</span>
-                          <span>Output: {result.usage.output_tokens || result.usage.completion_tokens || 0}</span>
-                          {result.iterationCount && result.iterationCount > 1 && (
-                            <span>Iterations: {result.iterationCount}</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Debug Logs */}
-                    {debugMode && result.debugLogs && result.debugLogs.length > 0 && (
-                      <div className="pt-3 border-t">
-                        <button
-                          onClick={() => setShowDebugLogs(!showDebugLogs)}
-                          className="flex items-center gap-2 text-sm font-medium text-orange-600 hover:text-orange-700"
-                        >
-                          <Code size={14} />
-                          Debug Logs ({result.debugLogs.length})
-                          {showDebugLogs ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </button>
-                        {showDebugLogs && (
-                          <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
-                            {result.debugLogs.map((log: any, idx: number) => (
-                              <div 
-                                key={idx} 
-                                className={`p-2 rounded text-xs font-mono ${
-                                  log.type === 'error' ? 'bg-red-50 border border-red-200' :
-                                  log.type === 'mcp_request' ? 'bg-blue-50 border border-blue-200' :
-                                  log.type === 'mcp_response' ? 'bg-green-50 border border-green-200' :
-                                  log.type === 'llm_request' ? 'bg-purple-50 border border-purple-200' :
-                                  log.type === 'llm_response' ? 'bg-indigo-50 border border-indigo-200' :
-                                  log.type === 'intent_match' ? 'bg-yellow-50 border border-yellow-200' :
-                                  'bg-gray-50 border border-gray-200'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                    log.type === 'error' ? 'bg-red-200 text-red-800' :
-                                    log.type === 'mcp_request' ? 'bg-blue-200 text-blue-800' :
-                                    log.type === 'mcp_response' ? 'bg-green-200 text-green-800' :
-                                    log.type === 'llm_request' ? 'bg-purple-200 text-purple-800' :
-                                    log.type === 'llm_response' ? 'bg-indigo-200 text-indigo-800' :
-                                    log.type === 'intent_match' ? 'bg-yellow-200 text-yellow-800' :
-                                    'bg-gray-200 text-gray-800'
-                                  }`}>
-                                    {log.type.replace(/_/g, ' ')}
-                                  </span>
-                                  <span className="text-gray-400">{log.timestamp}</span>
-                                </div>
-                                <pre className="whitespace-pre-wrap overflow-auto text-[11px]">
-                                  {JSON.stringify(log.data, null, 2)}
-                                </pre>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-                
-                {!result.matchedIntent && !result.error && (
-                  <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
-                    <p className="font-medium mb-1">💡 Suggestions:</p>
-                    <ul className="list-disc list-inside space-y-1 text-amber-700">
-                      <li>Check if an intent exists for this type of query</li>
-                      <li>Add more training phrases to existing intents</li>
-                      <li>Create a new intent to handle this query type</li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        
-        {/* Test History Sidebar */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl border p-4">
-            <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
-              <FlaskConical size={16} />
-              Test History
-            </h3>
-            {testHistory.length === 0 ? (
-              <p className="text-sm text-gray-500">No tests run yet</p>
-            ) : (
-              <div className="space-y-2">
-                {testHistory.map((test, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setQuery(test.query)}
-                    className="w-full text-left p-2 rounded-lg hover:bg-gray-50 transition-colors border"
-                  >
-                    <div className="flex items-center gap-2">
-                      {test.matchedIntent ? (
-                        <Check size={12} className="text-green-500" />
-                      ) : (
-                        <AlertCircle size={12} className="text-amber-500" />
-                      )}
-                      <span className="text-sm truncate flex-1">{test.query}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {test.matchedIntent ? test.matchedIntent.name : 'No match'} • {test.executionTime}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          {/* Active Intents Summary */}
-          <div className="bg-white rounded-xl border p-4 mt-4">
-            <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
-              <Database size={16} />
-              Active Intents ({intents.filter(i => i.isActive).length})
-            </h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {intents.filter(i => i.isActive).map(intent => (
-                <div key={intent.id} className="text-sm p-2 bg-gray-50 rounded">
-                  <div className="font-medium truncate">{intent.name}</div>
-                  <div className="text-xs text-gray-500">{intent.trainingPhrases.length} phrases</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
     </div>
   );
@@ -5259,64 +3286,45 @@ function TestConsoleView({
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-
 export default function CFOQueryResolutionEngine() {
-  // Auth hook
-  const { user, isAdmin, signOut } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   // Database hooks for dynamic data
   const { modules, loading: modulesLoading } = useModules();
   const { countryConfigs, loading: countryLoading, createCountryConfig, updateCountryConfig, deleteCountryConfig } = useCountryConfigs();
   const { entityTypes, loading: entityTypesLoading } = useEntityTypes();
-  const { enrichmentTypes, loading: enrichmentTypesLoading, createEnrichmentType, updateEnrichmentType, deleteEnrichmentType } = useEnrichmentTypes();
-  const { llmProviders, loading: llmProvidersLoading } = useLLMProviders();
-  const { responseTypes, loading: responseTypesLoading } = useResponseTypes();
+  const { enrichmentTypes, loading: enrichmentTypesLoading } = useEnrichmentTypes();
   const { intents, loading: intentsLoading, createIntent, updateIntent, deleteIntent, fetchIntents } = useIntents();
   const { businessContext, allContexts, loading: businessContextLoading, updateContext, createContext, deleteContext, setAsDefault } = useBusinessContext();
   const { llmConfig, loading: llmConfigLoading, updateConfig } = useLLMConfig();
   const { tools: helloBooksMcpTools, loading: isFetchingMcpTools, error: mcpToolsError, fetchTools: fetchHelloBooksMcpTools } = useMCPTools();
 
-  // Local UI state
-  const [selectedIntentId, setSelectedIntentId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('intents');
+  // State
+  const [activeTab, setActiveTab] = useState('intents');
+  const [editingIntentId, setEditingIntentId] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showAIGeneratorModal, setShowAIGeneratorModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterModule, setFilterModule] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'configured' | 'pending'>('all');
+  const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number; step?: string }>({ current: 0, total: 0 });
   const [isImporting, setIsImporting] = useState(false);
-  const [isGenerating, setIsGenerating] = useState<string | null>(null);
-  const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, step: '' });
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showAIGeneratorModal, setShowAIGeneratorModal] = useState(false);
-  const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
-
-  // MCP tools are fetched on demand via the MCPToolsView credentials form
-
-  // MCP tools from HelloBooks
-  const allMcpTools = helloBooksMcpTools;
+  const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
 
   // Loading state
   const isLoading = modulesLoading || intentsLoading || businessContextLoading || llmConfigLoading;
 
   // Computed values
-  const selectedIntent = intents.find(i => i.id === selectedIntentId);
-  
-  const filteredIntents = useMemo(() => intents.filter(intent => {
-    const matchesSearch = !searchTerm || 
-      intent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      intent.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      intent.trainingPhrases.some(p => p.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const matchesModule = !filterModule || intent.moduleId === filterModule;
-    
-    const isConfigured = intent.generatedBy === 'ai' || intent.generatedBy === 'manual';
-    const matchesStatus = filterStatus === 'all' ||
-      (filterStatus === 'configured' && isConfigured) ||
-      (filterStatus === 'pending' && !isConfigured);
-    
-    return matchesSearch && matchesModule && matchesStatus;
-  }), [intents, searchTerm, filterModule, filterStatus]);
+  const allMcpTools = helloBooksMcpTools;
+  const filteredIntents = intents.filter(intent => {
+    if (searchTerm && !intent.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (filterModule && intent.moduleId !== filterModule) return false;
+    if (filterStatus === 'configured' && intent.generatedBy !== 'ai' && intent.generatedBy !== 'manual') return false;
+    if (filterStatus === 'pending' && (intent.generatedBy === 'ai' || intent.generatedBy === 'manual')) return false;
+    return true;
+  });
 
-  // Generation timeout (2 minutes total for all 5 sections)
   const GENERATION_TIMEOUT_MS = 120000;
 
   // AI Generation Functions - Using LLM Config from database
@@ -5324,29 +3332,22 @@ export default function CFOQueryResolutionEngine() {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
-    // LLM config is optional - edge function falls back to GPT-5.2 secrets if no API key configured
-    
-    // Set progress at start
     setGenerationProgress({ current: 1, total: 5, step: 'Generating training phrases...' });
     
     try {
       console.log('🤖 Generating intent config via AI...');
       console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
       
-      // Create a promise that rejects on timeout
       const timeoutPromise = new Promise<never>((_, reject) => {
         const timeoutId = setTimeout(() => {
           reject(new Error('Generation timed out after 2 minutes. Please try again.'));
         }, GENERATION_TIMEOUT_MS);
-        
-        // Clear timeout if abort signal is triggered
         abortSignal?.addEventListener('abort', () => {
           clearTimeout(timeoutId);
           reject(new Error('Generation was cancelled'));
         });
       });
       
-      // Create the actual generation promise
       const generationPromise = supabase.functions.invoke('generate-intent', {
         body: {
           intentId: intent.id,
@@ -5356,7 +3357,6 @@ export default function CFOQueryResolutionEngine() {
           description: intent.description,
           section: 'all',
           phraseCount: 10,
-          // Pass real MCP tools for intelligent pipeline generation
           mcpTools: allMcpTools.map(tool => ({
             name: tool.id,
             description: tool.description,
@@ -5368,7 +3368,6 @@ export default function CFOQueryResolutionEngine() {
               required: tool.parameters.filter(p => p.required).map(p => p.name)
             }
           })),
-          // Pass business context for smarter generation
           businessContext: businessContext ? {
             industry: businessContext.industry,
             country: businessContext.country,
@@ -5376,59 +3375,34 @@ export default function CFOQueryResolutionEngine() {
             entitySize: businessContext.entitySize
           } : undefined,
           llmConfig: {
-            provider: llmConfig.provider,
-            endpoint: llmConfig.endpoint,
-            model: llmConfig.model,
-            apiKey: llmConfig.apiKey,
-            temperature: llmConfig.temperature,
-            maxTokens: llmConfig.maxTokens
+            provider: llmConfig?.provider,
+            endpoint: llmConfig?.endpoint,
+            model: llmConfig?.model,
+            apiKey: llmConfig?.apiKey,
+            temperature: llmConfig?.temperature,
+            maxTokens: llmConfig?.maxTokens
           }
         }
       });
       
-      // Race between timeout and generation
-      const { data, error, response: invokeResponse } = await Promise.race([
-        generationPromise,
-        timeoutPromise
-      ]) as Awaited<typeof generationPromise>;
+      const { data, error } = await Promise.race([generationPromise, timeoutPromise]) as Awaited<typeof generationPromise>;
 
       if (error) {
-        console.error('Edge function error:', error);
-
-        let errorMsg = error.message || 'Failed to generate intent';
-        if (invokeResponse) {
-          try {
-            const cloned = invokeResponse.clone();
-            const ct = cloned.headers.get('content-type') || '';
-            if (ct.includes('application/json')) {
-              const body = await cloned.json();
-              if (body?.error) errorMsg = body.error;
-            } else {
-              const text = await cloned.text();
-              if (text) errorMsg = text;
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-
-        toast({ title: 'AI Generation Error', description: errorMsg, variant: 'destructive' });
-        throw new Error(errorMsg);
+        toast({ title: 'AI Generation Error', description: error.message, variant: 'destructive' });
+        throw error;
       }
 
       if (data?.error) {
-        console.error('AI generation error:', data.error);
-        toast({
-          title: 'AI Generation Error',
-          description: data.error,
-          variant: 'destructive'
-        });
+        toast({ title: 'AI Generation Error', description: data.error, variant: 'destructive' });
         throw new Error(data.error);
       }
 
-      console.log('✅ AI generation complete!', data);
+      const resolveMcpToolIdWithTools = (toolName: string, tools: MCPTool[]): string => {
+        if (!toolName) return toolName;
+        const match = tools.find(t => t.id === toolName || t.name === toolName);
+        return match ? match.id : toolName;
+      };
 
-      // Ensure pipeline nodes have required parameters field and match MCP tools using the global resolver
       const dataPipeline = (data.dataPipeline || []).map((node: any) => ({
         ...node,
         mcpTool: node.nodeType === 'api_call' ? resolveMcpToolIdWithTools(node.mcpTool, allMcpTools) : node.mcpTool,
@@ -5442,31 +3416,20 @@ export default function CFOQueryResolutionEngine() {
         resolutionFlow: {
           dataPipeline,
           enrichments: data.enrichments || [],
-          responseConfig: data.responseConfig || {
-            type: 'metric_with_trend',
-            template: '📊 Result: {data}',
-            followUpQuestions: []
-          }
+          responseConfig: data.responseConfig || { type: 'metric_with_trend', template: '📊 Result: {data}', followUpQuestions: [] }
         },
         generatedBy: 'ai',
-        aiConfidence: data.aiConfidence || 0.9,
-        lastGeneratedAt: data.generatedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        aiConfidence: data.aiConfidence,
+        lastGeneratedAt: data.generatedAt || new Date().toISOString()
       };
+      
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Generation failed';
-      console.error('❌ AI Generation Error:', error);
-      toast({
-        title: 'Generation Failed',
-        description: message,
-        variant: 'destructive'
-      });
+      console.error('❌ Generation Error:', error);
       throw error;
     }
   };
 
 
-  const regenerateSection = async (intentId: string, section?: string, options?: { phraseCount?: number }): Promise<Partial<Intent>> => {
     const intent = intents.find(i => i.id === intentId);
     if (!intent) throw new Error('Intent not found');
     
