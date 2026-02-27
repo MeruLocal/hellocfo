@@ -426,12 +426,27 @@ function sanitizeToolArgs(
   args: Record<string, unknown>,
   schema: unknown
 ): Record<string, unknown> {
-  const s = schema as { properties?: Record<string, unknown> } | undefined;
+  const s = schema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
   if (!s?.properties) return args;
   const allowed = new Set(Object.keys(s.properties));
+  const requiredSet = new Set(Array.isArray(s.required) ? s.required : []);
   const cleaned: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) {
-    if (allowed.has(k)) cleaned[k] = v;
+    if (!allowed.has(k)) continue;
+    // Always keep required fields and booleans
+    if (requiredSet.has(k) || typeof v === 'boolean') {
+      cleaned[k] = v;
+      continue;
+    }
+    // Strip empty strings
+    if (v === '') continue;
+    // Strip empty arrays
+    if (Array.isArray(v) && v.length === 0) continue;
+    // Strip zero numbers (LLM default filler)
+    if (typeof v === 'number' && v === 0) continue;
+    // Strip null/undefined
+    if (v === null || v === undefined) continue;
+    cleaned[k] = v;
   }
   return cleaned;
 }
