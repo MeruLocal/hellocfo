@@ -9,26 +9,26 @@ interface PipelineProgressBarProps {
 }
 
 const STATUS_COLORS: Record<PipelineStepStatus, string> = {
-  pending:  'bg-zinc-700 border-zinc-600',
-  running:  'bg-blue-500 border-blue-400 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.5)]',
+  pending:  'bg-gray-300 border-gray-300',
+  running:  'bg-blue-500 border-blue-400 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.3)]',
   pass:     'bg-emerald-500 border-emerald-400',
   warn:     'bg-amber-500 border-amber-400',
   fail:     'bg-red-500 border-red-400',
-  skipped:  'bg-zinc-800 border-zinc-700',
+  skipped:  'bg-gray-200 border-gray-200',
 };
 
 const LINE_COLORS: Record<PipelineStepStatus, string> = {
-  pending:  'bg-zinc-700',
-  running:  'bg-blue-500/50',
-  pass:     'bg-emerald-500/50',
-  warn:     'bg-amber-500/50',
-  fail:     'bg-red-500/50',
-  skipped:  'bg-zinc-800',
+  pending:  'bg-gray-200',
+  running:  'bg-blue-300',
+  pass:     'bg-emerald-300',
+  warn:     'bg-amber-300',
+  fail:     'bg-red-300',
+  skipped:  'bg-gray-200',
 };
 
 export function PipelineProgressBar({ steps, stepStates }: PipelineProgressBarProps) {
   return (
-    <div className="sticky top-0 z-10 bg-zinc-950/95 backdrop-blur border-b border-zinc-800 px-6 py-4">
+    <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b px-6 py-4">
       <div className="flex items-center gap-0 overflow-x-auto">
         {steps.map((step, i) => {
           const state = stepStates[step.id];
@@ -47,15 +47,15 @@ export function PipelineProgressBar({ steps, stepStates }: PipelineProgressBarPr
                     )} />
                     <span className={cn(
                       'text-[9px] font-mono leading-none',
-                      status === 'skipped' ? 'text-zinc-600' : 'text-zinc-400',
+                      status === 'skipped' ? 'text-gray-400' : 'text-muted-foreground',
                     )}>
                       {step.shortLabel}
                     </span>
                   </div>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs bg-zinc-800 border-zinc-700">
+                <TooltipContent side="bottom" className="text-xs">
                   <div className="font-medium">{step.label}</div>
-                  {state?.durationMs !== undefined && <div className="text-zinc-400">{state.durationMs}ms</div>}
+                  {state?.durationMs !== undefined && <div className="text-muted-foreground">{state.durationMs}ms</div>}
                 </TooltipContent>
               </Tooltip>
             </React.Fragment>

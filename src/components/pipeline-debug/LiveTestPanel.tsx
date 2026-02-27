@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Play, RotateCcw, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input';
 import { useAllEntities } from '@/hooks/useEntityDetails';
 import {
   Select,
@@ -32,7 +31,6 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
   const entities = entityData?.entities || [];
   const filteredEntities = orgId ? entities.filter(e => e.org_id === orgId) : entities;
 
-  // Auto-select first org/entity
   useEffect(() => {
     if (!orgId && organizations.length > 0) {
       setOrgId(organizations[0].org_id);
@@ -64,17 +62,17 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
   };
 
   return (
-    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-4 space-y-3">
+    <div className="border rounded-lg bg-white p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-zinc-200 tracking-wide uppercase">Live Test Panel</h2>
+        <h2 className="text-sm font-semibold text-foreground tracking-wide uppercase">Live Test Panel</h2>
         <div className="flex items-center gap-2">
           {hasRun && (
-            <Button variant="ghost" size="sm" onClick={handleCopy} className="text-zinc-400 hover:text-zinc-200 h-7 text-xs">
-              {copied ? <Check className="h-3 w-3 mr-1 text-emerald-400" /> : <Copy className="h-3 w-3 mr-1" />}
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="text-muted-foreground hover:text-foreground h-7 text-xs">
+              {copied ? <Check className="h-3 w-3 mr-1 text-emerald-500" /> : <Copy className="h-3 w-3 mr-1" />}
               Copy Report
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={onClear} className="text-zinc-400 hover:text-zinc-200 h-7 text-xs">
+          <Button variant="ghost" size="sm" onClick={onClear} className="text-muted-foreground hover:text-foreground h-7 text-xs">
             <RotateCcw className="h-3 w-3 mr-1" />
             Clear
           </Button>
@@ -87,21 +85,21 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
         onChange={e => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Enter query to debug… (Ctrl+Enter to execute)"
-        className="bg-zinc-950 border-zinc-700 text-zinc-200 font-mono text-sm min-h-[60px] resize-none placeholder:text-zinc-600 focus-visible:ring-blue-500/50"
+        className="bg-muted/30 border text-foreground font-mono text-sm min-h-[60px] resize-none placeholder:text-muted-foreground focus-visible:ring-blue-500/50"
         disabled={isRunning}
       />
 
       <div className="flex items-end gap-3">
         <div className="flex-1 grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Organization</label>
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 block">Organization</label>
             <Select value={orgId} onValueChange={v => { setOrgId(v); setEntityId(''); }}>
-              <SelectTrigger className="bg-zinc-950 border-zinc-700 text-zinc-300 h-8 text-xs">
+              <SelectTrigger className="h-8 text-xs">
                 <SelectValue placeholder="Select org" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-700">
+              <SelectContent>
                 {organizations.map(o => (
-                  <SelectItem key={o.org_id} value={o.org_id} className="text-zinc-300 text-xs">
+                  <SelectItem key={o.org_id} value={o.org_id} className="text-xs">
                     {o.org_name || o.org_id}
                   </SelectItem>
                 ))}
@@ -109,14 +107,14 @@ export function LiveTestPanel({ onExecute, onClear, onCopyReport, isRunning, has
             </Select>
           </div>
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Entity</label>
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 block">Entity</label>
             <Select value={entityId} onValueChange={setEntityId}>
-              <SelectTrigger className="bg-zinc-950 border-zinc-700 text-zinc-300 h-8 text-xs">
+              <SelectTrigger className="h-8 text-xs">
                 <SelectValue placeholder="Select entity" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-700">
+              <SelectContent>
                 {filteredEntities.map(e => (
-                  <SelectItem key={e.entity_id} value={e.entity_id} className="text-zinc-300 text-xs">
+                  <SelectItem key={e.entity_id} value={e.entity_id} className="text-xs">
                     {e.entity_name || e.entity_id}
                   </SelectItem>
                 ))}

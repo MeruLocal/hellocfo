@@ -71,7 +71,6 @@ export function PipelineDebugPage() {
             const eventType = evt.type as string;
             const eventData = (evt.data || {}) as Record<string, unknown>;
 
-            // Store raw event
             const currentRun = runRef.current!;
             currentRun.rawEvents.push({
               type: eventType,
@@ -80,7 +79,6 @@ export function PipelineDebugPage() {
               receivedAt: Date.now(),
             });
 
-            // Map to step updates
             const updates = mapSSEEventToStepUpdates(eventType, eventData, currentRun);
             for (const upd of updates) {
               const existing = currentRun.steps[upd.stepId];
@@ -89,7 +87,6 @@ export function PipelineDebugPage() {
               }
             }
 
-            // Handle complete event extras
             if (eventType === 'complete') {
               currentRun.completedAt = Date.now();
               currentRun.totalDurationMs = Date.now() - currentRun.startedAt;
@@ -104,7 +101,6 @@ export function PipelineDebugPage() {
               currentRun.error = eventData.message as string;
             }
 
-            // Trigger re-render with new object ref
             runRef.current = { ...currentRun, steps: { ...currentRun.steps } };
             setRun(runRef.current);
 
@@ -143,7 +139,6 @@ export function PipelineDebugPage() {
 
   const stepStates = run?.steps || {};
 
-  // Determine which step was last completed for auto-expand
   const lastCompletedStep = run
     ? PIPELINE_STEPS.filter(s => {
         const st = stepStates[s.id];
@@ -152,16 +147,16 @@ export function PipelineDebugPage() {
     : null;
 
   return (
-    <div className="flex flex-col h-full text-zinc-200 bg-zinc-950">
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
+      <div className="border-b px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-2 w-2 rounded-full bg-emerald-500" />
-          <h1 className="text-sm font-bold tracking-wide uppercase text-zinc-300">Pipeline Debugger</h1>
-          <span className="text-[10px] text-zinc-600 font-mono">v1 — Phase 1</span>
+          <h1 className="text-lg font-bold text-foreground">Pipeline Debugger</h1>
+          <span className="text-[10px] text-muted-foreground font-mono">v1 — Phase 1</span>
         </div>
         {run?.totalDurationMs && (
-          <span className="text-xs font-mono text-zinc-500">
+          <span className="text-xs font-mono text-muted-foreground">
             Total: {run.totalDurationMs}ms | Route: {run.routePath || '—'} | Model: {run.model || '—'}
           </span>
         )}
@@ -183,7 +178,7 @@ export function PipelineDebugPage() {
         {/* Step Inspector */}
         {run && (
           <div className="space-y-2">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Step Inspector</h2>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Step Inspector</h2>
             {PIPELINE_STEPS.map(step => (
               <StepInspectorCard
                 key={step.id}
@@ -197,9 +192,9 @@ export function PipelineDebugPage() {
 
         {/* Final Response Preview */}
         {run?.finalResponse && (
-          <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-4">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Final Response</h2>
-            <div className="text-sm text-zinc-300 whitespace-pre-wrap font-mono max-h-48 overflow-auto">
+          <div className="border rounded-lg bg-white p-4">
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Final Response</h2>
+            <div className="text-sm text-foreground whitespace-pre-wrap font-mono max-h-48 overflow-auto">
               {run.finalResponse}
             </div>
           </div>

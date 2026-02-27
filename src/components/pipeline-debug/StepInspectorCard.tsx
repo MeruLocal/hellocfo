@@ -12,12 +12,12 @@ interface StepInspectorCardProps {
 }
 
 const STATUS_STYLES: Record<PipelineStepStatus, string> = {
-  pending:  'bg-zinc-700 text-zinc-300',
-  running:  'bg-blue-600 text-white animate-pulse',
-  pass:     'bg-emerald-600 text-white',
-  warn:     'bg-amber-500 text-black',
-  fail:     'bg-red-600 text-white',
-  skipped:  'bg-zinc-800 text-zinc-500',
+  pending:  'bg-gray-200 text-gray-600',
+  running:  'bg-blue-100 text-blue-700 animate-pulse',
+  pass:     'bg-emerald-100 text-emerald-700',
+  warn:     'bg-amber-100 text-amber-700',
+  fail:     'bg-red-100 text-red-700',
+  skipped:  'bg-gray-100 text-gray-400',
 };
 
 const STATUS_LABELS: Record<PipelineStepStatus, string> = {
@@ -35,42 +35,42 @@ export function StepInspectorCard({ stepDef, stepState, autoExpand }: StepInspec
 
   return (
     <div className={cn(
-      'border rounded-lg transition-colors',
-      stepState.status === 'skipped' ? 'border-zinc-800 opacity-50' : 'border-zinc-700',
-      stepState.status === 'running' && 'border-blue-600/50',
-      stepState.status === 'fail' && 'border-red-600/50',
+      'border rounded-lg bg-white transition-colors',
+      stepState.status === 'skipped' && 'opacity-50',
+      stepState.status === 'running' && 'border-blue-300 ring-1 ring-blue-100',
+      stepState.status === 'fail' && 'border-red-300 ring-1 ring-red-100',
     )}>
       <button
         onClick={() => hasContent && setOpen(!open)}
         className={cn(
           'flex items-center justify-between w-full px-4 py-2.5 text-left',
-          hasContent && 'cursor-pointer hover:bg-zinc-800/30',
+          hasContent && 'cursor-pointer hover:bg-muted/30',
         )}
       >
         <div className="flex items-center gap-3 min-w-0">
           {hasContent && (
-            open ? <ChevronDown className="h-4 w-4 text-zinc-500 shrink-0" /> : <ChevronRight className="h-4 w-4 text-zinc-500 shrink-0" />
+            open ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
           )}
-          <span className="text-xs font-mono text-zinc-500 shrink-0">#{stepDef.number}</span>
-          <span className="text-sm font-medium text-zinc-200 truncate">{stepDef.label}</span>
+          <span className="text-xs font-mono text-muted-foreground shrink-0">#{stepDef.number}</span>
+          <span className="text-sm font-medium text-foreground truncate">{stepDef.label}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {stepState.durationMs !== undefined && (
-            <span className="text-xs font-mono text-zinc-500">{stepState.durationMs}ms</span>
+            <span className="text-xs font-mono text-muted-foreground">{stepState.durationMs}ms</span>
           )}
-          <Badge className={cn('text-[10px] px-2 py-0', STATUS_STYLES[stepState.status])}>
+          <Badge className={cn('text-[10px] px-2 py-0 border-0', STATUS_STYLES[stepState.status])}>
             {STATUS_LABELS[stepState.status]}
           </Badge>
         </div>
       </button>
 
       {open && hasContent && (
-        <div className="px-4 pb-3 space-y-2 border-t border-zinc-800">
+        <div className="px-4 pb-3 space-y-2 border-t">
           {stepState.summary && (
-            <p className="text-xs text-zinc-400 pt-2">{stepState.summary}</p>
+            <p className="text-xs text-muted-foreground pt-2">{stepState.summary}</p>
           )}
           {stepState.decision && (
-            <div className="text-xs font-mono text-amber-400/80 bg-amber-900/10 rounded px-2 py-1">
+            <div className="text-xs font-mono text-amber-700 bg-amber-50 rounded px-2 py-1 border border-amber-200">
               Decision: {stepState.decision}
             </div>
           )}
@@ -78,9 +78,9 @@ export function StepInspectorCard({ stepDef, stepState, autoExpand }: StepInspec
           <StepJsonViewer label="Output" data={stepState.output} defaultOpen />
           {stepState.logs && stepState.logs.length > 0 && (
             <div className="space-y-0.5 pt-1">
-              <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Logs</span>
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Logs</span>
               {stepState.logs.map((log, i) => (
-                <div key={i} className="text-xs font-mono text-zinc-500">{log}</div>
+                <div key={i} className="text-xs font-mono text-muted-foreground">{log}</div>
               ))}
             </div>
           )}
