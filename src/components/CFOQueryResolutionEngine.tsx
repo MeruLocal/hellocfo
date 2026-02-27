@@ -732,7 +732,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
                 <p className="font-medium">AI will automatically generate:</p>
                 <ul className="mt-1 space-y-0.5 text-purple-600">
                   <li>• Training phrases</li>
-                  <li>• Entities to extract</li>
+                  <li>• Tool parameters</li>
                   <li>• Data pipeline</li>
                   <li>• Enrichments</li>
                   <li>• Response template</li>
@@ -1082,8 +1082,8 @@ function EntitiesTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-medium text-gray-900">Entities</h3>
-          <p className="text-sm text-gray-500">Parameters to extract from user queries</p>
+          <h3 className="font-medium text-gray-900">Tool Parameters</h3>
+          <p className="text-sm text-gray-500">Parameters extracted from queries and passed to MCP tools</p>
         </div>
         <AIBadge 
           confidence={intent.aiConfidence} 
@@ -1184,7 +1184,7 @@ function EntitiesTab({
       {intent.entities.length === 0 && (
         <div className="text-center py-6 text-gray-500 text-sm">
           <Variable size={24} className="mx-auto mb-2 text-gray-300" />
-          <p>No entities defined</p>
+          <p>No tool parameters defined</p>
           <p className="text-gray-400">AI detected no required parameters for this intent</p>
         </div>
       )}
@@ -2145,10 +2145,10 @@ function TestTab({
               </div>
             </div>
             
-            {/* Extracted Entities */}
+            {/* Extracted Tool Parameters */}
             {Object.keys(result.entities).length > 0 && (
               <div>
-                <div className="text-xs text-gray-500 mb-1">Extracted Entities</div>
+                <div className="text-xs text-gray-500 mb-1">Extracted Tool Parameters</div>
                 <div className="bg-gray-50 p-3 rounded-lg">
                   {Object.entries(result.entities).map(([key, value]) => (
                     <div key={key} className="flex items-center gap-2 text-sm">
@@ -2303,7 +2303,7 @@ function IntentDetailScreen({
   const tabs = [
     { id: 'details', label: 'Details', icon: <FileText size={16} /> },
     { id: 'training', label: 'Training Phrases', icon: <MessageSquare size={16} /> },
-    { id: 'entities', label: 'Entities', icon: <Variable size={16} /> },
+    { id: 'entities', label: 'Tool Parameters', icon: <Variable size={16} /> },
     { id: 'pipeline', label: 'Data Pipeline', icon: <Database size={16} /> },
     { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={16} /> },
     { id: 'response', label: 'Response', icon: <Code size={16} /> },
