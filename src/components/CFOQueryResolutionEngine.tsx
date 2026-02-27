@@ -974,7 +974,7 @@ function TrainingPhrasesTab({
             {isRegenerating ? 'Generating...' : 'Generate with AI'}
           </button>
           <p className="text-xs text-purple-500 ml-auto">
-            {intent.trainingPhrases.length > 0 ? 'This will replace existing phrases' : 'AI will generate based on intent name & description'}
+            {intent.trainingPhrases.length > 0 ? 'New phrases will be added to existing ones' : 'AI will generate based on intent name & description'}
           </p>
         </div>
       </div>
@@ -2284,8 +2284,11 @@ function IntentDetailScreen({
     setIsRegenerating(section || 'all');
     try {
       const generated = await onRegenerate(editingIntent.id, section, options);
-      setEditingIntent(prev => ({ ...prev, ...generated }));
-      setHasChanges(true);
+      const merged = { ...editingIntent, ...generated };
+      setEditingIntent(merged);
+      // Auto-save after AI generation
+      onSave({ ...merged, updatedAt: new Date().toISOString() });
+      setHasChanges(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to regenerate';
       console.error('Regenerate failed:', err);
@@ -5586,7 +5589,17 @@ export default function CFOQueryResolutionEngine() {
       };
 
       if (section === 'training' && data.trainingPhrases) {
-        result.trainingPhrases = data.trainingPhrases;
+        // Append new phrases to existing ones instead of replacing
+        const existingPhrases: string[] = intent.trainingPhrases || [];
+        const merged = [...existingPhrases, ...data.trainingPhrases];
+        // Deduplicate (case-insensitive)
+        const seen = new Set<string>();
+        result.trainingPhrases = merged.filter(p => {
+          const key = p.toLowerCase().trim();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
       }
       
       if (section === 'entities' && data.entities) {
