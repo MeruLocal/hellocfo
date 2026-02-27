@@ -289,11 +289,15 @@ export function GlobalChatHistory() {
     if (orgFilter !== 'all' && conv.org_id !== orgFilter) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
+      const entityName = entityNameMap.get(conv.entity_id)?.toLowerCase() || '';
       if (
         !conv.summary?.toLowerCase().includes(q) &&
         !conv.auto_generated_name?.toLowerCase().includes(q) &&
         !conv.last_message_preview?.toLowerCase().includes(q) &&
-        !conv.chat_display_id?.toLowerCase().includes(q)
+        !conv.chat_display_id?.toLowerCase().includes(q) &&
+        !conv.entity_id?.toLowerCase().includes(q) &&
+        !conv.org_id?.toLowerCase().includes(q) &&
+        !entityName.includes(q)
       )
         return false;
     }
