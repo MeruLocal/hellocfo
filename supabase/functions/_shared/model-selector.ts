@@ -63,19 +63,10 @@ const COMPLEX_INDICATORS = [
 /**
  * Select the model tier based on query characteristics.
  *
- * - General chat: always cheap
  * - Simple queries: cheap
  * - Complex analytical queries: capable
  */
-export function selectModelTier(
-  query: string,
-  category: string
-): ModelSelection {
-  // General chat is always cheap
-  if (category === "general_chat") {
-    return { tier: "cheap", reason: "General conversation" };
-  }
-
+export function selectModelTier(query: string): ModelSelection {
   const normalizedQuery = query.toLowerCase();
   const wordCount = normalizedQuery.split(/\s+/).length;
 
@@ -269,52 +260,11 @@ const UNIFIED_PROMPT = "You are Munimji — an AI assistant exclusively for Hell
 "- If truly not found after retry, suggest: \"Try 'show my latest invoices' or filter by customer/date/amount.\"\n\n" +
 "RESPONSE STYLE: Very concise, professional accounting tone, action-oriented for operations, analytical for reports, always with structured markdown. Never use backend/internal terms in user-facing responses.";
 
-// Kept for realtime-cfo-agent backward compatibility
-const FAST_PATH_PROMPT = `You are Munimji — an AI assistant exclusively for HelloBooks, an accounting and bookkeeping platform.
+export const SYSTEM_PROMPT = UNIFIED_PROMPT;
 
-⚠️ ABSOLUTE RULE — NO EXCEPTIONS:
-NEVER display any database IDs, UUIDs, or numeric system IDs in your response under any circumstances.
-This includes: customer_id, vendor_id, party_id, entity_id, org_id, invoice_id, bill_id, or any field whose value looks like "4a8b564b-8874-47b6-a84a-5c6555570483" or similar.
-If a table column contains IDs, OMIT that column entirely from the table. Do not rename it, do not shorten it — remove it completely.
-Only show human-readable fields: names, numbers (invoice #, bill #), dates, amounts, statuses.
-
-INSTRUCTIONS:
-- Format all amounts in Indian numbering (lakhs, crores) with ₹ symbol
-- Be concise and direct — the data is already fetched
-- Keep wording as short as possible
-- Maintain a professional accounting tone
-- Never use backend or internal system terms in the response
-- Use markdown tables for tabular data
-- Highlight key insights or anomalies
-- Do NOT call any tools — just format the provided data
-
-RESPONSE STYLE: Very concise, professional accounting tone, data-focused executive summary format with no backend/internal terminology.`;
-
-const GENERAL_CHAT_PROMPT = `You are Munimji — an AI assistant exclusively for HelloBooks, an accounting and bookkeeping platform. You ONLY help users with HelloBooks-related tasks using the tools available to you.
-
-⚠️ ABSOLUTE RULE — NO EXCEPTIONS:
-NEVER display any database IDs, UUIDs, or numeric system IDs in your response.
-Never expose internal field names like id, *_id, entity_id, org_id, customer_id, vendor_id, invoice_id, bill_id, payment_id.
-
-SCOPE — You may ONLY assist with:
-• Accounting & bookkeeping: chart of accounts, journal entries, transactions
-• Invoicing & billing: invoices, bills, payments, credit notes
-• Contacts: customers, vendors, employees
-• Taxes: tax rates, tax groups, tax returns
-• Banking: bank accounts, reconciliation, transfers
-• Reporting: financial reports, dashboards, summaries
-• Any other functionality provided by the available HelloBooks tools
-
-OFF-LIMITS — Politely decline anything outside HelloBooks:
-If a user asks about general knowledge, coding help, math homework, creative writing, other software, or any topic unrelated to HelloBooks, respond with something like: "I'm the Munimji and I can only help with HelloBooks accounting and bookkeeping tasks. Could I help you with something in HelloBooks instead?"
-Do NOT answer off-topic questions even if you know the answer. Stay focused.
-
-GREETING — Keep it short. Say hi, introduce yourself as the Munimji, and ask how you can help with their accounting or bookkeeping needs. Do NOT list your capabilities unless the user asks.
-
-RESPONSE STYLE: Brief, professional accounting tone, and free of backend/internal terminology.`;
-
+// Backward compatibility for realtime-cfo-agent
 export const SYSTEM_PROMPTS = {
-  fast_path: FAST_PATH_PROMPT,
   unified: UNIFIED_PROMPT,
-  general_chat: GENERAL_CHAT_PROMPT,
+  fast_path: UNIFIED_PROMPT,
+  general_chat: UNIFIED_PROMPT,
 };

@@ -7,8 +7,7 @@ import {
   type OpenAITool,
   type FollowUpResult,
 } from "./tool-groups.ts";
-import { classifyQuery, type QueryCategory } from "./classifier.ts";
-import { SYSTEM_PROMPTS, selectModelTier } from "./model-selector.ts";
+import { SYSTEM_PROMPT, selectModelTier } from "./model-selector.ts";
 import { detectAutoEnrichments, buildEnrichmentInstructions } from "./enrichment-auto-apply.ts";
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
@@ -303,171 +302,19 @@ function extractPendingAction(conversationHistory: ChatMessage[]): PendingAction
 
 // ─── Pagination Helpers ──────────────────────────────────────────────────────
 
-const BULK_LIST_PATTERNS = [
-  /\b(all|every|list|show\s+all|show\s+me\s+all|get\s+all|fetch\s+all|sab|sabhi|saare)\b/i,
-  /\b(show|give|get|fetch|list)\s+(me\s+)?(all\s+)?(bills?|invoices?|customers?|vendors?|payments?|credit.?notes?|delivery.?challans?|transactions?)/i,
-];
-
 const PAGINATION_FOLLOW_PATTERNS = [
   /\b(more|next|next\s+page|show\s+more|aur\s+dikhao|agla|agle|next\s+\d+)\b/i,
   /\b(previous|prev|pichla|pehle\s+wale)\b/i,
 ];
-const OVERDUE_PATTERNS = [/\boverdue\b/i, /\bpast\s+due\b/i, /\bdue\s+date\s+passed\b/i, /\blate\s+payments?\b/i];
 
 const LIST_TOOL_PATTERNS = /^(get_|list_|fetch_|search_|find_)/i;
-
-function isBulkListQuery(query: string): boolean {
-  return BULK_LIST_PATTERNS.some(p => p.test(query));
-}
 
 function isPaginationFollowUp(query: string): boolean {
   return PAGINATION_FOLLOW_PATTERNS.some(p => p.test(query));
 }
 
-function isOverdueQuery(query: string): boolean {
-  return OVERDUE_PATTERNS.some(p => p.test(query));
-}
-
 function isListTool(toolName: string): boolean {
   return LIST_TOOL_PATTERNS.test(toolName);
-}
-
-/** Detect which entity types the query asks for (bills, invoices, etc.) */
-function detectRequestedEntities(query: string): string[] {
-  const entities: string[] = [];
-  const q = query.toLowerCase();
-  if (/\bbills?\b/.test(q)) entities.push('bills');
-  if (/\binvoices?\b/.test(q)) entities.push('invoices');
-  if (/\bcustomers?\b/.test(q)) entities.push('customers');
-  if (/\bvendors?\b/.test(q)) entities.push('vendors');
-  if (/\bpayments?\b/.test(q)) entities.push('payments');
-  if (/\bcredit.?notes?\b/.test(q)) entities.push('credit_notes');
-  if (/\bdelivery.?challans?\b/.test(q)) entities.push('delivery_challans');
-  if (/\btransactions?\b/.test(q)) entities.push('transactions');
-  if (/\b(?:eway|e-way)\s*bills?\b/.test(q)) entities.push('eway_bills');
-  return entities;
-}
-
-const ENTITY_KEYWORDS: Record<string, string[]> = {
-  bills: ['bill', 'bills', 'purchase'],
-  invoices: ['invoice', 'invoices', 'sales'],
-  customers: ['customer', 'customers', 'client', 'buyer', 'debtor'],
-  vendors: ['vendor', 'vendors', 'supplier', 'creditor'],
-  payments: ['payment', 'payments', 'receipt', 'collection'],
-  credit_notes: ['credit note', 'credit notes', 'refund', 'return'],
-  delivery_challans: ['delivery challan', 'challan', 'dispatch'],
-  transactions: ['transaction', 'transactions', 'bank', 'statement'],
-  eway_bills: ['eway', 'e-way', 'eway bill', 'ewb', 'shipment', 'transit'],
-};
-
-function inferEntityFromTool(
-  toolName: string,
-  toolDescription: string,
-  fallbackEntities: string[],
-): string | null {
-  const text = `${toolName} ${toolDescription}`.toLowerCase();
-  let bestEntity: string | null = null;
-  let bestScore = 0;
-
-  for (const [entity, keywords] of Object.entries(ENTITY_KEYWORDS)) {
-    let score = 0;
-    for (const keyword of keywords) {
-      if (!text.includes(keyword)) continue;
-      score += toolName.toLowerCase().includes(keyword) ? 2 : 1;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestEntity = entity;
-    }
-  }
-
-  if (bestEntity) return bestEntity;
-  if (fallbackEntities.length === 1) return fallbackEntities[0];
-  return null;
-}
-
-function scoreListToolForEntity(
-  tool: { name: string; description: string; inputSchema: unknown },
-  entity: string,
-  preferOverdue = false,
-): number {
-  const keywords = ENTITY_KEYWORDS[entity] || [entity.replace(/_/g, ' ')];
-  const text = `${tool.name} ${tool.description || ''}`.toLowerCase();
-  const nameLower = tool.name.toLowerCase();
-
-  let entitySignal = 0;
-  for (const keyword of keywords) {
-    if (!text.includes(keyword)) continue;
-    entitySignal += nameLower.includes(keyword) ? 2 : 1;
-  }
-  if (entitySignal === 0) return Number.NEGATIVE_INFINITY;
-
-  let score = entitySignal * 3;
-
-  // Strong bonus if tool name directly contains the entity plural (e.g., "invoices" in "get_all_invoices")
-  const entityPlural = entity.endsWith('s') ? entity : entity + 's';
-  if (nameLower.includes(entityPlural.replace(/_/g, ''))) score += 8;
-
-  if (/\b(list|get|fetch|search|find)\b/.test(nameLower)) score += 2;
-  if (/\b(all|list|fetch|search|find)\b/.test(text)) score += 3;
-  if (/\bby[_\s-]?id\b|\bdetail\b|\bsingle\b/.test(text)) score -= 5;
-  if (/^(create_|update_|delete_|void_|cancel_)/.test(nameLower)) score -= 8;
-
-  // Penalize report/aging/summary tools — they shouldn't be used for simple list queries
-  if (/\b(report|aging|ageing|aged|summary|kpi|dashboard)\b/.test(text)) score -= 6;
-
-  if (preferOverdue && /\boverdue|aging|ageing|receivable|payable|due\b/.test(text)) score += 5;
-
-  const schema = tool.inputSchema as { properties?: Record<string, unknown> } | undefined;
-  const properties = schema?.properties ? Object.keys(schema.properties) : [];
-  if (properties.some(k => ['limit', 'page', 'offset', 'page_size', 'per_page', 'cursor', 'skip'].includes(k))) {
-    score += 2;
-  }
-  if (properties.some(k => k.toLowerCase().includes('id')) && properties.length <= 2) {
-    score -= 2;
-  }
-
-  return score;
-}
-
-function selectPreferredListToolForEntity(
-  entity: string,
-  tools: Array<{ name: string; description: string; inputSchema: unknown }>,
-  preferOverdue = false,
-): { toolName: string; score: number } | null {
-  let best: { toolName: string; score: number } | null = null;
-  for (const tool of tools) {
-    const score = scoreListToolForEntity(tool, entity, preferOverdue);
-    if (!Number.isFinite(score)) continue;
-    if (!best || score > best.score) best = { toolName: tool.name, score };
-  }
-  if (!best || best.score <= 0) return null;
-  return best;
-}
-
-function selectPreferredListToolsForEntities(
-  entities: string[],
-  tools: Array<{ name: string; description: string; inputSchema: unknown }>,
-  preferOverdue = false,
-): Array<{ entity: string; toolName: string; score: number }> {
-  const picks: Array<{ entity: string; toolName: string; score: number }> = [];
-  const used = new Set<string>();
-
-  for (const entity of entities) {
-    let best: { toolName: string; score: number } | null = null;
-    for (const tool of tools) {
-      if (!isListTool(tool.name) || used.has(tool.name)) continue;
-      const score = scoreListToolForEntity(tool, entity, preferOverdue);
-      if (!Number.isFinite(score)) continue;
-      if (!best || score > best.score) best = { toolName: tool.name, score };
-    }
-    if (best && best.score > 0) {
-      picks.push({ entity, toolName: best.toolName, score: best.score });
-      used.add(best.toolName);
-    }
-  }
-
-  return picks;
 }
 
 function stripMarkdownCodeFence(text: string): string {
@@ -539,186 +386,6 @@ function parseListToolResult(result: string): {
   }
 }
 
-function normalizeKeyForMatch(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function findKeyByAlias(keys: string[], aliases: string[]): string | null {
-  const byNorm = new Map(keys.map(k => [normalizeKeyForMatch(k), k]));
-  for (const alias of aliases) {
-    const found = byNorm.get(normalizeKeyForMatch(alias));
-    if (found) return found;
-  }
-  return null;
-}
-
-const ENTITY_COLUMN_ALIASES: Record<string, string[][]> = {
-  invoices: [
-    ['invoice_number', 'invoice_no', 'invoice'],
-    ['customer_name', 'customer', 'party_name', 'party'],
-    ['issue_date', 'invoice_date', 'date'],
-    ['due_date', 'due'],
-    ['status', 'workflow_status', 'invoice_status'],
-    ['total', 'total_amount', 'amount', 'grand_total', 'balance'],
-  ],
-  bills: [
-    ['bill_number', 'bill_no', 'bill'],
-    ['vendor_name', 'vendor', 'party_name', 'party'],
-    ['issue_date', 'bill_date', 'date'],
-    ['due_date', 'due'],
-    ['status', 'workflow_status', 'bill_status'],
-    ['total', 'total_amount', 'amount', 'grand_total', 'balance'],
-  ],
-  vendors: [
-    ['vendor_name', 'name', 'display_name'],
-    ['gstin', 'gst_number', 'tax_id'],
-    ['email', 'email_address'],
-    ['phone', 'mobile', 'contact_number'],
-    ['status', 'state'],
-    ['balance', 'outstanding', 'payable'],
-  ],
-  customers: [
-    ['customer_name', 'name', 'display_name'],
-    ['gstin', 'gst_number', 'tax_id'],
-    ['email', 'email_address'],
-    ['phone', 'mobile', 'contact_number'],
-    ['status', 'state'],
-    ['balance', 'outstanding', 'receivable'],
-  ],
-  payments: [
-    ['payment_number', 'payment_no', 'payment'],
-    ['party_name', 'customer_name', 'vendor_name', 'party'],
-    ['payment_date', 'date', 'transaction_date'],
-    ['payment_mode', 'mode'],
-    ['status', 'state'],
-    ['amount', 'total', 'received', 'paid'],
-  ],
-  eway_bills: [
-    ['eway_bill_number', 'ewb_number', 'ewb_no', 'eway_number'],
-    ['invoice_number', 'document_number', 'doc_ref'],
-    ['party_name', 'customer_name', 'vendor_name', 'consignee'],
-    ['valid_from', 'generation_date', 'created_date'],
-    ['valid_upto', 'expiry_date', 'validity'],
-    ['status', 'state', 'ewb_status'],
-  ],
-};
-
-function isInternalOrIdField(key: string, values: unknown[]): boolean {
-  const lower = key.toLowerCase();
-  if (
-    lower === 'id' ||
-    lower.endsWith('_id') ||
-    lower.includes('uuid') ||
-    lower.includes('entity') ||
-    lower.includes('org') ||
-    lower.includes('created_by') ||
-    lower.includes('updated_by')
-  ) return true;
-
-  return values.some(v => {
-    if (typeof v !== 'string') return false;
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim());
-  });
-}
-
-function pickDisplayColumns(entity: string, rows: Record<string, unknown>[]): string[] {
-  if (rows.length === 0) return [];
-  const keys = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
-  const aliases = ENTITY_COLUMN_ALIASES[entity] || [];
-  const selected: string[] = [];
-
-  for (const aliasGroup of aliases) {
-    const key = findKeyByAlias(keys, aliasGroup);
-    if (key && !selected.includes(key)) selected.push(key);
-  }
-
-  const fallbackKeys = keys.filter(k => !selected.includes(k)).filter(k => {
-    const values = rows.map(r => r[k]).filter(v => v !== undefined && v !== null);
-    return !isInternalOrIdField(k, values);
-  });
-  for (const k of fallbackKeys) {
-    if (selected.length >= 6) break;
-    selected.push(k);
-  }
-
-  return selected.slice(0, 6);
-}
-
-function formatColumnLabel(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase())
-    .replace(/\bNo\b/g, '#');
-}
-
-function toDisplayString(value: unknown, key: string): string {
-  if (value === null || value === undefined || value === '') return '—';
-  if (typeof value === 'number') {
-    if (/(amount|total|balance|rate|price|value|tax|gst)/i.test(key)) {
-      return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    }
-    return value.toLocaleString('en-IN');
-  }
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (typeof value === 'string') {
-    const v = value.trim();
-    if (!v) return '—';
-    return v.length > 80 ? `${v.slice(0, 77)}...` : v;
-  }
-  if (Array.isArray(value)) return value.length === 0 ? '—' : `${value.length} items`;
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const name = obj.name || obj.display_name || obj.title || obj.value;
-    if (typeof name === 'string' && name.trim()) return name.trim();
-    return '[object]';
-  }
-  return String(value);
-}
-
-function escapeMarkdownCell(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ');
-}
-
-function entityTitle(entity: string): string {
-  const map: Record<string, string> = {
-    invoices: 'Invoices',
-    bills: 'Bills',
-    customers: 'Customers',
-    vendors: 'Vendors',
-    payments: 'Payments',
-    credit_notes: 'Credit Notes',
-    delivery_challans: 'Delivery Challans',
-    transactions: 'Transactions',
-    eway_bills: 'E-Way Bills',
-  };
-  return map[entity] || entity.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function renderEntityTableSection(
-  entity: string,
-  rows: Record<string, unknown>[],
-  totalCount?: number,
-  hasMore?: boolean,
-): string {
-  if (rows.length === 0) return `## ${entityTitle(entity)} (showing 0)\nNo records found for current filters.`;
-
-  const columns = pickDisplayColumns(entity, rows);
-  if (columns.length === 0) return `## ${entityTitle(entity)} (showing ${rows.length})\nNo displayable columns found.`;
-
-  const countText = totalCount && totalCount >= rows.length ? `${rows.length} of ${totalCount}` : `${rows.length}`;
-  const header = `## ${entityTitle(entity)} (showing ${countText})`;
-  const tableHeader = `| ${columns.map(c => formatColumnLabel(c)).join(' | ')} |`;
-  const tableDivider = `| ${columns.map(() => '---').join(' | ')} |`;
-  const tableRows = rows.map(row => {
-    const cells = columns.map(col => escapeMarkdownCell(toDisplayString(row[col], col)));
-    return `| ${cells.join(' | ')} |`;
-  });
-
-  const lines = [header, tableHeader, tableDivider, ...tableRows];
-  if (hasMore) lines.push(`_More records are available. Ask "show more ${entity}" to load next page._`);
-  return lines.join('\n');
-}
-
 const DEFAULT_PAGE_SIZE = 15;
 const MAX_PAGE_SIZE = 50;
 
@@ -775,87 +442,6 @@ function injectPaginationDefaults(
       result[key] = key === 'page' ? 1 : 0;
       break;
     }
-  }
-
-  return result;
-}
-
-function injectAllRecordsDefaults(
-  args: Record<string, unknown>,
-  schema: unknown,
-): Record<string, unknown> {
-  const s = schema as { properties?: Record<string, unknown> } | undefined;
-  if (!s?.properties) return args;
-  const result = { ...args };
-
-  // Only inject "all" for the primary status field.
-  // Secondary fields like approvalStatus, bill_status etc. should NOT be
-  // auto-set — the MCP tool may not recognise "all" and return 0 records.
-  const allStatusKeys = [
-    'status',
-    'statuses',
-    'workflow_status',
-    'workflowStatus',
-    'state',
-  ];
-
-  for (const key of allStatusKeys) {
-    if (!(key in s.properties)) continue;
-    if (result[key] === undefined || result[key] === null || result[key] === '') {
-      const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
-      const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum : [];
-      // Only inject "all" if the enum EXPLICITLY contains "all".
-      // If enum is empty/missing, skip — the MCP tool will return all records by default.
-      const enumExplicitlyAllowsAll = enumValues.length > 0 && enumValues.some(v => String(v).toLowerCase() === 'all');
-      if (enumExplicitlyAllowsAll) result[key] = 'all';
-    }
-  }
-
-  return result;
-}
-
-function injectOverdueDefaults(
-  args: Record<string, unknown>,
-  schema: unknown,
-): Record<string, unknown> {
-  const s = schema as { properties?: Record<string, unknown> } | undefined;
-  if (!s?.properties) return args;
-  const result = { ...args };
-
-  const statusKeys = ['status', 'statuses', 'workflow_status', 'workflowStatus', 'invoice_status', 'bill_status', 'state'];
-  for (const key of statusKeys) {
-    if (!(key in s.properties)) continue;
-    if (result[key] !== undefined && result[key] !== null && result[key] !== '') continue;
-
-    const fieldSchema = s.properties[key] as { enum?: unknown[] } | undefined;
-    const enumValues = Array.isArray(fieldSchema?.enum) ? fieldSchema!.enum.map(v => String(v)) : [];
-    if (enumValues.length === 0) {
-      result[key] = 'overdue';
-      break;
-    }
-
-    const overdueCandidate = enumValues.find(v => v.toLowerCase() === 'overdue');
-    if (overdueCandidate) {
-      result[key] = overdueCandidate;
-      break;
-    }
-  }
-
-  // Common cutoff keys for due-date queries
-  const today = new Date().toISOString().slice(0, 10);
-  const cutoffKeys = ['due_before', 'due_date_to', 'to_date', 'end_date', 'before_date', 'date_to'];
-  for (const key of cutoffKeys) {
-    if (key in s.properties && (result[key] === undefined || result[key] === null || result[key] === '')) {
-      result[key] = today;
-      break;
-    }
-  }
-
-  if ('include_draft' in s.properties && (result.include_draft === undefined || result.include_draft === null)) {
-    result.include_draft = false;
-  }
-  if ('includeDraft' in s.properties && (result.includeDraft === undefined || result.includeDraft === null)) {
-    result.includeDraft = false;
   }
 
   return result;
@@ -1645,7 +1231,7 @@ serve(async (req) => {
     let feedbackStrategy: string | null = null;
     let feedbackResponse: string | null = null;
     let feedbackTokenCost: number | null = null;
-    let feedbackCategory: QueryCategory | 'unknown' = 'unknown';
+    let feedbackCategory: string = 'unified';
     let mcpClientInstance: StreamableMCPClient | null = null;
     // Hoisted so finally block can access real tool inputs/results
     let allMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
@@ -1690,15 +1276,13 @@ serve(async (req) => {
         }
       }
 
-      // ─── Check: if MCP not connected and query needs tools, return clear message ──
+      // ─── Check: if MCP not connected, return clear message ──
       if (attachments?.length) {
         console.log(`[api] Received ${attachments.length} attachment(s): ${attachments.map(a => `${a.name} (${a.type})`).join(', ')}`);
       }
-      const classification = classifyQuery(query);
-      feedbackCategory = classification.category;
-      const needsTools = classification.category !== 'general_chat';
+      feedbackCategory = 'unified';
 
-      if (needsTools && !mcpClientInstance && !isConfirmation) {
+      if (!mcpClientInstance && !isConfirmation) {
         const missingParts: string[] = [];
         if (!mcpAuthToken) missingParts.push('H-Authorization');
         if (!mcpEntityId) missingParts.push('entityId');
@@ -1714,8 +1298,8 @@ serve(async (req) => {
         sendEvent('response_chunk', { text: errorMsg });
         sendComplete({
           success: false, query, path: 'error', response: errorMsg,
-          category: classification.category,
-          subCategory: classification.subCategory || 'error',
+          category: 'unified',
+          subCategory: 'error',
           modelTier: 'cheap',
           toolCategories: [],
           responseType: 'error' as ResponseType,
@@ -1739,16 +1323,12 @@ serve(async (req) => {
       }
 
       // ─── Model Tier Selection ─────────────────────────────────────────
-      modelTier = selectModelTier(query, classification.category);
+      modelTier = selectModelTier(query);
       console.log(`[api] Model tier: ${modelTier.tier} — ${modelTier.reason}`);
 
-      const queryIsBulkList = isBulkListQuery(query);
-      const queryRequestedEntities = detectRequestedEntities(query);
       const queryRequestedPageSize = extractRequestedPageSize(query);
       const queryIsPaginationFollowUp = isPaginationFollowUp(query);
-      const queryIsOverdueList = isOverdueQuery(query) && queryRequestedEntities.length > 0;
       const queryPaginationState = queryIsPaginationFollowUp ? extractPaginationState(conversationHistory) : null;
-      const mcpToolsByName = new Map(mcpTools.map(t => [t.name, t]));
 
       // ─── Helper: Execute a tool call with sanitization, scope injection, and retry ──
       async function executeToolCall(
@@ -1769,14 +1349,8 @@ serve(async (req) => {
             args,
             schema,
             queryRequestedPageSize,
-            queryIsBulkList || queryIsPaginationFollowUp,
+            queryIsPaginationFollowUp,
           );
-          if (queryIsBulkList) {
-            args = injectAllRecordsDefaults(args, schema);
-          }
-          if (queryIsOverdueList) {
-            args = injectOverdueDefaults(args, schema);
-          }
           if (queryIsPaginationFollowUp) {
             const state = queryPaginationState?.[toolName];
             if (state) args = injectPaginationFollowUpArgs(args, schema, state);
@@ -1832,49 +1406,16 @@ serve(async (req) => {
 
       sendEvent('route_started', { query, intentCount: intents?.length || 0, mcpToolCount: mcpTools.length });
 
-      // ─── Determine effective category ──────────────────────────────────
-      let effectiveCategory: QueryCategory;
-
-      if (isConfirmation && pendingAction) {
-        // Confirmation with pending action → unified
-        effectiveCategory = 'unified';
-        console.log(`[api] Confirmation detected with pending action: ${pendingAction.toolName}`);
-        sendEvent('route_classified', {
-          path: 'llm', category: 'unified',
-          confidence: 1.0, isConfirmation: true,
-          pendingAction: pendingAction.toolName,
-        });
-      } else if (isConfirmation && !pendingAction) {
-        // Confirmation but no pending action found — use unified
-        effectiveCategory = 'unified';
-        console.log(`[api] Confirmation without pending action, using unified category`);
-        sendEvent('route_classified', {
-          path: 'llm', category: 'unified',
-          confidence: 0.8, isConfirmation: true, noPendingAction: true,
-        });
-      } else if (followUpResult.isFollowUp && classification.category === 'general_chat') {
-        // Short follow-up queries (e.g. "show more", "details for first one") should NOT
-        // be classified as general_chat — they need tools from the previous turn
-        effectiveCategory = 'unified';
-        console.log(`[api] Follow-up overrode general_chat → unified`);
-        sendEvent('route_classified', {
-          path: 'llm', category: 'unified',
-          confidence: 0.75, isFollowUp: true,
-          reuseTools: followUpResult.reuseToolGroup?.length || 0,
-          reason: followUpResult.reason,
-        });
-      } else if (queryIsPaginationFollowUp && classification.category === 'general_chat') {
-        // Pagination follow-ups ("next page", "more", "aur dikhao") must use tools
-        effectiveCategory = 'unified';
-        console.log(`[api] Pagination follow-up overrode general_chat → unified`);
-        sendEvent('route_classified', {
-          path: 'llm', category: 'unified',
-          confidence: 0.8, isPaginationFollowUp: true,
-        });
-      } else {
-        effectiveCategory = classification.category;
-      }
-      feedbackCategory = effectiveCategory;
+      // All queries use unified category
+      const effectiveCategory = 'unified';
+      sendEvent('route_classified', {
+        path: 'llm',
+        category: 'unified',
+        confidence: 1.0,
+        isConfirmation,
+        isFollowUp: followUpResult.isFollowUp,
+        isPaginationFollowUp: queryIsPaginationFollowUp,
+      });
 
       // ============================
       // LAYER 1: Intent matching against DB (skip for confirmations)
@@ -1928,181 +1469,16 @@ serve(async (req) => {
         }
       }
 
-      const deterministicListEntities = queryRequestedEntities.length > 0
-        ? queryRequestedEntities
-        : [];
-      const useDeterministicListPath = !SIMPLE_DIRECT_LLM_MODE && !isConfirmation && queryIsBulkList && deterministicListEntities.length > 0;
-
-      if (useDeterministicListPath) {
-        sendEvent('route_classified', {
-          path: 'deterministic_list',
-          category: effectiveCategory,
-          entities: deterministicListEntities,
+      // ========== LLM PATH ==========
+      if (bestIntent && !isConfirmation) {
+        sendEvent('intent_detected', {
+          intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
+          reasoning: `Intent matched — using LLM path`,
+          lowConfidence: false,
         });
+      }
 
-        const listPicks = selectPreferredListToolsForEntities(deterministicListEntities, mcpTools);
-        const deterministicMcpResults: { tool: string; input?: Record<string, unknown>; result?: string; error?: string; success: boolean; attempts?: number }[] = [];
-        allMcpResults = deterministicMcpResults;
-
-        if (listPicks.length === 0) {
-          const msg = "I couldn't find matching list tools from your connected data source. Please reconnect HelloBooks and try again.";
-          sendEvent('response_chunk', { text: msg });
-          sendComplete({
-            success: false, query, path: 'deterministic_list',
-            category: effectiveCategory,
-            subCategory: classification.subCategory || 'view',
-            modelTier: modelTier.tier,
-            toolCategories: ['list'],
-            responseType: 'error' as ResponseType,
-            matchedIntent: null, reasoning: 'No matching dynamic list tools',
-            response: msg,
-            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-            isWriteOperation: false,
-          });
-          feedbackPath = "deterministic_list";
-          feedbackResponse = msg;
-          return;
-        }
-
-        const sections: string[] = [];
-        let anySuccess = false;
-        const toolsUsed: string[] = [];
-
-        for (const pick of listPicks) {
-          sendEvent('executing_tool', { tool: pick.toolName, entity: pick.entity, isWrite: false });
-          const execResult = await executeToolCall(pick.toolName, {}, `det-list-${pick.entity}`);
-
-          deterministicMcpResults.push({
-            tool: pick.toolName,
-            input: {},
-            result: execResult.result,
-            success: execResult.success,
-            error: execResult.failureReason,
-            attempts: execResult.attempts,
-          });
-
-          const parsed = parseListToolResult(execResult.result || '');
-          const pag = extractPaginationMeta(pick.toolName, execResult.result || '');
-          const hasMore = parsed.hasMore !== undefined ? parsed.hasMore : pag.hasMore;
-          const totalCount = parsed.totalCount ?? pag.totalCount;
-
-          sendEvent('tool_result', {
-            tool: pick.toolName,
-            success: execResult.success,
-            recordCount: parsed.rows.length,
-            attempts: execResult.attempts,
-            entity: pick.entity,
-          });
-
-          if (!execResult.success) {
-            sections.push(`## ${entityTitle(pick.entity)}\nI couldn't fetch records right now.`);
-            continue;
-          }
-
-          anySuccess = true;
-          toolsUsed.push(pick.toolName);
-          sections.push(renderEntityTableSection(pick.entity, parsed.rows, totalCount, hasMore));
-        }
-
-        const responseParts: string[] = [];
-        if (sections.length > 0) responseParts.push(sections.join('\n\n'));
-        if (anySuccess) {
-          responseParts.push("Would you like to see more records, or apply filters (date range, status, customer/vendor, amount)?");
-        } else {
-          responseParts.push("I wasn't able to fetch records right now. Please try again in a moment.");
-        }
-        const responseText = responseParts.join('\n\n').trim();
-
-        for (let i = 0; i < responseText.length; i += 50) {
-          sendEvent('response_chunk', { text: responseText.slice(i, i + 50) });
-          await new Promise(r => setTimeout(r, 20));
-        }
-
-        sendComplete({
-          success: anySuccess,
-          query,
-          path: 'deterministic_list',
-          category: effectiveCategory,
-          subCategory: classification.subCategory || 'view',
-          modelTier: modelTier.tier,
-          toolCategories: ['list', 'view'],
-          responseType: 'table' as ResponseType,
-          matchedIntent: null,
-          extractedEntities: {},
-          reasoning: `Deterministic list fetch for ${deterministicListEntities.join(', ')}`,
-          toolResults: deterministicMcpResults.map(r => ({ tool: r.tool, success: r.success, error: r.error, attempts: r.attempts })),
-          response: responseText,
-          executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-          isWriteOperation: false,
-        });
-
-        feedbackPath = "deterministic_list";
-        feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
-        feedbackToolsLoaded = mcpTools.map(t => t.name);
-        feedbackToolsUsed = toolsUsed;
-        feedbackStrategy = "deterministic_list";
-        feedbackResponse = responseText;
-      } else {
-        // ========== LLM PATH ==========
-        if (!isConfirmation) {
-          sendEvent('route_classified', {
-            path: 'llm', category: effectiveCategory, confidence: classification.confidence,
-            subCategory: classification.subCategory, matchedKeywords: classification.matchedKeywords,
-            intentAttempted: bestIntent ? { name: bestIntent.name, confidence: bestIntent.confidence } : null,
-          });
-        }
-
-        if (bestIntent && !isConfirmation) {
-          sendEvent('intent_detected', {
-            intent: { id: bestIntent.id, name: bestIntent.name, confidence: bestIntent.confidence },
-            reasoning: `Low confidence (${(bestIntent.confidence * 100).toFixed(0)}%) — using LLM path`,
-            lowConfidence: true,
-          });
-        }
-
-        if (!SIMPLE_DIRECT_LLM_MODE && effectiveCategory === 'general_chat' && !isConfirmation) {
-          sendEvent('tools_filtered', { category: effectiveCategory, toolCount: 0 });
-          sendEvent('response_generating', { path: 'llm', category: effectiveCategory });
-
-          let response;
-          if (hasDocumentAttachments(attachments)) {
-            // Use Responses API for document files (PDF, Excel, Word)
-            const responsesInput = await buildResponsesInput(query, conversationHistory, attachments);
-            response = await callOpenAIResponses(llmConfig as LLMConfig, SYSTEM_PROMPTS.general_chat, responsesInput, [], 512);
-          } else {
-            const chatUserContent = await buildUserContent(query, attachments);
-            response = await callOpenAI(llmConfig as LLMConfig,
-              SYSTEM_PROMPTS.general_chat,
-              [...conversationHistory.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: chatUserContent }],
-              [], 512
-            );
-          }
-
-          const responseText = response.message.content || '';
-          const chunkSize = 50;
-          for (let i = 0; i < responseText.length; i += chunkSize) {
-            sendEvent('response_chunk', { text: responseText.slice(i, i + chunkSize) });
-            await new Promise(r => setTimeout(r, 20));
-          }
-
-          sendComplete({
-            success: true, query, path: 'llm', category: 'general_chat',
-            subCategory: classification.subCategory || 'greeting',
-            modelTier: modelTier.tier,
-            toolCategories: [],
-            responseType: 'info' as ResponseType,
-            matchedIntent: null, extractedEntities: {}, reasoning: 'General conversation',
-            pipelineSteps: [], enrichments: [], response: responseText,
-            executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
-            isWriteOperation: false,
-          });
-
-          feedbackPath = "general_chat";
-          feedbackModel = `${(llmConfig as LLMConfig).provider}/${(llmConfig as LLMConfig).model}`;
-          feedbackStrategy = "general_chat_bypass";
-          feedbackResponse = responseText;
-
-        } else {
+      {
           // Bookkeeper or CFO path with filtered tools
           let toolSelection: ReturnType<typeof selectToolsForQuery>;
           let filteredTools: OpenAITool[];
@@ -2172,7 +1548,7 @@ serve(async (req) => {
 For every user request, call MCP tools when data/action is needed.
 Do not invent data. Use tool results as the source of truth.
 ${NO_DATABASE_ID_EXPOSURE_RULE}`
-            : SYSTEM_PROMPTS.unified;
+            : SYSTEM_PROMPT;
 
           // ─── Pagination follow-up detection ───
           const isPaginationRequest = !SIMPLE_DIRECT_LLM_MODE && queryIsPaginationFollowUp;
@@ -2184,14 +1560,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
               `Tool "${tool}": returned ${state.returnedSoFar} so far, hasMore=${state.hasMore}, nextPage=${state.lastPage + 1}, offset=${state.lastOffset}`
             ).join('; ');
             paginationContext = `\n\n📄 PAGINATION CONTEXT: The user wants the NEXT page of results. Previous state: ${stateDesc}. Call the same list tool(s) with the next page/offset. Do NOT repeat the first page.`;
-          }
-
-          // ─── Bulk list detection ───
-          const isBulkList = !SIMPLE_DIRECT_LLM_MODE && queryIsBulkList;
-          const requestedEntities = queryRequestedEntities;
-          let bulkListContext = '';
-          if (isBulkList && requestedEntities.length >= 2) {
-            bulkListContext = `\n\n📋 MULTI-LIST REQUEST: The user asked for ${requestedEntities.join(' AND ')}. You MUST call SEPARATE list tools for EACH entity type. Do NOT call just one tool. Call them all and present results in separate sections.`;
           }
 
           // Build system prompt with confirmation context
@@ -2272,28 +1640,6 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
                 toolInput = JSON.parse(toolCall.function.arguments);
               } catch (parseError) {
                 console.warn(`[api] Failed to parse tool args for ${requestedToolName}: ${(toolCall.function.arguments || '').slice(0, 200)}`, parseError);
-              }
-
-              if (!SIMPLE_DIRECT_LLM_MODE && (queryIsBulkList || queryIsOverdueList) && isListTool(requestedToolName)) {
-                const requestedToolDef = mcpToolsByName.get(requestedToolName);
-                const requestedEntity = inferEntityFromTool(
-                  requestedToolName,
-                  requestedToolDef?.description || '',
-                  queryRequestedEntities,
-                );
-
-                if (requestedEntity && queryRequestedEntities.includes(requestedEntity)) {
-                  const preferred = selectPreferredListToolForEntity(requestedEntity, mcpTools, queryIsOverdueList);
-                  if (preferred && preferred.toolName !== requestedToolName) {
-                    const currentScore = requestedToolDef
-                      ? scoreListToolForEntity(requestedToolDef, requestedEntity, queryIsOverdueList)
-                      : Number.NEGATIVE_INFINITY;
-                    if (!Number.isFinite(currentScore) || preferred.score > currentScore + 1) {
-                      toolName = preferred.toolName;
-                      console.log(`[api] Remapped list tool ${requestedToolName} -> ${toolName} for entity ${requestedEntity} (score ${currentScore} -> ${preferred.score})`);
-                    }
-                  }
-                }
               }
 
               if (mcpClientInstance) {
@@ -2469,7 +1815,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
 
           sendComplete({
             success: true, query, path: 'llm', category: effectiveCategory,
-            subCategory: classification.subCategory || 'general',
+            subCategory: 'general',
             modelTier: modelTier.tier,
             toolCategories: toolSelection.matchedCategories || [],
             responseType: finalResponseType,
