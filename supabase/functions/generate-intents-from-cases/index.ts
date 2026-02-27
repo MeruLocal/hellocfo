@@ -382,9 +382,16 @@ serve(async (req) => {
             .insert(intentRecord);
 
           if (insertError) {
-            console.error(`[gen-cases] Insert error for ${intentName}:`, insertError.message);
-            results.push({ caseId, success: false, intentName, error: insertError.message });
-            failed++;
+            // Handle unique constraint violation as a skip (duplicate)
+            if (insertError.code === '23505' || insertError.message?.includes('duplicate') || insertError.message?.includes('unique')) {
+              console.log(`[gen-cases] Skipped duplicate intent: ${intentName}`);
+              results.push({ caseId, success: true, intentName, skipped: true });
+              skipped++;
+            } else {
+              console.error(`[gen-cases] Insert error for ${intentName}:`, insertError.message);
+              results.push({ caseId, success: false, intentName, error: insertError.message });
+              failed++;
+            }
           } else {
             existingNames.add(intentName.toLowerCase());
             results.push({ caseId, success: true, intentName });
