@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useQuery } from '@tanstack/react-query';
 import {
   Search,
   MessageSquare,
@@ -245,6 +246,29 @@ export function GlobalChatHistory() {
     fetchConversations();
   }, [fetchConversations]);
 
+  // Fetch entities for name resolution
+  const { data: entitiesList } = useQuery({
+    queryKey: ['entities-list'],
+    queryFn: async () => {
+      const { data } = await supabase.from('entities').select('entity_id, org_id, name');
+      return data || [];
+    },
+  });
+
+  const entityNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    entitiesList?.forEach((e) => map.set(e.entity_id, e.name));
+    return map;
+  }, [entitiesList]);
+
+  const orgNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    entitiesList?.forEach((e) => {
+      if (e.org_id && !map.has(e.org_id)) map.set(e.org_id, e.org_id);
+    });
+    return map;
+  }, [entitiesList]);
+
   const uniqueEntities = useMemo(
     () => Array.from(new Set(conversations.map((c) => c.entity_id).filter(Boolean))) as string[],
     [conversations]
@@ -341,7 +365,7 @@ export function GlobalChatHistory() {
             <SelectContent>
               <SelectItem value="all">All Entities</SelectItem>
               {uniqueEntities.map((eid) => (
-                <SelectItem key={eid} value={eid}>{eid}</SelectItem>
+                <SelectItem key={eid} value={eid}>{entityNameMap.get(eid) || eid}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -353,7 +377,7 @@ export function GlobalChatHistory() {
             <SelectContent>
               <SelectItem value="all">All Orgs</SelectItem>
               {uniqueOrgs.map((oid) => (
-                <SelectItem key={oid} value={oid}>{oid}</SelectItem>
+                <SelectItem key={oid} value={oid}>{orgNameMap.get(oid) || oid}</SelectItem>
               ))}
             </SelectContent>
           </Select>
