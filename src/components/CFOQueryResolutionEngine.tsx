@@ -2534,7 +2534,7 @@ interface IntentListViewProps {
   onSelectIntent: (id: string) => void;
   onAddIntent: () => void;
   onDeleteIntent: (id: string) => void;
-  onGenerateFlow: (intentId: string) => void;
+  onGenerateFlow: (intentId: string, section?: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all') => void;
   onImport: (file: File) => void;
   onExportCSV: () => void;
   onExportJSON: () => void;
@@ -2595,7 +2595,7 @@ function IntentListView({
     });
   };
 
-  const handleBulkGenerate = async () => {
+  const handleBulkGenerate = async (section: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all' = 'all') => {
     if (bulkGenProgress.running || selectedIntentIds.size === 0) return;
     const selected = intents.filter(i => selectedIntentIds.has(i.id));
     setBulkGenProgress({ running: true, current: 0, total: selected.length, completed: 0, failed: 0 });
@@ -2606,7 +2606,7 @@ function IntentListView({
     for (let i = 0; i < selected.length; i++) {
       setBulkGenProgress(prev => ({ ...prev, current: i + 1 }));
       try {
-        await onGenerateFlow(selected[i].id);
+        await onGenerateFlow(selected[i].id, section);
         completed++;
       } catch {
         failed++;
@@ -2616,9 +2616,10 @@ function IntentListView({
 
     setBulkGenProgress(prev => ({ ...prev, running: false }));
     setSelectedIntentIds(new Set());
+    const sectionLabel = section === 'all' ? 'full config' : section;
     toast({ 
       title: 'Bulk Generation Complete', 
-      description: `${completed} succeeded, ${failed} failed out of ${selected.length} intents` 
+      description: `${completed} succeeded, ${failed} failed out of ${selected.length} intents (${sectionLabel})` 
     });
   };
 
@@ -2950,13 +2951,42 @@ function IntentListView({
             {selectedIntentIds.size} intent{selectedIntentIds.size !== 1 ? 's' : ''} selected
           </span>
           <div className="flex items-center gap-3">
-            <button
-              onClick={handleBulkGenerate}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
-            >
-              <Wand2 size={14} />
-              Generate All ({selectedIntentIds.size})
-            </button>
+            <div className="relative group">
+              <button
+                onClick={() => handleBulkGenerate('all')}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-l-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
+              >
+                <Wand2 size={14} />
+                Generate All ({selectedIntentIds.size})
+              </button>
+              <button className="px-2 py-2 bg-indigo-700 text-white rounded-r-lg text-sm hover:bg-indigo-800 transition-colors border-l border-indigo-500">
+                <ChevronDown size={14} />
+              </button>
+              <div className="absolute right-0 mt-1 w-56 bg-white border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20">
+                <div className="py-1 text-sm">
+                  <button onClick={() => handleBulkGenerate('all')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <Sparkles size={14} className="text-indigo-600" /> Generate Everything
+                  </button>
+                  <div className="border-t my-1" />
+                  <p className="px-4 py-1 text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Generate Specific Section</p>
+                  <button onClick={() => handleBulkGenerate('training')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <MessageSquare size={14} className="text-blue-500" /> Training Phrases
+                  </button>
+                  <button onClick={() => handleBulkGenerate('entities')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <Box size={14} className="text-green-500" /> Entities
+                  </button>
+                  <button onClick={() => handleBulkGenerate('pipeline')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <GitBranch size={14} className="text-purple-500" /> Data Pipeline
+                  </button>
+                  <button onClick={() => handleBulkGenerate('enrichments')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <Zap size={14} className="text-amber-500" /> Enrichments
+                  </button>
+                  <button onClick={() => handleBulkGenerate('response')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
+                    <Layers size={14} className="text-cyan-500" /> Response Config
+                  </button>
+                </div>
+              </div>
+            </div>
             <button
               onClick={() => setSelectedIntentIds(new Set())}
               className="px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"
@@ -3530,14 +3560,22 @@ export default function CFOQueryResolutionEngine() {
   const GENERATION_TIMEOUT_MS = 120000;
 
   // AI Generation Functions - Using LLM Config from database
-  const generateIntentConfig = async (intent: Intent, abortSignal?: AbortSignal): Promise<Intent> => {
+  const generateIntentConfig = async (intent: Intent, abortSignal?: AbortSignal, section: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all' = 'all'): Promise<Intent> => {
     const moduleInfo = modules.find(m => m.id === intent.moduleId);
     const subModuleInfo = moduleInfo?.subModules.find(s => s.id === intent.subModuleId);
     
-    setGenerationProgress({ current: 1, total: 5, step: 'Generating training phrases...' });
+    const sectionLabels: Record<string, string> = {
+      all: 'Generating full configuration...',
+      training: 'Generating training phrases...',
+      entities: 'Generating entities...',
+      pipeline: 'Generating data pipeline...',
+      enrichments: 'Generating enrichments...',
+      response: 'Generating response config...',
+    };
+    setGenerationProgress({ current: 1, total: section === 'all' ? 5 : 1, step: sectionLabels[section] || 'Generating...' });
     
     try {
-      console.log('🤖 Generating intent config via AI...');
+      console.log(`🤖 Generating intent config via AI (section: ${section})...`);
       console.log('Using LLM config:', llmConfig?.provider, llmConfig?.model);
       
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -3557,8 +3595,12 @@ export default function CFOQueryResolutionEngine() {
           moduleName: moduleInfo?.name || intent.moduleId,
           subModuleName: subModuleInfo?.name || intent.subModuleId,
           description: intent.description,
-          section: 'all',
+          section,
           phraseCount: 10,
+          existingPhrases: section !== 'all' ? intent.trainingPhrases : undefined,
+          existingEntities: section !== 'all' ? intent.entities : undefined,
+          existingPipeline: section !== 'all' ? intent.resolutionFlow?.dataPipeline : undefined,
+          existingEnrichments: section !== 'all' ? intent.resolutionFlow?.enrichments : undefined,
           mcpTools: allMcpTools.map(tool => ({
             name: tool.id,
             description: tool.description,
@@ -3897,17 +3939,18 @@ export default function CFOQueryResolutionEngine() {
     }
   };
 
-  const handleGenerateFlow = async (intentId: string) => {
+  const handleGenerateFlow = async (intentId: string, section: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all' = 'all') => {
     const controller = new AbortController();
     setGenerationAbortController(controller);
     setIsGenerating(intentId);
-    setGenerationProgress({ current: 0, total: 5, step: 'Starting generation...' });
+    setGenerationProgress({ current: 0, total: section === 'all' ? 5 : 1, step: 'Starting generation...' });
     try {
       const intent = intents.find(i => i.id === intentId);
       if (intent) {
-        const generated = await generateIntentConfig(intent, controller.signal);
+        const generated = await generateIntentConfig(intent, controller.signal, section);
         await updateIntent(intentId, generated);
-        toast({ title: 'Generation Complete', description: `Successfully generated configuration for "${intent.name}"` });
+        const sectionLabel = section === 'all' ? 'full configuration' : section;
+        toast({ title: 'Generation Complete', description: `Successfully generated ${sectionLabel} for "${intent.name}"` });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed';
