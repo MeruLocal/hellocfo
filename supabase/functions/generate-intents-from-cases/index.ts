@@ -7,9 +7,12 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// Azure OpenAI endpoint (same as cfo-agent-api)
-const AZURE_ENDPOINT =
-  "https://lovable-hellobooks-resource.cognitiveservices.azure.com/openai/v1/chat/completions";
+// OpenAI GPT-5.2 endpoint (from secrets)
+const getOpenAIEndpoint = () => {
+  const baseUrl = Deno.env.get("OPENAI_GPT_5_2_BASE_URL");
+  if (!baseUrl) throw new Error("OPENAI_GPT_5_2_BASE_URL secret is not configured");
+  return baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
+};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -125,33 +128,37 @@ const SUB_CATEGORY_TO_SUB_MODULE: Record<string, string> = {
   Alerts: "banking",
 };
 
-// ── Azure OpenAI helper ────────────────────────────────────────────────
+// ── OpenAI GPT-5.2 helper ──────────────────────────────────────────────
 
-async function callAzureOpenAI(
-  apiKey: string,
+async function callOpenAI(
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
-  const res = await fetch(AZURE_ENDPOINT, {
+  const apiKey = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+  if (!apiKey) throw new Error("OPENAI_GPT_5_2_API_KEY secret is not configured");
+
+  const endpoint = getOpenAIEndpoint();
+
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
-      "api-key": apiKey,
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: "gpt-5.2",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: 4096,
+      max_completion_tokens: 4096,
       temperature: 0.3,
     }),
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Azure OpenAI error ${res.status}: ${errText.slice(0, 300)}`);
+    throw new Error(`OpenAI GPT-5.2 error ${res.status}: ${errText.slice(0, 300)}`);
   }
 
   const data = await res.json();
@@ -269,17 +276,11 @@ serve(async (req) => {
       );
     }
 
-    // Get LLM config for API key
-    const { data: llmConfig } = await supabase
-      .from("llm_configs")
-      .select("*")
-      .eq("is_default", true)
-      .maybeSingle();
-
-    const apiKey = llmConfig?.api_key;
-    if (!apiKey) {
+    // Verify OpenAI GPT-5.2 secrets are configured
+    const openaiKey = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+    if (!openaiKey) {
       return new Response(
-        JSON.stringify({ error: "No LLM API key configured. Please set up LLM Settings first." }),
+        JSON.stringify({ error: "OPENAI_GPT_5_2_API_KEY secret is not configured." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -319,7 +320,7 @@ serve(async (req) => {
 
       try {
         const userPrompt = buildBatchPrompt(batch);
-        const aiResponse = await callAzureOpenAI(apiKey, systemPrompt, userPrompt);
+        const aiResponse = await callOpenAI(systemPrompt, userPrompt);
         const parsed = safeParseJSON(aiResponse) as Array<Record<string, unknown>>;
 
         if (!Array.isArray(parsed)) {
