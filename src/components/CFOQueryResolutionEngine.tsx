@@ -4411,7 +4411,7 @@ export default function CFOQueryResolutionEngine() {
             </div>
           </div>
         )}
-        {activeTab === 'test' && businessContext && (
+        {activeTab === 'test' && (
           <div className="p-6">
             <h2 className="text-xl font-bold text-foreground mb-4">Test Console</h2>
             <p className="text-muted-foreground">Use the CFO Agent tab to test queries interactively.</p>
