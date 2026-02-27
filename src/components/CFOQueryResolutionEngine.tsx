@@ -3145,11 +3145,11 @@ function MCPToolsView({
           const analytics = getToolAnalytics(tool.id);
           return (
             <div key={tool.id} onClick={() => setSelectedTool(tool)} className="p-4 border rounded-lg hover:shadow-md cursor-pointer transition-shadow bg-white">
-              <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="font-medium text-sm text-gray-900">{tool.name}</h3>
-                    <MCPToolUsageBadge usageCount={analytics?.usageCount || 0} avgFeedback={analytics?.avgFeedbackScore || null} />
+                    <MCPToolUsageBadge toolName={tool.id} analytics={analytics} />
                   </div>
                   <p className="text-xs text-gray-500 mt-1 line-clamp-2">{tool.description}</p>
                 </div>
@@ -3183,13 +3183,15 @@ function MCPToolsView({
 // Enrichments View
 function EnrichmentsView({
   enrichmentTypes,
-  isLoading
+  onAdd,
+  onUpdate,
+  onDelete
 }: {
   enrichmentTypes: EnrichmentType[];
-  isLoading: boolean;
+  onAdd?: any;
+  onUpdate?: any;
+  onDelete?: any;
 }) {
-  if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-gray-400" /></div>;
-
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-900 mb-4">Enrichment Types</h2>
@@ -3217,9 +3219,9 @@ function CountryConfigView({
   onDelete
 }: {
   countryConfigs: CountryConfig[];
-  onAdd: (config: CountryConfig) => Promise<CountryConfig | null>;
-  onUpdate: (code: string, updates: Partial<CountryConfig>) => Promise<void>;
-  onDelete: (code: string) => Promise<void>;
+  onAdd: any;
+  onUpdate: any;
+  onDelete: any;
 }) {
   return (
     <div className="p-6">
@@ -3244,20 +3246,24 @@ function CountryConfigView({
 
 // Business Context View
 function BusinessContextView({
-  contexts,
-  activeContext,
-  onUpdate,
+  context,
+  allContexts,
+  countryConfigs: _cc,
+  onChange,
   onCreate,
   onDelete,
   onSetDefault
 }: {
-  contexts: any[];
-  activeContext: any;
-  onUpdate: (updates: any) => Promise<void>;
-  onCreate: (context: any) => Promise<any>;
-  onDelete: (id: string) => Promise<void>;
-  onSetDefault: (id: string) => Promise<void>;
+  context: any;
+  allContexts: any[];
+  countryConfigs: CountryConfig[];
+  onChange: any;
+  onCreate: any;
+  onDelete: any;
+  onSetDefault: any;
 }) {
+  const contexts = allContexts;
+  const activeContext = context;
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-900 mb-4">Business Contexts</h2>
@@ -3287,20 +3293,23 @@ function BusinessContextView({
 // MAIN COMPONENT
 // ============================================================================
 export default function CFOQueryResolutionEngine() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, signOut } = useAuth();
 
   // Database hooks for dynamic data
   const { modules, loading: modulesLoading } = useModules();
   const { countryConfigs, loading: countryLoading, createCountryConfig, updateCountryConfig, deleteCountryConfig } = useCountryConfigs();
   const { entityTypes, loading: entityTypesLoading } = useEntityTypes();
-  const { enrichmentTypes, loading: enrichmentTypesLoading } = useEnrichmentTypes();
+  const { enrichmentTypes, loading: enrichmentTypesLoading, createEnrichmentType, updateEnrichmentType, deleteEnrichmentType } = useEnrichmentTypes();
   const { intents, loading: intentsLoading, createIntent, updateIntent, deleteIntent, fetchIntents } = useIntents();
   const { businessContext, allContexts, loading: businessContextLoading, updateContext, createContext, deleteContext, setAsDefault } = useBusinessContext();
   const { llmConfig, loading: llmConfigLoading, updateConfig } = useLLMConfig();
   const { tools: helloBooksMcpTools, loading: isFetchingMcpTools, error: mcpToolsError, fetchTools: fetchHelloBooksMcpTools } = useMCPTools();
+  const { responseTypes } = useResponseTypes();
+  const { llmProviders } = useLLMProviders();
 
   // State
   const [activeTab, setActiveTab] = useState('intents');
+  const [selectedIntentId, setSelectedIntentId] = useState<string | null>(null);
   const [editingIntentId, setEditingIntentId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -3311,6 +3320,9 @@ export default function CFOQueryResolutionEngine() {
   const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number; step?: string }>({ current: 0, total: 0 });
   const [isImporting, setIsImporting] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
+  const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
+
+  const selectedIntent = intents.find(i => i.id === selectedIntentId);
 
   // Loading state
   const isLoading = modulesLoading || intentsLoading || businessContextLoading || llmConfigLoading;
@@ -3429,7 +3441,7 @@ export default function CFOQueryResolutionEngine() {
     }
   };
 
-
+  const regenerateSection = async (intentId: string, section?: string, options?: { phraseCount?: number }): Promise<Partial<Intent>> => {
     const intent = intents.find(i => i.id === intentId);
     if (!intent) throw new Error('Intent not found');
     
@@ -4028,8 +4040,23 @@ export default function CFOQueryResolutionEngine() {
             onDelete={deleteCountryConfig}
           />
         )}
-        {activeTab === 'llm' && llmConfig && <LLMConfigView config={llmConfig} onChange={updateConfig} />}
-        {activeTab === 'test' && businessContext && <TestConsoleView intents={intents} businessContext={businessContext} countryConfigs={countryConfigs} mcpTools={allMcpTools} llmConfig={llmConfig} />}
+        {activeTab === 'llm' && llmConfig && (
+          <div className="p-6">
+            <h2 className="text-xl font-bold text-foreground mb-4">LLM Configuration</h2>
+            <div className="p-4 border rounded-lg bg-white space-y-3">
+              <div><span className="text-sm text-muted-foreground">Provider:</span> <span className="font-medium">{llmConfig.provider}</span></div>
+              <div><span className="text-sm text-muted-foreground">Model:</span> <span className="font-medium">{llmConfig.model}</span></div>
+              <div><span className="text-sm text-muted-foreground">Temperature:</span> <span className="font-medium">{llmConfig.temperature}</span></div>
+              <div><span className="text-sm text-muted-foreground">Max Tokens:</span> <span className="font-medium">{llmConfig.maxTokens}</span></div>
+            </div>
+          </div>
+        )}
+        {activeTab === 'test' && businessContext && (
+          <div className="p-6">
+            <h2 className="text-xl font-bold text-foreground mb-4">Test Console</h2>
+            <p className="text-muted-foreground">Use the CFO Agent tab to test queries interactively.</p>
+          </div>
+        )}
         
         {activeTab === 'api-console' && <ApiConsole />}
         {activeTab === 'users' && isAdmin && (
@@ -4060,3 +4087,4 @@ export default function CFOQueryResolutionEngine() {
     </div>
   );
 }
+
