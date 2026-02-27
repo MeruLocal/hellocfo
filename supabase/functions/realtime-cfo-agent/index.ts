@@ -24,7 +24,7 @@ import {
 import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
-import { validateWriteToolArgs } from "../_shared/write-validator.ts";
+import { validateWriteToolArgs, executePreRequisiteChain } from "../_shared/write-validator.ts";
 import { logQueryRouting } from "../_shared/routing-logger.ts";
 import { autoCancelPendingMCQ, extractConversationContext, buildConversationContextPrompt, MAX_MCQ_CHAIN } from "../_shared/mcq-engine.ts";
 
@@ -698,16 +698,56 @@ serve(async (req) => {
                   sendEvent("executing_tool", { tool: toolName, description: toolName });
 
                   // Gap 7: Pre-flight validation for write tools
-                  const isWrite = /^(create|update|delete|void|cancel)_/.test(toolName);
+                  const isWrite = /^(create|update|delete|void|cancel|send|approve|reconcile)_/.test(toolName);
                   if (isWrite) {
+                    // Layer 1: Field presence check
                     const validation = validateWriteToolArgs(toolName, toolInput);
                     if (!validation.valid) {
                       console.warn(`[${reqId}] Write validation failed for ${toolName}: ${validation.errors.join(', ')}`);
-                      sendEvent("write_validation", { tool: toolName, valid: false, errors: validation.errors });
+                      sendEvent("write_validation", { tool: toolName, valid: false, errors: validation.errors, layer: 1 });
                       mcpResults.push({ tool: toolName, error: `Validation: ${validation.errors.join('; ')}`, success: false });
                       sendEvent("tool_result", { tool: toolName, success: false, error: validation.errors.join('; ') });
                       messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: validation.errors.join('; ') }) });
                       continue;
+                    }
+
+                    // Layer 2: Pre-requisite chain — dependency resolution & business rule validation
+                    if (mcpClientInstance) {
+                      const chainResult = await executePreRequisiteChain(
+                        reqId,
+                        toolName,
+                        toolInput,
+                        (t, a) => mcpClientInstance!.callTool(t, a),
+                        (stepEvt) => sendEvent("prereq_step" as SSEEventType, { writeTool: toolName, ...stepEvt }),
+                      );
+
+                      if (!chainResult.passed) {
+                        if (chainResult.blocked) {
+                          console.warn(`[${reqId}] PreReq chain BLOCKED ${toolName}: ${chainResult.blockReason}`);
+                          sendEvent("write_validation", { tool: toolName, valid: false, layer: 2, blocked: true, reason: chainResult.blockReason, steps: chainResult.stepsExecuted });
+                          const blockMsg = chainResult.blockReason || "Pre-requisite check failed";
+                          mcpResults.push({ tool: toolName, error: blockMsg, success: false });
+                          sendEvent("tool_result", { tool: toolName, success: false, error: blockMsg });
+                          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: blockMsg, blocked: true }) });
+                          continue;
+                        }
+                        if (chainResult.askUser) {
+                          console.log(`[${reqId}] PreReq chain needs user input for ${toolName}: ${chainResult.askUser}`);
+                          sendEvent("write_validation", { tool: toolName, valid: false, layer: 2, needsInput: true, askUser: chainResult.askUser, mcqType: chainResult.mcqType, mcqOptions: chainResult.mcqOptions, steps: chainResult.stepsExecuted });
+                          // Let LLM handle the ask conversationally
+                          mcpResults.push({ tool: toolName, error: chainResult.askUser, success: false });
+                          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: chainResult.askUser, needsInput: true, missingField: chainResult.missingField }) });
+                          continue;
+                        }
+                      }
+
+                      // Use enriched args from chain
+                      if (chainResult.passed && chainResult.enrichedArgs) {
+                        toolInput = chainResult.enrichedArgs as Record<string, unknown>;
+                        if (chainResult.stepsExecuted.length > 0) {
+                          sendEvent("write_validation", { tool: toolName, valid: true, layer: 2, steps: chainResult.stepsExecuted });
+                        }
+                      }
                     }
                   }
 

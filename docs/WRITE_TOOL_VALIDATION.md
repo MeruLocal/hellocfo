@@ -1,7 +1,7 @@
 # Write Tool Pre-Flight Validation — Architecture & Frontend Guide
 
-> **Version**: v3.1 — Last updated: 2026-02-27  
-> **Scope**: How `validateWriteToolArgs()` prevents silent write failures and how the frontend surfaces validation errors to users.
+> **Version**: v3.2 — Last updated: 2026-02-27  
+> **Scope**: Two-layer validation system: field presence (Layer 1) + pre-requisite dependency chain (Layer 2).
 
 ---
 
@@ -12,52 +12,87 @@ MCP (HelloBooks) does **not** validate required fields. It accepts malformed pay
 - Returns cryptic API errors that the LLM cannot interpret
 - Silently succeeds with missing data
 
-**Result**: Users see "Payment created successfully" but the payment has no amount, no invoice link, and breaks their books.
+**Additionally**, many write tools depend on data from OTHER tools (e.g., `send_invoice` needs the customer's email, which requires fetching the invoice → contact chain).
 
 ---
 
-## 2. Where Validation Sits in the Pipeline
+## 2. Two-Layer Validation Architecture
 
 ```
-User: "Record ₹5000 payment from Acme Corp"
+User: "Send invoice INV-042 to the customer"
           │
           ▼
     ┌─ Steps 1-8: Classification → Intent → Tool Selection ─┐
-    │   LLM decides: call create_payment({AccountId: 'xxx'}) │
+    │   LLM decides: call send_invoice({InvoiceId: 'xxx'})   │
     └────────────────────────────────────────────────────────┘
           │
           ▼
-    ┌─ Step 9e: validateWriteToolArgs() ── PRE-FLIGHT ──────┐
-    │                                                        │
-    │  Checks create_payment requirements:                   │
-    │    ✅ AccountId: present                               │
-    │    ❌ Amount: MISSING                                  │
-    │    ❌ Applications[]: MISSING                          │
-    │                                                        │
-    │  DECISION: BLOCK — do NOT call MCP                     │
-    │                                                        │
-    │  Returns to LLM:                                       │
-    │    "Missing: Amount, Applications[].                    │
-    │     Fetch invoice first via get_all_invoices            │
-    │     to obtain InvoiceId for Applications."             │
-    └────────────────────────────────────────────────────────┘
+    ┌─ Layer 1 (Step 9e): validateWriteToolArgs() ───────────┐
+    │                                                         │
+    │  "Are required fields PRESENT?"                         │
+    │  Pure data check. Instant. No MCP calls.                │
+    │    ✅ InvoiceId: present                                │
+    └─────────────────────────────────────────────────────────┘
           │
           ▼
-    LLM self-corrects → calls get_all_invoices → retries
-    create_payment with all required fields → SUCCESS
+    ┌─ Layer 2 (Step 9e2): executePreRequisiteChain() ⭐ NEW ┐
+    │                                                         │
+    │  "Are field VALUES VALID? Do I need more data?"         │
+    │  Calls read tools via MCP to verify/enrich.             │
+    │                                                         │
+    │  Chain Step 1: get_invoice(InvoiceId)                   │
+    │    → Got ContactId: "uuid-xxx" ✅                       │
+    │                                                         │
+    │  Chain Step 2: get_contact(ContactId)                   │
+    │    → EmailAddress: "client@acme.com" ✅                 │
+    │    → Inject into args: {EmailAddress: "client@acme.com"}│
+    │                                                         │
+    │  OR if no email:                                        │
+    │    → Return to LLM: "Email nahi mila, user se puchho"  │
+    └─────────────────────────────────────────────────────────┘
+          │
+          ▼
+    Execute send_invoice via MCP (with enriched args) → SUCCESS
 ```
 
-**Key insight**: Validation happens **inside the Edge Function** (Steps 9d–9e), before MCP is ever called. The frontend does not perform this validation — it receives the outcome via SSE events.
+**Key insight**: Both layers run inside the Edge Function (Steps 9e–9e2), before MCP write is ever called.
 
 ---
 
-## 3. Current Validation Coverage (v3)
+## 3. Validation Coverage (v3.2)
 
-### 3.1 Covered Tools
+### 3.1 Layer 1 — Field Presence (Instant)
 
 | Tool | Required Fields | Risk If Missing |
 |------|----------------|-----------------|
 | `create_payment` | `Applications[]`, `Amount`, `AccountId` | Payment with ₹0 or no invoice link |
+| `create_invoice` | `Lines[]` | Blank invoice |
+| `create_bill` | `Lines[]` | Blank bill |
+| `create_expense` | — | Amount validation |
+| `create_journal_entry` | — | Generic checks |
+
+### 3.2 Layer 2 — Pre-Requisite Chain (MCP calls)
+
+| Write Tool | Pre-Req Chain | What It Catches |
+|------------|--------------|-----------------|
+| `send_invoice` | `get_invoice` → `get_contact` → check email | Customer has no email → asks user |
+| `void_invoice` | `get_invoice` → check status | Blocks voiding paid/already-voided invoices |
+| `delete_contact` | `get_contact` → check balance | Blocks delete if ₹X outstanding |
+| `approve_bill` | `get_bill` → check status | Blocks approving non-SUBMITTED bills |
+| `update_invoice` | `get_invoice` → check status | Blocks updating paid/voided invoices |
+| `update_bill` | `get_bill` → check status | Blocks updating paid bills |
+| `update_payment` | `get_payment` → check reconciled | Blocks modifying reconciled payments |
+| `create_credit_note` | `get_invoice` → verify status, auto-fill ContactId | Blocks credit note on draft/voided invoices |
+| `create_payment` | `get_accounts(BANK)` → resolve AccountId | MCQ if multiple bank accounts |
+| `send_purchase_order` | `get_purchase_order` → `get_contact` → check email | Vendor has no email → asks user |
+
+### 3.3 SSE Events
+
+| Event | Layer | Meaning |
+|-------|-------|---------|
+| `write_validation` (layer:1) | Layer 1 | Field presence check result |
+| `prereq_step` | Layer 2 | Individual chain step executing/passed/blocked/failed |
+| `write_validation` (layer:2) | Layer 2 | Chain overall result (passed/blocked/needsInput) |
 | `create_invoice` | `Lines[]`, `ContactId` | Blank invoice with no customer |
 | `create_bill` | `Lines[]`, `ContactId` | Blank bill with no vendor |
 | `create_credit_note` | `Lines[]`, `ContactId` | Orphan credit note |

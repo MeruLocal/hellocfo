@@ -14,7 +14,7 @@ import { logFeedback } from "./feedback-logger.ts";
 import { logIntentRouting, logLLMPathPattern, checkForSuggestedIntents, getAdaptiveThreshold, detectImplicitSignals } from "../_shared/rl-logger.ts";
 import { createMCPClient, StreamableMCPClient } from "./mcp-client.ts";
 import { detectResponseType, detectResponseTypeFromResults, type ResponseType } from "../_shared/response-type.ts";
-import { validateWriteToolArgs, type WriteToolTracker, buildWriteToolSummary } from "../_shared/write-validator.ts";
+import { validateWriteToolArgs, executePreRequisiteChain, type WriteToolTracker, buildWriteToolSummary } from "../_shared/write-validator.ts";
 import { logQueryRouting, type RoutingLogEntry } from "../_shared/routing-logger.ts";
 import { loadPendingMCQ, resolveMCQ, saveMCQState, buildMCQSSEEvent, autoCancelPendingMCQ, extractConversationContext, buildConversationContextPrompt, MAX_MCQ_CHAIN, type MCQState } from "../_shared/mcq-engine.ts";
 
@@ -1232,10 +1232,11 @@ serve(async (req) => {
 
         // Gap 7: Pre-flight validation for write tools
         if (isWriteTool(toolName)) {
+          // Layer 1: Field presence check
           const validation = validateWriteToolArgs(toolName, args);
           if (!validation.valid) {
             console.warn(`[api] Write validation failed for ${toolName}: ${validation.errors.join(', ')}`);
-            sendEvent('write_validation', { tool: toolName, valid: false, errors: validation.errors, warnings: validation.warnings });
+            sendEvent('write_validation', { tool: toolName, valid: false, errors: validation.errors, warnings: validation.warnings, layer: 1 });
             return {
               result: JSON.stringify({ error: `Validation failed: ${validation.errors.join('; ')}` }),
               success: false,
@@ -1244,7 +1245,48 @@ serve(async (req) => {
             };
           }
           if (validation.warnings.length > 0) {
-            sendEvent('write_validation', { tool: toolName, valid: true, warnings: validation.warnings });
+            sendEvent('write_validation', { tool: toolName, valid: true, warnings: validation.warnings, layer: 1 });
+          }
+
+          // Layer 2: Pre-requisite chain — dependency resolution & business rule validation
+          if (mcpClientInstance) {
+            const chainResult = await executePreRequisiteChain(
+              'api',
+              toolName,
+              args,
+              (t, a) => mcpClientInstance!.callTool(t, a),
+              (stepEvt) => sendEvent('prereq_step', { writeTool: toolName, ...stepEvt }),
+            );
+
+            if (!chainResult.passed) {
+              if (chainResult.blocked) {
+                console.warn(`[api] PreReq chain BLOCKED ${toolName}: ${chainResult.blockReason}`);
+                sendEvent('write_validation', { tool: toolName, valid: false, layer: 2, blocked: true, reason: chainResult.blockReason, steps: chainResult.stepsExecuted });
+                return {
+                  result: JSON.stringify({ error: chainResult.blockReason, blocked: true }),
+                  success: false,
+                  attempts: 0,
+                  failureReason: chainResult.blockReason,
+                };
+              }
+              if (chainResult.askUser) {
+                sendEvent('write_validation', { tool: toolName, valid: false, layer: 2, needsInput: true, askUser: chainResult.askUser, mcqType: chainResult.mcqType, steps: chainResult.stepsExecuted });
+                return {
+                  result: JSON.stringify({ error: chainResult.askUser, needsInput: true, missingField: chainResult.missingField }),
+                  success: false,
+                  attempts: 0,
+                  failureReason: chainResult.askUser,
+                };
+              }
+            }
+
+            // Use enriched args from chain
+            if (chainResult.passed && chainResult.enrichedArgs) {
+              args = chainResult.enrichedArgs as Record<string, unknown>;
+              if (chainResult.stepsExecuted.length > 0) {
+                sendEvent('write_validation', { tool: toolName, valid: true, layer: 2, steps: chainResult.stepsExecuted });
+              }
+            }
           }
         }
         args = injectScopeIds(args, schema, effectiveEntityId, mcpOrgId || '');
