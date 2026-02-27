@@ -1595,6 +1595,7 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
             followUpContext = `\n\n🔄 FOLLOW-UP CONTEXT: This is a short follow-up message to the previous conversation. The user is building on what was discussed before. Look at the conversation history carefully to understand what they are referring to. Use the same tools and data context from the previous turn. If the user says "show more", "details", "first one", "compare", etc., resolve these references from the conversation history.`;
           }
 
+          const bulkListContext = '';
           let systemPrompt = `${categoryPrompt}\n\n${NO_DATABASE_ID_EXPOSURE_RULE}\n\nAvailable tools: ${filteredTools.map(t => t.function.name).join(', ')}\n\n⚠️ TOOL USAGE RULE: When the user asks for "all" records (all invoices, all bills, all customers, etc.), you MUST call the appropriate list tool immediately. Never say you cannot list records — always use the available tool to fetch them. Only pass parameters that are explicitly defined in the tool's schema.${confirmationContext}${paginationContext}${bulkListContext}${detailLookupContext}${followUpContext}`;
 
           // For confirmations, include more history
@@ -1842,15 +1843,13 @@ ${NO_DATABASE_ID_EXPOSURE_RULE}`
           feedbackToolsUsed = mcpResults.filter(r => r.success).map(r => r.tool);
           feedbackStrategy = isConfirmation ? 'confirmation_retry' : toolSelection.strategy;
           feedbackResponse = responseText;
-        }
       }
-
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error ? error.stack : '';
-      console.error(`[api] Processing error: ${errMsg}`);
-      if (errStack) console.error(`[api] Stack: ${errStack}`);
-      const safeMessage = getUserFacingErrorMessage(error);
+    } catch (pErr) {
+      const errMsg = pErr instanceof Error ? pErr.message : String(pErr);
+      const errStack = pErr instanceof Error ? pErr.stack : '';
+      console.error("[api] Processing error: " + errMsg);
+      if (errStack) console.error("[api] Stack: " + errStack);
+      const safeMessage = getUserFacingErrorMessage(pErr);
       feedbackPath = "error";
       feedbackResponse = safeMessage;
       sendEvent('error', { message: safeMessage, code: 'PROCESSING_ERROR' });

@@ -82,7 +82,7 @@ async function readSSEForResult(
             reader.cancel();
             return parsed.result;
           }
-        } catch { /* keep reading */ }
+        } catch (_e) { /* keep reading */ }
       }
     }
   }
@@ -226,7 +226,7 @@ serve(async (req) => {
         const body = await req.json();
         entityId = body.entityId ?? "";
         orgId = body.orgId ?? "";
-      } catch { /* ignore */ }
+      } catch (_e) { /* ignore */ }
     }
 
     if (!entityId) entityId = Deno.env.get("MCP_HELLOBOOKS_ENTITY_ID") ?? "";

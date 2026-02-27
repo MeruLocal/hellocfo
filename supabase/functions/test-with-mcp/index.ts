@@ -50,7 +50,7 @@ function truncateResult(result: string, maxChars: number = MAX_TOOL_RESULT_CHARS
       }
       return JSON.stringify(truncated) + `\n[Truncated: showing ${truncated.length} of ${parsed.length} items]`;
     }
-  } catch {
+  } catch (_e) {
     // Not JSON, truncate as string
   }
   
