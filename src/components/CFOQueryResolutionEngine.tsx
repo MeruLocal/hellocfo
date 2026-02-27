@@ -3295,26 +3295,32 @@ function MCPToolsView({
         for (const org of entData.organizations) {
           if (org.Entities && Array.isArray(org.Entities)) {
             for (const entity of org.Entities) {
+              // Helper to safely extract string from value that might be {RefId, Name} object
+              const str = (v: any): string | undefined => {
+                if (!v) return undefined;
+                if (typeof v === 'string') return v;
+                if (typeof v === 'object' && v.Name) return v.Name;
+                return String(v);
+              };
               mappedEntities.push({
                 _id: entity._id || entity.id,
-                Name: entity.Name,
+                Name: str(entity.Name) || '',
                 OrganizationId: org._id,
-                OrgName: org.Name,
-                GSTIN: entity.GSTIN,
-                PAN: entity.PAN,
-                CIN: entity.CIN,
-                Currency: entity.Currency,
-                Country: entity.Country,
-                State: entity.State,
-                City: entity.City,
-                Address: entity.Address,
-                FiscalYearStart: entity.FiscalYearStart,
-                FiscalYearEnd: entity.FiscalYearEnd,
-                Industry: entity.Industry,
-                EntityType: entity.EntityType,
-                Status: entity.Status,
-                CreatedAt: entity.CreatedAt,
-                ...entity, // capture any additional fields
+                OrgName: str(org.Name) || '',
+                GSTIN: str(entity.GSTIN),
+                PAN: str(entity.PAN),
+                CIN: str(entity.CIN),
+                Currency: str(entity.Currency),
+                Country: str(entity.Country),
+                State: str(entity.State),
+                City: str(entity.City),
+                Address: str(entity.Address),
+                FiscalYearStart: str(entity.FiscalYearStart),
+                FiscalYearEnd: str(entity.FiscalYearEnd),
+                Industry: str(entity.Industry),
+                EntityType: str(entity.EntityType),
+                Status: str(entity.Status),
+                CreatedAt: str(entity.CreatedAt),
               });
             }
           }
