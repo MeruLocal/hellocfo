@@ -3142,27 +3142,28 @@ function MCPToolsView({
     setLoginLoading(true);
     setLoginError('');
     try {
-      const res = await fetch('https://devapi.hellobooks.ai/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      // Use edge function proxy to avoid CORS
+      const { data: loginData, error: loginErr } = await supabase.functions.invoke('hellobooks-proxy', {
+        body: { action: 'login', email, password },
       });
-      const data = await res.json();
-      if (!res.ok || !data.token) {
-        throw new Error(data.message || 'Login failed');
-      }
-      setAuthToken(data.token);
-      setUserName(data.user?.Name || email);
-      toast({ title: `Logged in as ${data.user?.Name || email}` });
 
-      // Fetch entities
+      if (loginErr) throw loginErr;
+      if (!loginData?.token) {
+        throw new Error(loginData?.message || loginData?.error || 'Login failed');
+      }
+
+      setAuthToken(loginData.token);
+      setUserName(loginData.user?.Name || email);
+      toast({ title: `Logged in as ${loginData.user?.Name || email}` });
+
+      // Fetch entities via proxy
       setEntitiesLoading(true);
-      const entRes = await fetch('https://devapi.hellobooks.ai/user/getallusers', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${data.token}`, 'Content-Type': 'application/json' },
+      const { data: entData, error: entErr } = await supabase.functions.invoke('hellobooks-proxy', {
+        body: { action: 'getallusers', token: loginData.token },
       });
-      const entData = await entRes.json();
-      if (entData.entities && Array.isArray(entData.entities)) {
+
+      if (entErr) throw entErr;
+      if (entData?.entities && Array.isArray(entData.entities)) {
         setEntities(entData.entities);
         toast({ title: `Found ${entData.entities.length} entities` });
       }
