@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS intents_name_unique_idx ON public.intents (lower(name));
