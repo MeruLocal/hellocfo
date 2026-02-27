@@ -3507,6 +3507,12 @@ export default function CFOQueryResolutionEngine() {
   const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
 
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
+  // Cache the last valid selected intent to prevent unmount/remount during refetch
+  const lastValidIntentRef = React.useRef<Intent | null>(null);
+  if (selectedIntent) {
+    lastValidIntentRef.current = selectedIntent;
+  }
+  const stableSelectedIntent = selectedIntent || (selectedIntentId ? lastValidIntentRef.current : null);
 
   // Loading state
   const isLoading = modulesLoading || intentsLoading || businessContextLoading || llmConfigLoading;
@@ -4046,11 +4052,12 @@ export default function CFOQueryResolutionEngine() {
     );
   }
 
-  // If an intent is selected, show the detail view
-  if (selectedIntentId && selectedIntent && businessContext) {
+  // If an intent is selected, show the detail view (use stableSelectedIntent to prevent unmount during refetch)
+  if (selectedIntentId && stableSelectedIntent && businessContext) {
     return (
       <IntentDetailScreen
-        intent={selectedIntent}
+        key={selectedIntentId}
+        intent={stableSelectedIntent}
         modules={modules}
         mcpTools={allMcpTools}
         enrichmentTypes={enrichmentTypes}
