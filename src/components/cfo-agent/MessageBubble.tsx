@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { User, Bot, ChevronDown, ChevronUp, Clock, Coins, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { ChatMessage } from './types';
 import { AgentThinkingPanel } from './AgentThinkingPanel';
@@ -93,8 +94,12 @@ export function MessageBubble({ message, onMCQSelect }: MessageBubbleProps) {
                 </div>
                 <span className="text-sm opacity-70">Thinking...</span>
               </div>
-            ) : (
+            ) : isUser ? (
               <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+            ) : (
+              <div className="prose prose-sm dark:prose-invert max-w-none text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_code]:text-xs [&_code]:bg-muted/50 [&_code]:px-1 [&_code]:rounded">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
             )}
           </div>
         )}

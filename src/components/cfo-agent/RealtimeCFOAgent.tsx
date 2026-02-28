@@ -1,5 +1,24 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+
+// Web Speech API type declarations
+interface SpeechRecognitionAPI extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onend: (() => void) | null;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognitionAPI;
+    webkitSpeechRecognition: new () => SpeechRecognitionAPI;
+  }
+}
 import { toast } from '@/hooks/use-toast';
 import { 
   Send, 
@@ -8,7 +27,12 @@ import {
   Sparkles,
   MessageSquare,
   Database,
-  Zap
+  Zap,
+  Mic,
+  MicOff,
+  Paperclip,
+  X,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,10 +81,14 @@ export function RealtimeCFOAgent({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
   const [mcqChainCount, setMcqChainCount] = useState(0);
+  const [isListening, setIsListening] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<{ file: File; fileId?: string; uploading: boolean } | null>(null);
   const MAX_MCQ_CHAIN = 2;
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionAPI | null>(null);
 
   // Entity ID for conversation scoping
   const entityId = 'default'; // Could be made configurable
@@ -486,7 +514,81 @@ export function RealtimeCFOAgent({
     setCurrentPhase('');
     setConversationId(crypto.randomUUID());
     setMcqChainCount(0);
+    setPendingAttachment(null);
   };
+
+  // Voice input handlers
+  const toggleVoiceInput = useCallback(() => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast({ title: 'Not supported', description: 'Voice input is not supported in this browser', variant: 'destructive' });
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-IN';
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      setInputValue(prev => prev ? `${prev} ${transcript}` : transcript);
+      setIsListening(false);
+    };
+
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [isListening]);
+
+  // File attachment handler
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Max 20MB
+    if (file.size > 20 * 1024 * 1024) {
+      toast({ title: 'File too large', description: 'Maximum file size is 20MB', variant: 'destructive' });
+      return;
+    }
+
+    setPendingAttachment({ file, uploading: true });
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('entityId', entityId);
+      formData.append('conversationId', conversationId);
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const res = await fetch(`${supabaseUrl}/functions/v1/upload-attachment`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      setPendingAttachment({ file, fileId: data.fileId, uploading: false });
+    } catch (err) {
+      toast({ title: 'Upload failed', description: 'Could not upload attachment', variant: 'destructive' });
+      setPendingAttachment(null);
+    }
+
+    // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [entityId, conversationId]);
 
   const handleSelectConversation = async (selectedConvId: string) => {
     try {
@@ -653,7 +755,44 @@ export function RealtimeCFOAgent({
 
       {/* Input Area */}
       <div className="p-4 border-t border-border">
+        {/* Pending attachment preview */}
+        {pendingAttachment && (
+          <div className="flex items-center gap-2 mb-2 px-3 py-2 bg-muted rounded-lg text-sm">
+            <FileText size={14} className="text-muted-foreground flex-shrink-0" />
+            <span className="truncate flex-1">{pendingAttachment.file.name}</span>
+            {pendingAttachment.uploading && (
+              <Loader2 size={14} className="animate-spin text-muted-foreground" />
+            )}
+            {!pendingAttachment.uploading && pendingAttachment.fileId && (
+              <span className="text-xs text-primary">Ready</span>
+            )}
+            <button
+              onClick={() => setPendingAttachment(null)}
+              className="p-0.5 hover:text-foreground text-muted-foreground"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <div className="flex gap-2">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept=".pdf,.csv,.xlsx,.xls,.jpg,.jpeg,.png,.doc,.docx"
+            onChange={handleFileSelect}
+          />
+          {/* Attachment button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessing || !!pendingAttachment?.uploading}
+            title="Attach file"
+          >
+            <Paperclip size={16} />
+          </Button>
           <Input
             ref={inputRef}
             value={inputValue}
@@ -663,6 +802,17 @@ export function RealtimeCFOAgent({
             disabled={isProcessing}
             className="flex-1"
           />
+          {/* Voice input button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleVoiceInput}
+            disabled={isProcessing}
+            title={isListening ? 'Stop listening' : 'Voice input'}
+            className={isListening ? 'text-destructive animate-pulse' : ''}
+          >
+            {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+          </Button>
           <Button 
             onClick={sendMessage}
             disabled={isProcessing || !inputValue.trim()}
