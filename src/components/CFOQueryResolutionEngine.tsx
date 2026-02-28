@@ -62,7 +62,7 @@ import {
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
   ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3,
-  CheckCircle2, LockKeyhole, LayoutGrid, List
+  CheckCircle2, LockKeyhole, LayoutGrid, List, AlertTriangle
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
@@ -1215,6 +1215,19 @@ function DataPipelineTab({
 }) {
   const pipeline = intent.resolutionFlow?.dataPipeline || [];
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
+  const [toolCheckResults, setToolCheckResults] = useState<Record<string, 'found' | 'missing'> | null>(null);
+
+  // Validate pipeline tools against MCP tools master
+  const checkPipelineTools = useCallback(() => {
+    const results: Record<string, 'found' | 'missing'> = {};
+    for (const node of pipeline) {
+      if (node.nodeType === 'api_call' && node.mcpTool) {
+        const exists = mcpTools.some(t => t.id === node.mcpTool || t.name === node.mcpTool);
+        results[node.mcpTool] = exists ? 'found' : 'missing';
+      }
+    }
+    setToolCheckResults(results);
+  }, [pipeline, mcpTools]);
 
   // Use the global MCP tool resolver
   const resolveMcpToolId = useCallback((generatedName: string | undefined): string => {
@@ -1342,12 +1355,44 @@ function DataPipelineTab({
           <h3 className="font-medium text-gray-900">Data Pipeline</h3>
           <p className="text-sm text-gray-500">Sequence of data fetching and computation steps</p>
         </div>
-        <AIBadge 
-          confidence={intent.aiConfidence} 
-          onRegenerate={onRegenerate}
-          isRegenerating={isRegenerating}
-        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={checkPipelineTools}
+            disabled={pipeline.filter(n => n.nodeType === 'api_call').length === 0}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 flex items-center gap-1.5"
+          >
+            <CheckCircle2 size={13} /> Check Tools
+          </button>
+          <AIBadge 
+            confidence={intent.aiConfidence} 
+            onRegenerate={onRegenerate}
+            isRegenerating={isRegenerating}
+          />
+        </div>
       </div>
+
+      {/* Tool Check Results Banner */}
+      {toolCheckResults && (() => {
+        const missingTools = Object.entries(toolCheckResults).filter(([, s]) => s === 'missing');
+        const total = Object.keys(toolCheckResults).length;
+        if (missingTools.length === 0) {
+          return (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs">
+              <CheckCircle2 size={14} /> All {total} pipeline tools found in MCP inventory
+            </div>
+          );
+        }
+        return (
+          <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs space-y-1">
+            <div className="font-medium text-red-700 flex items-center gap-1.5">
+              <AlertTriangle size={14} /> {missingTools.length} of {total} tools missing from MCP inventory
+            </div>
+            {missingTools.map(([name]) => (
+              <div key={name} className="text-red-600 font-mono ml-5">• {name}</div>
+            ))}
+          </div>
+        );
+      })()}
 
       {!intent.resolutionFlow ? (
         <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed">
@@ -1389,6 +1434,13 @@ function DataPipelineTab({
                         </span>
                         <ArrowRight size={14} className="text-gray-400" />
                         <code className="text-xs bg-white px-2 py-0.5 rounded shadow-sm">{node.outputVariable}</code>
+                        {toolCheckResults && node.nodeType === 'api_call' && node.mcpTool && (
+                          toolCheckResults[node.mcpTool] === 'found'
+                            ? <CheckCircle2 size={13} className="text-emerald-500" />
+                            : toolCheckResults[node.mcpTool] === 'missing'
+                            ? <AlertTriangle size={13} className="text-red-500" />
+                            : null
+                        )}
                       </div>
                       <div className="flex items-center gap-1">
                         <button
