@@ -1473,6 +1473,8 @@ function DataPipelineTab({
     // Auto-show if we have a saved AI suggestion
     return !!savedAiSuggestion?.summary;
   });
+  const [suggestionApplied, setSuggestionApplied] = useState(false);
+  const [suggestionCollapsed, setSuggestionCollapsed] = useState(true);
 
   // Listen for background suggestion completion + sync from DB on intent change
   useEffect(() => {
@@ -1573,7 +1575,7 @@ function DataPipelineTab({
     );
   }, [intent, pipeline, mcpTools]);
 
-  // Apply suggested pipeline (replace all)
+  // Apply suggested pipeline (replace all) — keep suggestion visible as archive
   const applyAllSuggested = useCallback(() => {
     if (!suggestedPipeline?.steps) return;
     const newPipeline: PipelineNode[] = suggestedPipeline.steps.map((step: any, i: number) => ({
@@ -1588,7 +1590,7 @@ function DataPipelineTab({
       description: step.description,
     }));
     updatePipeline(newPipeline);
-    setShowSuggestion(false);
+    setSuggestionApplied(true);
     toast({ title: 'Pipeline replaced with AI suggestion' });
   }, [suggestedPipeline, updatePipeline]);
 
@@ -1621,7 +1623,7 @@ function DataPipelineTab({
       })),
     ];
     updatePipeline(merged);
-    setShowSuggestion(false);
+    setSuggestionApplied(true);
     toast({ title: `Merged ${newSteps.length} new steps into pipeline` });
   }, [suggestedPipeline, pipeline, updatePipeline]);
 
@@ -1804,12 +1806,21 @@ function DataPipelineTab({
 
       {/* AI Suggested Pipeline Panel */}
       {showSuggestion && suggestedPipeline && (
-        <div className="rounded-xl border-2 border-violet-200 overflow-hidden">
+        <div className={`rounded-xl border-2 overflow-hidden ${suggestionApplied ? 'border-emerald-200' : 'border-violet-200'}`}>
           {/* Header */}
-           <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-3 flex items-center justify-between">
+           <div className={`px-4 py-3 flex items-center justify-between ${
+             suggestionApplied 
+               ? 'bg-gradient-to-r from-emerald-500 to-teal-600' 
+               : 'bg-gradient-to-r from-violet-500 to-purple-600'
+           }`}>
             <div className="flex items-center gap-2 text-white">
               <Sparkles size={16} />
               <span className="font-semibold text-sm">AI Ideal Pipeline</span>
+              {suggestionApplied && (
+                <span className="text-xs bg-white/30 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                  <CheckCircle2 size={10} /> Applied
+                </span>
+              )}
               <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{suggestedPipeline.steps?.length || 0} steps</span>
               {(() => {
                 const apiSteps = (suggestedPipeline.steps || []).filter((s: any) => s.nodeType === 'api_call');
@@ -1825,21 +1836,31 @@ function DataPipelineTab({
               })()}
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={recheckMcpToolMatch} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1" title="Re-check tool availability against current MCP inventory">
-                <RefreshCw size={12} /> Recheck Tools
-              </button>
-              <button onClick={applyAllSuggested} className="px-3 py-1 text-xs font-medium bg-white text-violet-700 rounded-lg hover:bg-violet-50 flex items-center gap-1">
-                <Check size={12} /> Apply All
-              </button>
-              <button onClick={mergeMissingSuggested} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1">
-                <Plus size={12} /> Merge Missing
-              </button>
+              {suggestionApplied ? (
+                <button onClick={() => setSuggestionCollapsed(!suggestionCollapsed)} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1">
+                  {suggestionCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                  {suggestionCollapsed ? 'Show Details' : 'Collapse'}
+                </button>
+              ) : (
+                <>
+                  <button onClick={recheckMcpToolMatch} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1" title="Re-check tool availability against current MCP inventory">
+                    <RefreshCw size={12} /> Recheck Tools
+                  </button>
+                  <button onClick={applyAllSuggested} className="px-3 py-1 text-xs font-medium bg-white text-violet-700 rounded-lg hover:bg-violet-50 flex items-center gap-1">
+                    <Check size={12} /> Apply All
+                  </button>
+                  <button onClick={mergeMissingSuggested} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1">
+                    <Plus size={12} /> Merge Missing
+                  </button>
+                </>
+              )}
               <button onClick={() => setShowSuggestion(false)} className="p-1 text-white/70 hover:text-white">
                 <X size={14} />
               </button>
             </div>
           </div>
 
+          {(!suggestionApplied || !suggestionCollapsed) && (
           <div className="p-4 bg-violet-50/50 space-y-4">
             {/* Summary */}
             {suggestedPipeline.summary && (
@@ -1850,12 +1871,15 @@ function DataPipelineTab({
             {suggestedPipeline.personaRelevance && (
               <div className="flex flex-wrap gap-2">
                 {personaConfig.map(p => {
-                  const score = suggestedPipeline.personaRelevance?.[p.key] || 0;
+                  const score = suggestedPipeline.personaRelevance?.[p.key] ?? 0;
                   return (
-                    <div key={p.key} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${p.color}`}>
-                      <span>{p.icon}</span>
-                      <span>{p.label}</span>
-                      <span className="font-bold">{score}%</span>
+                    <div key={p.key} className="flex items-center gap-1.5 bg-white rounded-lg px-2.5 py-1.5 border border-violet-100">
+                      <span className="text-sm">{p.icon}</span>
+                      <span className="text-xs font-medium text-violet-900">{p.label}</span>
+                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                        score >= 80 ? 'bg-emerald-100 text-emerald-700' :
+                        score >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'
+                      }`}>{score}%</span>
                     </div>
                   );
                 })}
@@ -1923,6 +1947,7 @@ function DataPipelineTab({
               })}
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -2604,6 +2629,12 @@ function IntentListView({
               const isConfigured = intent.generatedBy === 'ai' || intent.generatedBy === 'manual';
               const isSelected = selectedIntentIds.has(intent.id);
               
+              // Check AI suggestion & tool gaps
+              const aiSugg = (intent.resolutionFlow as any)?.aiSuggestion;
+              const pipelineNodes = intent.resolutionFlow?.dataPipeline || [];
+              const apiTools = pipelineNodes.filter(n => n.nodeType === 'api_call' && n.mcpTool);
+              const missingToolCount = apiTools.filter(n => !mcpTools.some(t => t.id === n.mcpTool || t.name === n.mcpTool)).length;
+              
               return (
                 <div
                   key={intent.id}
@@ -2620,7 +2651,14 @@ function IntentListView({
                     />
                   </div>
                   <div className="col-span-3">
-                    <div className="font-medium text-gray-900">{formatIntentName(intent.name)}</div>
+                    <div className="font-medium text-gray-900 flex items-center gap-1.5">
+                      {formatIntentName(intent.name)}
+                      {aiSugg?.summary && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium" title="AI pipeline suggestion available">
+                          ✨ AI
+                        </span>
+                      )}
+                    </div>
                     <div className="text-sm text-gray-500 truncate">{intent.description}</div>
                   </div>
                   <div className="col-span-2">
@@ -2636,7 +2674,7 @@ function IntentListView({
                       {intent.trainingPhrases.length}
                     </span>
                   </div>
-                  <div className="col-span-1 text-center">
+                  <div className="col-span-1 text-center space-y-1">
                     {isConfigured ? (
                       <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
                         ✅ {intent.aiConfidence ? `${Math.round(intent.aiConfidence * 100)}%` : 'Ready'}
@@ -2645,6 +2683,20 @@ function IntentListView({
                       <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
                         ⏳ Pending
                       </span>
+                    )}
+                    {apiTools.length > 0 && missingToolCount > 0 && (
+                      <div className="flex items-center justify-center gap-0.5">
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[10px] font-medium" title={`${missingToolCount} pipeline tool(s) not found in MCP inventory`}>
+                          <AlertTriangle size={10} /> {missingToolCount} missing
+                        </span>
+                      </div>
+                    )}
+                    {apiTools.length > 0 && missingToolCount === 0 && (
+                      <div className="flex items-center justify-center">
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">
+                          <CheckCircle2 size={10} /> {apiTools.length} tools ✓
+                        </span>
+                      </div>
                     )}
                   </div>
                   <div className="col-span-2 flex justify-end gap-1">
@@ -3047,7 +3099,7 @@ function IntentDetailScreen({
     </div>
   );
 }
-
+  
 
 function MCPToolsView({ 
   tools,
