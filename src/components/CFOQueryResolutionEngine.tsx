@@ -2906,8 +2906,10 @@ function IntentDetailScreen({
     try {
       const updates = await onRegenerate(intent.id, section);
       if (updates) {
-        setIntent(prev => ({ ...prev, ...updates }));
-        setHasUnsavedChanges(true);
+        const updatedIntent = { ...intent, ...updates };
+        setIntent(updatedIntent);
+        // Auto-save AI-generated content immediately
+        onSave(updatedIntent);
       }
     } finally {
       setIsRegenerating(false);
