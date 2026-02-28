@@ -579,8 +579,10 @@ const processQueue = async () => {
       } else {
         pendingSuggestions.set(item.intentId, { status: 'done', data, intentId: item.intentId, intentName: item.intentName });
         suggestionQueue.completed++;
-        sonnerToast.success(`AI pipeline ready for "${item.intentName}"`, {
-          description: `${data.steps?.length || 0} steps suggested`,
+        // Auto-save to DB
+        await autoSaveAISuggestion(item.intentId, data);
+        sonnerToast.success(`AI pipeline saved for "${item.intentName}"`, {
+          description: `${data.steps?.length || 0} steps suggested & auto-saved`,
           duration: 8000,
           action: item.onNavigate ? { label: 'View', onClick: () => item.onNavigate!(item.intentId) } : undefined,
         });
@@ -638,8 +640,10 @@ const fireSuggestionInBackground = (
       sonnerToast.error('Pipeline suggestion failed', { description: errMsg });
     } else {
       pendingSuggestions.set(intentId, { status: 'done', data, intentId, intentName });
-      sonnerToast.success(`AI pipeline ready for "${intentName}"`, {
-        description: `${data.steps?.length || 0} steps suggested`,
+      // Auto-save to DB
+      autoSaveAISuggestion(intentId, data);
+      sonnerToast.success(`AI pipeline saved for "${intentName}"`, {
+        description: `${data.steps?.length || 0} steps suggested & auto-saved`,
         duration: 10000,
         action: onNavigate ? {
           label: 'View',
@@ -650,6 +654,83 @@ const fireSuggestionInBackground = (
     const listener = suggestionListeners.get(intentId);
     if (listener) listener(pendingSuggestions.get(intentId)!);
   });
+};
+
+// Auto-save AI suggestion: merge suggested steps into intent's pipeline and persist to DB
+const autoSaveAISuggestion = async (intentId: string, aiData: any) => {
+  try {
+    if (!aiData?.steps || aiData.steps.length === 0) return;
+
+    // Fetch current intent data
+    const { data: intentRow, error: fetchErr } = await supabase
+      .from('intents')
+      .select('resolution_flow')
+      .eq('id', intentId)
+      .single();
+    if (fetchErr || !intentRow) {
+      console.error('Auto-save: failed to fetch intent', fetchErr);
+      return;
+    }
+
+    const currentFlow = (intentRow.resolution_flow as any) || {};
+    const currentPipeline: any[] = currentFlow.dataPipeline || [];
+    const existingTools = new Set(currentPipeline.filter((n: any) => n.mcpTool).map((n: any) => n.mcpTool));
+    const existingVars = new Set(currentPipeline.map((n: any) => n.outputVariable));
+
+    // Merge only new steps
+    const newSteps = aiData.steps.filter((step: any) => {
+      if (step.nodeType === 'api_call' && step.mcpTool && existingTools.has(step.mcpTool)) return false;
+      if (existingVars.has(step.outputVariable)) return false;
+      return true;
+    });
+
+    const mergedPipeline = [
+      ...currentPipeline,
+      ...newSteps.map((step: any, i: number) => ({
+        nodeId: `ai_auto_${Date.now()}_${i}`,
+        nodeType: step.nodeType,
+        sequence: currentPipeline.length + i + 1,
+        mcpTool: step.nodeType === 'api_call' ? step.mcpTool : undefined,
+        parameters: [],
+        formula: step.nodeType === 'computation' ? (step.formula || '') : undefined,
+        condition: step.nodeType === 'conditional' ? (step.condition || '') : undefined,
+        outputVariable: step.outputVariable,
+        description: step.description,
+      })),
+    ];
+
+    // Save AI metadata (persona relevance, summary, gaps) alongside the pipeline
+    const updatedFlow = {
+      ...currentFlow,
+      dataPipeline: mergedPipeline,
+      aiSuggestion: {
+        summary: aiData.summary || '',
+        personaRelevance: aiData.personaRelevance || {},
+        suggestedAt: new Date().toISOString(),
+        stepsAdded: newSteps.length,
+        gaps: (aiData.steps || [])
+          .filter((s: any) => s.toolAvailable === false)
+          .map((s: any) => ({
+            tool: s.mcpTool,
+            description: s.description,
+            fallback: s.fallbackSuggestion,
+          })),
+      },
+    };
+
+    const { error: updateErr } = await supabase
+      .from('intents')
+      .update({ resolution_flow: updatedFlow })
+      .eq('id', intentId);
+
+    if (updateErr) {
+      console.error('Auto-save: failed to update intent', updateErr);
+    } else {
+      console.log(`✅ Auto-saved AI pipeline for intent ${intentId}: ${newSteps.length} new steps merged, ${updatedFlow.aiSuggestion.gaps.length} gaps recorded`);
+    }
+  } catch (e) {
+    console.error('Auto-save: unexpected error', e);
+  }
 };
 
 // Global navigate callback — set by the main component so toast "View" works
