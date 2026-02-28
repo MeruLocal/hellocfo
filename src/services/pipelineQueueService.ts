@@ -75,11 +75,13 @@ function saveToStorage() {
   try {
     const serializable = {
       items: queueState.items,
+      processing: queueState.processing,
       current: queueState.current,
       total: queueState.total,
       completed: queueState.completed,
       failed: queueState.failed,
       cancelled: queueState.cancelled,
+      currentIntentName: queueState.currentIntentName,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
 
@@ -97,11 +99,20 @@ function loadFromStorage() {
       const saved = JSON.parse(raw);
       if (saved.items?.length > 0 && !saved.cancelled) {
         queueState.items = saved.items;
+        queueState.processing = false; // will be set to true when processQueue starts
         queueState.current = saved.current || 0;
         queueState.total = saved.total || saved.items.length;
         queueState.completed = saved.completed || 0;
         queueState.failed = saved.failed || 0;
+        queueState.currentIntentName = saved.currentIntentName || '';
         queueState.cancelled = false;
+      } else if (saved.processing && saved.total > 0 && (saved.completed + saved.failed) < saved.total) {
+        // Queue was processing when page was closed — restore progress state
+        queueState.total = saved.total;
+        queueState.completed = saved.completed || 0;
+        queueState.failed = saved.failed || 0;
+        queueState.current = saved.current || 0;
+        queueState.currentIntentName = saved.currentIntentName || '';
       }
     }
 
@@ -216,8 +227,11 @@ function getBackoffDelay(retryCount: number): number {
 
 // ─── Core Queue Processor ────────────────────────────────────────
 
+let _processingLock = false;
+
 async function processQueue() {
-  if (queueState.processing) return;
+  if (_processingLock) return; // prevent re-entrance
+  _processingLock = true;
   queueState.processing = true;
   queueState.cancelled = false;
   notifyListeners();
@@ -300,15 +314,11 @@ async function processQueue() {
     }
   }
 
+  _processingLock = false;
   queueState.processing = false;
   queueState.currentIntentName = '';
   notifyListeners();
-
-  if (queueState.items.length === 0) {
-    clearStorage();
-  } else {
-    saveToStorage();
-  }
+  saveToStorage();
 }
 
 // ─── Public API ──────────────────────────────────────────────────
@@ -324,7 +334,12 @@ export function initQueue(onNavigate?: (intentId: string) => void) {
 }
 
 export function enqueueItems(items: Array<{ intentId: string; intentName: string; body: any }>) {
-  resetQueueStats();
+  // Reset stats inline (don't call resetQueueStats which notifies with total=0)
+  queueState.current = 0;
+  queueState.completed = 0;
+  queueState.failed = 0;
+  queueState.cancelled = false;
+
   const queueItems: QueueItem[] = items.map(i => ({
     ...i,
     retryCount: 0,
@@ -332,6 +347,8 @@ export function enqueueItems(items: Array<{ intentId: string; intentName: string
   }));
   queueState.items.push(...queueItems);
   queueState.total = queueItems.length;
+  // Immediately mark as processing so UI shows progress bar right away
+  queueState.processing = true;
   notifyListeners();
   saveToStorage();
   processQueue();
