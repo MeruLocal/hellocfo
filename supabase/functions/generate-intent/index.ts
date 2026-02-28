@@ -923,6 +923,68 @@ serve(async (req) => {
     let totalUsage: UsageStats = { inputTokens: 0, outputTokens: 0, totalTokens: 0, latencyMs: 0 };
     let completedSections: string[] = [];
 
+    // ── AUTO-CLASSIFY MODULE / SUB-MODULE ──────────────────────────────
+    // If moduleName is missing or generic, ask AI to suggest the best module & sub-module
+    const needsModuleClassification = !moduleName || moduleName === '' || moduleName === 'undefined';
+    let effectiveModuleName = moduleName || 'General';
+    let effectiveSubModuleName = subModuleName || 'General';
+
+    if (needsModuleClassification && (section === 'all' || section === 'training')) {
+      console.log('[MODULE CLASSIFY] Auto-detecting module & sub-module...');
+
+      // Fetch available modules from DB
+      let moduleList: Array<{ id: string; name: string; sub_modules: any }> = [];
+      try {
+        const { data: modulesData } = await supabase
+          .from('modules')
+          .select('id, name, sub_modules')
+          .eq('is_active', true)
+          .order('sort_order');
+        if (modulesData) moduleList = modulesData;
+      } catch { /* fallback to empty */ }
+
+      const moduleListStr = moduleList.map(m => {
+        const subs = Array.isArray(m.sub_modules) 
+          ? m.sub_modules.map((s: any) => `  - ${s.id}: ${s.name}`).join('\n')
+          : '  (no sub-modules)';
+        return `${m.id}: ${m.name}\n${subs}`;
+      }).join('\n\n');
+
+      const classifyPrompt = `Given this CFO chatbot intent, classify it into the BEST matching module and sub-module.
+
+INTENT NAME: ${intentName}
+DESCRIPTION: ${description || 'Not provided'}
+
+AVAILABLE MODULES AND SUB-MODULES:
+${moduleListStr}
+
+OUTPUT: Return ONLY a JSON object:
+{"moduleId": "exact_module_id", "moduleName": "Module Name", "subModuleId": "exact_sub_module_id", "subModuleName": "Sub-Module Name"}
+
+Pick the MOST specific match. If unsure, choose the closest match.`;
+
+      try {
+        const { content: classifyContent, usage: classifyUsage } = await callAI(classifyPrompt, config, businessContext, 'module classification');
+        totalUsage.inputTokens += classifyUsage.inputTokens;
+        totalUsage.outputTokens += classifyUsage.outputTokens;
+        totalUsage.totalTokens += classifyUsage.totalTokens;
+        totalUsage.latencyMs += classifyUsage.latencyMs;
+
+        const classification = parseJSON<{ moduleId: string; moduleName: string; subModuleId: string; subModuleName: string }>(classifyContent, 'module classification');
+        if (classification.moduleId) {
+          result.suggestedModuleId = classification.moduleId;
+          result.suggestedModuleName = classification.moduleName;
+          result.suggestedSubModuleId = classification.subModuleId;
+          result.suggestedSubModuleName = classification.subModuleName;
+          effectiveModuleName = classification.moduleName || effectiveModuleName;
+          effectiveSubModuleName = classification.subModuleName || effectiveSubModuleName;
+          console.log(`[MODULE CLASSIFY] Classified → ${classification.moduleId}/${classification.subModuleId}`);
+        }
+      } catch (classifyErr) {
+        console.warn('[MODULE CLASSIFY] Classification failed, continuing with defaults:', classifyErr);
+      }
+    }
+
     // Cascade logic: when generating training phrases, also generate downstream sections
     // (entities, pipeline, enrichments, response) so the intent is fully configured
     const shouldCascade = section === 'training' || section === 'entities' || section === 'pipeline';
@@ -931,7 +993,7 @@ serve(async (req) => {
     if (section === 'training' || section === 'all') {
       console.log('[SECTION 1/5] Generating training phrases...');
       const prompt = generateTrainingPhrasesPrompt(
-        intentName, moduleName, subModuleName, description, phraseCount, existingPhrases, businessContext
+        intentName, effectiveModuleName, effectiveSubModuleName, description, phraseCount, existingPhrases, businessContext
       );
       const { content, usage } = await callAI(prompt, config, businessContext, 'training phrases');
       result.trainingPhrases = parseJSON<string[]>(content, 'training phrases');
@@ -947,7 +1009,7 @@ serve(async (req) => {
     if (section === 'entities' || section === 'all' || (shouldCascade && section === 'training')) {
       console.log('[SECTION 2/5] Generating entities...');
       const phrases = result.trainingPhrases || existingPhrases || [];
-      const prompt = generateEntitiesPrompt(intentName, moduleName, phrases, businessContext);
+      const prompt = generateEntitiesPrompt(intentName, effectiveModuleName, phrases, businessContext);
       const { content, usage } = await callAI(prompt, config, businessContext, 'entities');
       result.entities = parseJSON<any[]>(content, 'entities');
       totalUsage.inputTokens += usage.inputTokens;
@@ -962,7 +1024,7 @@ serve(async (req) => {
     if (section === 'pipeline' || section === 'all' || (shouldCascade && (section === 'training' || section === 'entities'))) {
       console.log('[SECTION 3/5] Generating data pipeline...');
       const entities = result.entities || existingEntities || [];
-      const prompt = generatePipelinePrompt(intentName, moduleName, entities, mcpTools);
+      const prompt = generatePipelinePrompt(intentName, effectiveModuleName, entities, mcpTools);
       const { content, usage } = await callAI(prompt, config, businessContext, 'pipeline');
 
       totalUsage.inputTokens += usage.inputTokens;
@@ -1032,7 +1094,7 @@ Invalid output to fix:\n${content}`;
         console.warn('[SECTION 4/5] Could not fetch enrichment types, using defaults');
       }
       
-      const prompt = generateEnrichmentsPrompt(intentName, moduleName, pipeline, availableEnrichmentTypes);
+      const prompt = generateEnrichmentsPrompt(intentName, effectiveModuleName, pipeline, availableEnrichmentTypes);
       const { content, usage } = await callAI(prompt, config, businessContext, 'enrichments');
       result.enrichments = parseJSON<any[]>(content, 'enrichments');
       totalUsage.inputTokens += usage.inputTokens;
@@ -1048,7 +1110,7 @@ Invalid output to fix:\n${content}`;
       console.log('[SECTION 5/5] Generating response template...');
       const pipeline = result.dataPipeline || existingPipeline || [];
       const enrichments = result.enrichments || existingEnrichments || [];
-      const prompt = generateResponsePrompt(intentName, moduleName, subModuleName, description, pipeline, enrichments, businessContext);
+      const prompt = generateResponsePrompt(intentName, effectiveModuleName, effectiveSubModuleName, description, pipeline, enrichments, businessContext);
       const { content, usage } = await callAI(prompt, config, businessContext, 'response');
       result.responseConfig = parseJSON<any>(content, 'response');
       totalUsage.inputTokens += usage.inputTokens;
