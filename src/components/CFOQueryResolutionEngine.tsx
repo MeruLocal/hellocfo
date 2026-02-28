@@ -79,6 +79,16 @@ const formatIntentName = (name: string): string => {
   return name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
 };
 
+// Helper to format snake_case IDs to readable labels
+const formatIdLabel = (value?: string | null): string => {
+  if (!value) return '-';
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
 // PipelineParameter is only used locally
 interface PipelineParameter {
   name: string;
@@ -2663,11 +2673,11 @@ function IntentListView({
                   </div>
                   <div className="col-span-2">
                     <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-sm">
-                      {module?.icon} {module?.name}
+                      {module ? `${module.icon} ${module.name}` : formatIdLabel(intent.moduleId)}
                     </span>
                   </div>
                   <div className="col-span-2 text-sm text-gray-600">
-                    {subModule?.name || '-'}
+                    {subModule?.name || formatIdLabel(intent.subModuleId)}
                   </div>
                   <div className="col-span-1 text-center">
                     <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-sm">
