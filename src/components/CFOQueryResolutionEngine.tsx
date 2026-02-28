@@ -2285,6 +2285,28 @@ function IntentListView({
   const [selectedIntentIds, setSelectedIntentIds] = useState<Set<string>>(new Set());
   const [bulkGenProgress, setBulkGenProgress] = useState({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
   const [queueProgress, setQueueProgress] = useState({ ...suggestionQueue });
+  const [intentUsageCounts, setIntentUsageCounts] = useState<Record<string, number>>({});
+
+  // Fetch intent usage counts from query_routing_logs
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('query_routing_logs')
+          .select('intent_matched');
+        if (error) throw error;
+        const counts: Record<string, number> = {};
+        for (const row of data || []) {
+          if (row.intent_matched) {
+            counts[row.intent_matched] = (counts[row.intent_matched] || 0) + 1;
+          }
+        }
+        setIntentUsageCounts(counts);
+      } catch (e) {
+        console.error('Failed to fetch intent usage counts:', e);
+      }
+    })();
+  }, []);
 
   // Subscribe to queue state changes
   useEffect(() => {
@@ -2621,8 +2643,9 @@ function IntentListView({
           <div className="col-span-2">Module</div>
           <div className="col-span-2">Sub-Module</div>
           <div className="col-span-1 text-center">Phrases</div>
+          <div className="col-span-1 text-center">Usage</div>
           <div className="col-span-1 text-center">Status</div>
-          <div className="col-span-2 text-right">Actions</div>
+          <div className="col-span-1 text-right">Actions</div>
         </div>
 
         {intents.length === 0 ? (
@@ -2684,6 +2707,15 @@ function IntentListView({
                       {intent.trainingPhrases.length}
                     </span>
                   </div>
+                  <div className="col-span-1 text-center">
+                    <span className={`px-2 py-1 rounded text-sm ${
+                      (intentUsageCounts[intent.name] || 0) > 0
+                        ? 'bg-orange-50 text-orange-700 font-medium'
+                        : 'text-gray-400'
+                    }`}>
+                      {intentUsageCounts[intent.name] || 0}
+                    </span>
+                  </div>
                   <div className="col-span-1 text-center space-y-1">
                     {isConfigured ? (
                       <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
@@ -2709,7 +2741,7 @@ function IntentListView({
                       </div>
                     )}
                   </div>
-                  <div className="col-span-2 flex justify-end gap-1">
+                  <div className="col-span-1 flex justify-end gap-1">
                     {!isConfigured && (
                       <button
                         onClick={(e) => {
