@@ -513,238 +513,22 @@ const buildAliasLookup = (): Record<string, string> => {
 const ALIAS_TO_TOOL = buildAliasLookup();
 
 // ============================================================================
-// MODULE-LEVEL BACKGROUND SUGGESTION STORE & QUEUE
-// Persists across component mount/unmount so navigation doesn't cancel the call
+// BACKGROUND SUGGESTION QUEUE — delegated to pipelineQueueService
 // ============================================================================
-interface PendingSuggestion {
-  status: 'pending' | 'done' | 'error';
-  data?: any;
-  error?: string;
-  intentId: string;
-  intentName: string;
-}
-
-const pendingSuggestions = new Map<string, PendingSuggestion>();
-const suggestionListeners = new Map<string, (result: PendingSuggestion) => void>();
-
-// --- Sequential Queue for bulk suggestions ---
-interface QueueItem {
-  intentId: string;
-  intentName: string;
-  body: any;
-  onNavigate?: (intentId: string) => void;
-}
-
-interface SuggestionQueueState {
-  items: QueueItem[];
-  processing: boolean;
-  current: number;
-  total: number;
-  completed: number;
-  failed: number;
-  currentIntentName: string;
-  cancelled: boolean;
-}
-
-const suggestionQueue: SuggestionQueueState = {
-  items: [],
-  processing: false,
-  current: 0,
-  total: 0,
-  completed: 0,
-  failed: 0,
-  currentIntentName: '',
-  cancelled: false,
-};
-
-const queueStateListeners = new Set<() => void>();
-const notifyQueueListeners = () => queueStateListeners.forEach(fn => fn());
-
-const processQueue = async () => {
-  if (suggestionQueue.processing) return;
-  suggestionQueue.processing = true;
-  suggestionQueue.cancelled = false;
-  notifyQueueListeners();
-
-  while (suggestionQueue.items.length > 0 && !suggestionQueue.cancelled) {
-    const item = suggestionQueue.items.shift()!;
-    suggestionQueue.current++;
-    suggestionQueue.currentIntentName = item.intentName;
-    notifyQueueListeners();
-
-    if (pendingSuggestions.get(item.intentId)?.status === 'done') {
-      suggestionQueue.completed++;
-      notifyQueueListeners();
-      continue;
-    }
-
-    pendingSuggestions.set(item.intentId, { status: 'pending', intentId: item.intentId, intentName: item.intentName });
-
-    try {
-      const { data, error } = await supabase.functions.invoke('suggest-ideal-pipeline', { body: item.body });
-      if (error || data?.error) {
-        const errMsg = error?.message || data?.error || 'Unknown error';
-        pendingSuggestions.set(item.intentId, { status: 'error', error: errMsg, intentId: item.intentId, intentName: item.intentName });
-        suggestionQueue.failed++;
-      } else {
-        pendingSuggestions.set(item.intentId, { status: 'done', data, intentId: item.intentId, intentName: item.intentName });
-        suggestionQueue.completed++;
-        // Auto-save to DB
-        await autoSaveAISuggestion(item.intentId, data);
-        sonnerToast.success(`AI pipeline saved for "${item.intentName}"`, {
-          description: `${data.steps?.length || 0} steps suggested & auto-saved`,
-          duration: 8000,
-          action: item.onNavigate ? { label: 'View', onClick: () => item.onNavigate!(item.intentId) } : undefined,
-        });
-      }
-    } catch (_e) {
-      pendingSuggestions.set(item.intentId, { status: 'error', error: 'Network error', intentId: item.intentId, intentName: item.intentName });
-      suggestionQueue.failed++;
-    }
-
-    const listener = suggestionListeners.get(item.intentId);
-    if (listener) listener(pendingSuggestions.get(item.intentId)!);
-    notifyQueueListeners();
-
-    // 2s pause between requests to avoid rate limits
-    if (suggestionQueue.items.length > 0 && !suggestionQueue.cancelled) {
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
-
-  suggestionQueue.processing = false;
-  suggestionQueue.currentIntentName = '';
-  notifyQueueListeners();
-};
-
-const cancelQueue = () => {
-  suggestionQueue.cancelled = true;
-  suggestionQueue.items.length = 0;
-  notifyQueueListeners();
-};
-
-const resetQueueStats = () => {
-  suggestionQueue.current = 0;
-  suggestionQueue.total = 0;
-  suggestionQueue.completed = 0;
-  suggestionQueue.failed = 0;
-  suggestionQueue.cancelled = false;
-  notifyQueueListeners();
-};
-
-// Single-intent fire (used by individual intent suggest button)
-const fireSuggestionInBackground = (
-  intentId: string,
-  intentName: string,
-  body: any,
-  onNavigate?: (intentId: string) => void
-) => {
-  if (pendingSuggestions.get(intentId)?.status === 'pending') return;
-  
-  pendingSuggestions.set(intentId, { status: 'pending', intentId, intentName });
-
-  supabase.functions.invoke('suggest-ideal-pipeline', { body }).then(({ data, error }) => {
-    if (error || data?.error) {
-      const errMsg = error?.message || data?.error || 'Unknown error';
-      pendingSuggestions.set(intentId, { status: 'error', error: errMsg, intentId, intentName });
-      sonnerToast.error('Pipeline suggestion failed', { description: errMsg });
-    } else {
-      pendingSuggestions.set(intentId, { status: 'done', data, intentId, intentName });
-      // Auto-save to DB
-      autoSaveAISuggestion(intentId, data);
-      sonnerToast.success(`AI pipeline saved for "${intentName}"`, {
-        description: `${data.steps?.length || 0} steps suggested & auto-saved`,
-        duration: 10000,
-        action: onNavigate ? {
-          label: 'View',
-          onClick: () => onNavigate(intentId),
-        } : undefined,
-      });
-    }
-    const listener = suggestionListeners.get(intentId);
-    if (listener) listener(pendingSuggestions.get(intentId)!);
-  });
-};
-
-// Auto-save AI suggestion: merge suggested steps into intent's pipeline and persist to DB
-const autoSaveAISuggestion = async (intentId: string, aiData: any) => {
-  try {
-    if (!aiData?.steps || aiData.steps.length === 0) return;
-
-    // Fetch current intent data
-    const { data: intentRow, error: fetchErr } = await supabase
-      .from('intents')
-      .select('resolution_flow')
-      .eq('id', intentId)
-      .single();
-    if (fetchErr || !intentRow) {
-      console.error('Auto-save: failed to fetch intent', fetchErr);
-      return;
-    }
-
-    const currentFlow = (intentRow.resolution_flow as any) || {};
-    const currentPipeline: any[] = currentFlow.dataPipeline || [];
-    const existingTools = new Set(currentPipeline.filter((n: any) => n.mcpTool).map((n: any) => n.mcpTool));
-    const existingVars = new Set(currentPipeline.map((n: any) => n.outputVariable));
-
-    // Merge only new steps
-    const newSteps = aiData.steps.filter((step: any) => {
-      if (step.nodeType === 'api_call' && step.mcpTool && existingTools.has(step.mcpTool)) return false;
-      if (existingVars.has(step.outputVariable)) return false;
-      return true;
-    });
-
-    const mergedPipeline = [
-      ...currentPipeline,
-      ...newSteps.map((step: any, i: number) => ({
-        nodeId: `ai_auto_${Date.now()}_${i}`,
-        nodeType: step.nodeType,
-        sequence: currentPipeline.length + i + 1,
-        mcpTool: step.nodeType === 'api_call' ? step.mcpTool : undefined,
-        parameters: [],
-        formula: step.nodeType === 'computation' ? (step.formula || '') : undefined,
-        condition: step.nodeType === 'conditional' ? (step.condition || '') : undefined,
-        outputVariable: step.outputVariable,
-        description: step.description,
-      })),
-    ];
-
-    // Save AI metadata (persona relevance, summary, gaps) alongside the pipeline
-    const updatedFlow = {
-      ...currentFlow,
-      dataPipeline: mergedPipeline,
-      aiSuggestion: {
-        summary: aiData.summary || '',
-        personaRelevance: aiData.personaRelevance || {},
-        suggestedAt: new Date().toISOString(),
-        stepsAdded: newSteps.length,
-        steps: aiData.steps || [],
-        gaps: (aiData.steps || [])
-          .filter((s: any) => s.toolAvailable === false)
-          .map((s: any) => ({
-            toolName: s.mcpTool,
-            description: s.description,
-            fallback: s.fallbackSuggestion,
-          })),
-      },
-    };
-
-    const { error: updateErr } = await supabase
-      .from('intents')
-      .update({ resolution_flow: updatedFlow })
-      .eq('id', intentId);
-
-    if (updateErr) {
-      console.error('Auto-save: failed to update intent', updateErr);
-    } else {
-      console.log(`✅ Auto-saved AI pipeline for intent ${intentId}: ${newSteps.length} new steps merged, ${updatedFlow.aiSuggestion.gaps.length} gaps recorded`);
-      // Trigger UI refresh so the saved data is visible
-      if (globalRefreshIntents) globalRefreshIntents();
-    }
-  } catch (e) {
-    console.error('Auto-save: unexpected error', e);
-  }
-};
+import {
+  initQueue,
+  enqueueItems,
+  fireSingleSuggestion,
+  cancelQueue,
+  resetQueueStats,
+  getQueueState,
+  getPendingSuggestion,
+  subscribeToQueue,
+  subscribeToSuggestion,
+  setRefreshCallback,
+  type PendingSuggestion,
+  type QueueState,
+} from '@/services/pipelineQueueService';
 
 // Global callbacks — set by the main component
 let globalNavigateToIntent: ((intentId: string) => void) | null = null;
@@ -1469,18 +1253,16 @@ function DataPipelineTab({
   // AI Suggested Pipeline state — backed by module-level store for persistence + DB
   const savedAiSuggestion = intent.resolutionFlow?.aiSuggestion;
   const [suggestedPipeline, setSuggestedPipeline] = useState<any | null>(() => {
-    const existing = pendingSuggestions.get(intent.id);
+    const existing = getPendingSuggestion(intent.id);
     if (existing?.status === 'done') return existing.data;
-    // Fall back to DB-persisted aiSuggestion
     if (savedAiSuggestion?.summary) return savedAiSuggestion;
     return null;
   });
   const [isSuggesting, setIsSuggesting] = useState(() => {
-    return pendingSuggestions.get(intent.id)?.status === 'pending';
+    return getPendingSuggestion(intent.id)?.status === 'pending';
   });
   const [showSuggestion, setShowSuggestion] = useState(() => {
-    if (pendingSuggestions.get(intent.id)?.status === 'done') return true;
-    // Auto-show if we have a saved AI suggestion
+    if (getPendingSuggestion(intent.id)?.status === 'done') return true;
     return !!savedAiSuggestion?.summary;
   });
   const [suggestionApplied, setSuggestionApplied] = useState(false);
@@ -1488,7 +1270,7 @@ function DataPipelineTab({
 
   // Listen for background suggestion completion + sync from DB on intent change
   useEffect(() => {
-    const existing = pendingSuggestions.get(intent.id);
+    const existing = getPendingSuggestion(intent.id);
     if (existing?.status === 'done') {
       setSuggestedPipeline(existing.data);
       setShowSuggestion(true);
@@ -1496,7 +1278,6 @@ function DataPipelineTab({
     } else if (existing?.status === 'pending') {
       setIsSuggesting(true);
     } else {
-      // Re-sync from DB-persisted aiSuggestion when switching intents
       const dbSuggestion = intent.resolutionFlow?.aiSuggestion;
       if (dbSuggestion?.summary) {
         setSuggestedPipeline(dbSuggestion);
@@ -1508,7 +1289,7 @@ function DataPipelineTab({
       setIsSuggesting(false);
     }
 
-    suggestionListeners.set(intent.id, (result) => {
+    const unsub = subscribeToSuggestion(intent.id, (result) => {
       if (result.status === 'done') {
         setSuggestedPipeline(result.data);
         setShowSuggestion(true);
@@ -1516,7 +1297,7 @@ function DataPipelineTab({
       setIsSuggesting(false);
     });
 
-    return () => { suggestionListeners.delete(intent.id); };
+    return unsub;
   }, [intent.id, intent.resolutionFlow?.aiSuggestion]);
 
   // Validate pipeline tools against MCP tools master
@@ -1570,7 +1351,7 @@ function DataPipelineTab({
   // AI Suggest Ideal Pipeline — fires in background, persists across navigation
   const suggestIdealPipeline = useCallback(() => {
     setIsSuggesting(true);
-    fireSuggestionInBackground(
+    fireSingleSuggestion(
       intent.id,
       intent.name,
       {
@@ -2284,7 +2065,7 @@ function IntentListView({
   const [activeSubTab, setActiveSubTab] = useState<'intents' | 'cases'>('intents');
   const [selectedIntentIds, setSelectedIntentIds] = useState<Set<string>>(new Set());
   const [bulkGenProgress, setBulkGenProgress] = useState({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
-  const [queueProgress, setQueueProgress] = useState({ ...suggestionQueue });
+  const [queueProgress, setQueueProgress] = useState<QueueState>(getQueueState());
   const [intentUsageCounts, setIntentUsageCounts] = useState<Record<string, number>>({});
 
   // Fetch intent usage counts from query_routing_logs
@@ -2310,9 +2091,7 @@ function IntentListView({
 
   // Subscribe to queue state changes
   useEffect(() => {
-    const listener = () => setQueueProgress({ ...suggestionQueue });
-    queueStateListeners.add(listener);
-    return () => { queueStateListeners.delete(listener); };
+    return subscribeToQueue(() => setQueueProgress(getQueueState()));
   }, []);
 
   const allSelected = intents.length > 0 && selectedIntentIds.size === intents.length;
@@ -2351,15 +2130,12 @@ function IntentListView({
     if (ids.length === 0) return;
     const toolNames = mcpTools.map(t => t.id);
 
-    // Reset queue stats and populate queue items
-    resetQueueStats();
-    const queueItems: QueueItem[] = [];
-    for (const id of ids) {
+    const items = ids.map(id => {
       const intent = intents.find(i => i.id === id);
-      if (!intent) continue;
+      if (!intent) return null;
       const resFlow = intent.resolutionFlow as any;
       const currentPipeline = resFlow?.dataPipeline || [];
-      queueItems.push({
+      return {
         intentId: intent.id,
         intentName: intent.name,
         body: {
@@ -2370,14 +2146,10 @@ function IntentListView({
           currentPipeline,
           availableTools: toolNames,
         },
-        onNavigate: globalNavigateToIntent || undefined,
-      });
-    }
+      };
+    }).filter(Boolean) as Array<{ intentId: string; intentName: string; body: any }>;
 
-    suggestionQueue.items.push(...queueItems);
-    suggestionQueue.total = queueItems.length;
-    notifyQueueListeners();
-    processQueue();
+    enqueueItems(items);
     setSelectedIntentIds(new Set());
   };
 
@@ -3835,7 +3607,9 @@ export default function CFOQueryResolutionEngine() {
       setSelectedIntentId(intentId);
     };
     globalRefreshIntents = () => fetchIntents();
-    return () => { globalNavigateToIntent = null; globalRefreshIntents = null; };
+    setRefreshCallback(() => fetchIntents());
+    initQueue(globalNavigateToIntent);
+    return () => { globalNavigateToIntent = null; globalRefreshIntents = null; setRefreshCallback(null); };
   }, [fetchIntents]);
 
 
