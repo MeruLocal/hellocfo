@@ -1872,6 +1872,15 @@ function DataPipelineTab({
                         </span>
                         <ArrowRight size={12} className="text-gray-400" />
                         <code className="text-xs bg-violet-100 px-1.5 py-0.5 rounded">{step.outputVariable}</code>
+                        {step.priority === 'must_have' && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">Must Have</span>
+                        )}
+                        {step.priority === 'recommended' && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">Recommended</span>
+                        )}
+                        {step.priority === 'nice_to_have' && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">Nice to Have</span>
+                        )}
                         {isToolMissing && (
                           <span className="flex items-center gap-1 text-xs text-amber-600">
                             <AlertTriangle size={12} /> Missing

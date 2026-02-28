@@ -123,6 +123,7 @@ Provide a comprehensive pipeline that would make this the best-in-class financia
                         mcpTool: { type: "string", description: "Tool name (only for api_call)" },
                         outputVariable: { type: "string" },
                         description: { type: "string" },
+                        priority: { type: "string", enum: ["must_have", "recommended", "nice_to_have"], description: "How critical this step is: must_have = essential for correct results, recommended = significantly improves output, nice_to_have = adds extra value but not required" },
                         formula: { type: "string", description: "Only for computation nodes" },
                         condition: { type: "string", description: "Only for conditional nodes" },
                         personas: {
@@ -133,7 +134,7 @@ Provide a comprehensive pipeline that would make this the best-in-class financia
                         toolAvailable: { type: "boolean", description: "Is the tool in the available list?" },
                         fallbackSuggestion: { type: "string", description: "If tool not available, suggest alternative" },
                       },
-                      required: ["nodeType", "outputVariable", "description", "personas"],
+                      required: ["nodeType", "outputVariable", "description", "priority", "personas"],
                       additionalProperties: false,
                     },
                   },
