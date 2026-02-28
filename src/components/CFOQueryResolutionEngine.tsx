@@ -1544,6 +1544,40 @@ function DataPipelineTab({
         </div>
       </div>
 
+      {/* Loading skeleton while GPT-5.2 is analyzing */}
+      {isSuggesting && !suggestedPipeline && (
+        <div className="rounded-xl border-2 border-violet-200 overflow-hidden animate-pulse">
+          <div className="bg-gradient-to-r from-violet-400/60 to-purple-500/60 px-4 py-3 flex items-center gap-3">
+            <Loader2 size={16} className="text-white animate-spin" />
+            <span className="text-white text-sm font-semibold">GPT-5.2 is analyzing your pipeline…</span>
+          </div>
+          <div className="p-4 bg-violet-50/50 space-y-4">
+            {/* Persona badges skeleton */}
+            <div className="flex gap-2">
+              {[1,2,3,4,5].map(i => (
+                <div key={i} className="h-7 w-24 rounded-full bg-violet-200/60" />
+              ))}
+            </div>
+            {/* Summary skeleton */}
+            <div className="space-y-2">
+              <div className="h-4 w-3/4 rounded bg-violet-200/50" />
+              <div className="h-4 w-1/2 rounded bg-violet-200/40" />
+            </div>
+            {/* Step cards skeleton */}
+            {[1,2,3].map(i => (
+              <div key={i} className="rounded-lg border border-violet-200/60 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-5 w-5 rounded bg-violet-200/60" />
+                  <div className="h-4 w-40 rounded bg-violet-200/50" />
+                  <div className="ml-auto h-5 w-20 rounded-full bg-violet-200/40" />
+                </div>
+                <div className="h-3 w-2/3 rounded bg-violet-100/60" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* AI Suggested Pipeline Panel */}
       {showSuggestion && suggestedPipeline && (
         <div className="rounded-xl border-2 border-violet-200 overflow-hidden">
