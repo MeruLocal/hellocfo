@@ -1474,7 +1474,7 @@ function DataPipelineTab({
     return !!savedAiSuggestion?.summary;
   });
 
-  // Listen for background suggestion completion
+  // Listen for background suggestion completion + sync from DB on intent change
   useEffect(() => {
     const existing = pendingSuggestions.get(intent.id);
     if (existing?.status === 'done') {
@@ -1483,6 +1483,17 @@ function DataPipelineTab({
       setIsSuggesting(false);
     } else if (existing?.status === 'pending') {
       setIsSuggesting(true);
+    } else {
+      // Re-sync from DB-persisted aiSuggestion when switching intents
+      const dbSuggestion = intent.resolutionFlow?.aiSuggestion;
+      if (dbSuggestion?.summary) {
+        setSuggestedPipeline(dbSuggestion);
+        setShowSuggestion(true);
+      } else {
+        setSuggestedPipeline(null);
+        setShowSuggestion(false);
+      }
+      setIsSuggesting(false);
     }
 
     suggestionListeners.set(intent.id, (result) => {
@@ -1494,7 +1505,7 @@ function DataPipelineTab({
     });
 
     return () => { suggestionListeners.delete(intent.id); };
-  }, [intent.id]);
+  }, [intent.id, intent.resolutionFlow?.aiSuggestion]);
 
   // Validate pipeline tools against MCP tools master
   const checkPipelineTools = useCallback(() => {
