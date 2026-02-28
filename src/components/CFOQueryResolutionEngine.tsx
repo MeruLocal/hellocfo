@@ -1316,6 +1316,27 @@ function DataPipelineTab({
     setToolCheckResults(results);
   }, [pipeline, mcpTools]);
 
+  // Cross-reference suggested pipeline steps against real MCP tools inventory
+  const recheckMcpToolMatch = useCallback(() => {
+    if (!suggestedPipeline?.steps) return;
+    const mcpToolNames = new Set(mcpTools.map(t => t.id));
+    const mcpToolNamesAlt = new Set(mcpTools.map(t => t.name));
+    const updatedSteps = suggestedPipeline.steps.map((step: any) => {
+      if (step.nodeType !== 'api_call' || !step.mcpTool) return step;
+      const found = mcpToolNames.has(step.mcpTool) || mcpToolNamesAlt.has(step.mcpTool);
+      return { ...step, toolAvailable: found };
+    });
+    setSuggestedPipeline({ ...suggestedPipeline, steps: updatedSteps });
+  }, [suggestedPipeline, mcpTools]);
+
+  // Auto-recheck when suggestion loads or mcpTools change
+  useEffect(() => {
+    if (suggestedPipeline?.steps && mcpTools.length > 0) {
+      recheckMcpToolMatch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcpTools.length, showSuggestion]);
+
   // Use the global MCP tool resolver
   const resolveMcpToolId = useCallback((generatedName: string | undefined): string => {
     return resolveMcpToolIdWithTools(generatedName, mcpTools);
@@ -1582,13 +1603,28 @@ function DataPipelineTab({
       {showSuggestion && suggestedPipeline && (
         <div className="rounded-xl border-2 border-violet-200 overflow-hidden">
           {/* Header */}
-          <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-3 flex items-center justify-between">
+           <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2 text-white">
               <Sparkles size={16} />
               <span className="font-semibold text-sm">AI Ideal Pipeline</span>
               <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{suggestedPipeline.steps?.length || 0} steps</span>
+              {(() => {
+                const apiSteps = (suggestedPipeline.steps || []).filter((s: any) => s.nodeType === 'api_call');
+                const matched = apiSteps.filter((s: any) => s.toolAvailable !== false).length;
+                const missing = apiSteps.length - matched;
+                return (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    missing === 0 ? 'bg-emerald-400/30 text-emerald-100' : 'bg-amber-400/30 text-amber-100'
+                  }`}>
+                    {matched}/{apiSteps.length} tools matched{missing > 0 ? ` · ${missing} missing` : ''}
+                  </span>
+                );
+              })()}
             </div>
             <div className="flex items-center gap-2">
+              <button onClick={recheckMcpToolMatch} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1" title="Re-check tool availability against current MCP inventory">
+                <RefreshCw size={12} /> Recheck Tools
+              </button>
               <button onClick={applyAllSuggested} className="px-3 py-1 text-xs font-medium bg-white text-violet-700 rounded-lg hover:bg-violet-50 flex items-center gap-1">
                 <Check size={12} /> Apply All
               </button>
