@@ -665,15 +665,15 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
   const subModules = selectedModule?.subModules || [];
 
   const handleSubmit = () => {
-    if (!name.trim() || !moduleId || !subModuleId) {
-      alert('Please fill in all required fields');
+    if (!name.trim()) {
+      alert('Please enter an intent name');
       return;
     }
     
     onCreate({
       name: name.trim(),
-      moduleId,
-      subModuleId,
+      moduleId: moduleId || undefined,
+      subModuleId: subModuleId || undefined,
       description: description.trim() || undefined
     });
     
@@ -715,7 +715,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
           {/* Module */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Module <span className="text-red-500">*</span>
+              Module <span className="text-gray-400">(optional — AI will auto-detect)</span>
             </label>
             <select
               value={moduleId}
@@ -735,7 +735,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
           {/* Sub-Module */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Sub-Module <span className="text-red-500">*</span>
+              Sub-Module <span className="text-gray-400">(optional — AI will auto-detect)</span>
             </label>
             <select
               value={subModuleId}
@@ -771,6 +771,7 @@ function CreateIntentModal({ isOpen, onClose, onCreate, modules }: CreateIntentM
               <div className="text-sm text-purple-700">
                 <p className="font-medium">AI will automatically generate:</p>
                 <ul className="mt-1 space-y-0.5 text-purple-600">
+                  <li>• Module & Sub-Module (if not selected)</li>
                   <li>• Training phrases</li>
                   <li>• Tool parameters</li>
                   <li>• Data pipeline</li>
@@ -3730,7 +3731,7 @@ export default function CFOQueryResolutionEngine() {
         parameters: node.parameters || []
       }));
 
-      return {
+      const generated: Intent = {
         ...intent,
         trainingPhrases: data.trainingPhrases || [],
         entities: data.entities || [],
@@ -3741,8 +3742,19 @@ export default function CFOQueryResolutionEngine() {
         },
         generatedBy: 'ai',
         aiConfidence: data.aiConfidence,
-        lastGeneratedAt: data.generatedAt || new Date().toISOString()
+        lastGeneratedAt: data.generatedAt || new Date().toISOString(),
+        // Apply AI-suggested module/submodule if intent doesn't have one
+        moduleId: (!intent.moduleId || intent.moduleId === '') && data.suggestedModuleId 
+          ? data.suggestedModuleId : intent.moduleId,
+        subModuleId: (!intent.subModuleId || intent.subModuleId === '') && data.suggestedSubModuleId
+          ? data.suggestedSubModuleId : intent.subModuleId,
       };
+
+      if (data.suggestedModuleId && (!intent.moduleId || intent.moduleId === '')) {
+        console.log(`[AI] Auto-assigned module: ${data.suggestedModuleId}/${data.suggestedSubModuleId}`);
+      }
+
+      return generated;
       
     } catch (error) {
       console.error('❌ Generation Error:', error);
