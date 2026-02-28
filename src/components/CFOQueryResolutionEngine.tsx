@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { toast as sonnerToast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { UsersManagement } from '@/components/UsersManagement';
 import { PipelineDebugPage } from '@/components/pipeline-debug';
@@ -500,6 +501,58 @@ const buildAliasLookup = (): Record<string, string> => {
 };
 
 const ALIAS_TO_TOOL = buildAliasLookup();
+
+// ============================================================================
+// MODULE-LEVEL BACKGROUND SUGGESTION STORE
+// Persists across component mount/unmount so navigation doesn't cancel the call
+// ============================================================================
+interface PendingSuggestion {
+  status: 'pending' | 'done' | 'error';
+  data?: any;
+  error?: string;
+  intentId: string;
+  intentName: string;
+}
+
+const pendingSuggestions = new Map<string, PendingSuggestion>();
+// Listeners for components that want to be notified when a suggestion completes
+const suggestionListeners = new Map<string, (result: PendingSuggestion) => void>();
+
+const fireSuggestionInBackground = (
+  intentId: string,
+  intentName: string,
+  body: any,
+  onNavigate?: (intentId: string) => void
+) => {
+  // If already pending for this intent, skip
+  if (pendingSuggestions.get(intentId)?.status === 'pending') return;
+  
+  pendingSuggestions.set(intentId, { status: 'pending', intentId, intentName });
+
+  supabase.functions.invoke('suggest-ideal-pipeline', { body }).then(({ data, error }) => {
+    if (error || data?.error) {
+      const errMsg = error?.message || data?.error || 'Unknown error';
+      pendingSuggestions.set(intentId, { status: 'error', error: errMsg, intentId, intentName });
+      sonnerToast.error('Pipeline suggestion failed', { description: errMsg });
+    } else {
+      pendingSuggestions.set(intentId, { status: 'done', data, intentId, intentName });
+      sonnerToast.success(`AI pipeline ready for "${intentName}"`, {
+        description: `${data.steps?.length || 0} steps suggested`,
+        duration: 10000,
+        action: onNavigate ? {
+          label: 'View',
+          onClick: () => onNavigate(intentId),
+        } : undefined,
+      });
+    }
+    // Notify any mounted listener
+    const listener = suggestionListeners.get(intentId);
+    if (listener) listener(pendingSuggestions.get(intentId)!);
+  });
+};
+
+// Global navigate callback — set by the main component so toast "View" works
+let globalNavigateToIntent: ((intentId: string) => void) | null = null;
 
 // Resolve AI-generated tool name to actual MCP tool ID
 const resolveMcpToolIdWithTools = (generatedName: string | undefined, mcpTools: MCPTool[]): string => {
@@ -1217,10 +1270,39 @@ function DataPipelineTab({
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
   const [toolCheckResults, setToolCheckResults] = useState<Record<string, 'found' | 'missing'> | null>(null);
   
-  // AI Suggested Pipeline state
-  const [suggestedPipeline, setSuggestedPipeline] = useState<any | null>(null);
-  const [isSuggesting, setIsSuggesting] = useState(false);
-  const [showSuggestion, setShowSuggestion] = useState(false);
+  // AI Suggested Pipeline state — backed by module-level store for persistence
+  const [suggestedPipeline, setSuggestedPipeline] = useState<any | null>(() => {
+    const existing = pendingSuggestions.get(intent.id);
+    return existing?.status === 'done' ? existing.data : null;
+  });
+  const [isSuggesting, setIsSuggesting] = useState(() => {
+    return pendingSuggestions.get(intent.id)?.status === 'pending';
+  });
+  const [showSuggestion, setShowSuggestion] = useState(() => {
+    return pendingSuggestions.get(intent.id)?.status === 'done';
+  });
+
+  // Listen for background suggestion completion
+  useEffect(() => {
+    const existing = pendingSuggestions.get(intent.id);
+    if (existing?.status === 'done') {
+      setSuggestedPipeline(existing.data);
+      setShowSuggestion(true);
+      setIsSuggesting(false);
+    } else if (existing?.status === 'pending') {
+      setIsSuggesting(true);
+    }
+
+    suggestionListeners.set(intent.id, (result) => {
+      if (result.status === 'done') {
+        setSuggestedPipeline(result.data);
+        setShowSuggestion(true);
+      }
+      setIsSuggesting(false);
+    });
+
+    return () => { suggestionListeners.delete(intent.id); };
+  }, [intent.id]);
 
   // Validate pipeline tools against MCP tools master
   const checkPipelineTools = useCallback(() => {
@@ -1249,30 +1331,22 @@ function DataPipelineTab({
     });
   }, [onChange, intent.resolutionFlow]);
 
-  // AI Suggest Ideal Pipeline
-  const suggestIdealPipeline = useCallback(async () => {
+  // AI Suggest Ideal Pipeline — fires in background, persists across navigation
+  const suggestIdealPipeline = useCallback(() => {
     setIsSuggesting(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('suggest-ideal-pipeline', {
-        body: {
-          intentName: intent.name,
-          description: intent.description,
-          trainingPhrases: intent.trainingPhrases,
-          entities: intent.entities,
-          currentPipeline: pipeline,
-          availableTools: mcpTools.map(t => t.id),
-        },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-      setSuggestedPipeline(data);
-      setShowSuggestion(true);
-      toast({ title: 'AI pipeline suggestion ready', description: `${data.steps?.length || 0} steps suggested` });
-    } catch (err: any) {
-      toast({ title: 'Failed to get suggestion', description: err.message, variant: 'destructive' });
-    } finally {
-      setIsSuggesting(false);
-    }
+    fireSuggestionInBackground(
+      intent.id,
+      intent.name,
+      {
+        intentName: intent.name,
+        description: intent.description,
+        trainingPhrases: intent.trainingPhrases,
+        entities: intent.entities,
+        currentPipeline: pipeline,
+        availableTools: mcpTools.map(t => t.id),
+      },
+      globalNavigateToIntent || undefined
+    );
   }, [intent, pipeline, mcpTools]);
 
   // Apply suggested pipeline (replace all)
@@ -3272,6 +3346,16 @@ export default function CFOQueryResolutionEngine() {
   const [isImporting, setIsImporting] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
   const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
+
+  // Register global navigate callback so background toast "View" works
+  useEffect(() => {
+    globalNavigateToIntent = (intentId: string) => {
+      setActiveTab('intents');
+      setSelectedIntentId(intentId);
+    };
+    return () => { globalNavigateToIntent = null; };
+  }, []);
+
 
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
   // Cache the last valid selected intent to prevent unmount/remount during refetch
