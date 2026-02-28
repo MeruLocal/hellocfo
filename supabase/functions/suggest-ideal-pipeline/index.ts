@@ -11,8 +11,16 @@ serve(async (req) => {
 
   try {
     const { intentName, description, trainingPhrases, entities, currentPipeline, availableTools } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const apiKey = Deno.env.get("OPENAI_GPT_5_2_API_KEY");
+    let baseUrl = (Deno.env.get("OPENAI_GPT_5_2_BASE_URL") || "").trim();
+    if (!apiKey) throw new Error("OPENAI_GPT_5_2_API_KEY not configured");
+
+    // URL normalization
+    if (baseUrl.startsWith("ttps://")) baseUrl = `h${baseUrl}`;
+    if (baseUrl && !baseUrl.startsWith("http")) baseUrl = `https://${baseUrl}`;
+    const endpoint = baseUrl
+      ? (baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`)
+      : "https://api.openai.com/v1/chat/completions";
 
     const toolList = (availableTools || []).join(", ");
     const currentSteps = (currentPipeline || [])
@@ -52,14 +60,14 @@ Return your analysis using the suggest_pipeline tool.`;
 
 Provide a comprehensive pipeline that would make this the best-in-class financial chatbot for this intent.`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "api-key": apiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "gpt-5.2",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
