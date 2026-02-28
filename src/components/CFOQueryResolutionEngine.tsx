@@ -727,14 +727,17 @@ const autoSaveAISuggestion = async (intentId: string, aiData: any) => {
       console.error('Auto-save: failed to update intent', updateErr);
     } else {
       console.log(`✅ Auto-saved AI pipeline for intent ${intentId}: ${newSteps.length} new steps merged, ${updatedFlow.aiSuggestion.gaps.length} gaps recorded`);
+      // Trigger UI refresh so the saved data is visible
+      if (globalRefreshIntents) globalRefreshIntents();
     }
   } catch (e) {
     console.error('Auto-save: unexpected error', e);
   }
 };
 
-// Global navigate callback — set by the main component so toast "View" works
+// Global callbacks — set by the main component
 let globalNavigateToIntent: ((intentId: string) => void) | null = null;
+let globalRefreshIntents: (() => void) | null = null;
 
 // Resolve AI-generated tool name to actual MCP tool ID
 const resolveMcpToolIdWithTools = (generatedName: string | undefined, mcpTools: MCPTool[]): string => {
@@ -3691,14 +3694,15 @@ export default function CFOQueryResolutionEngine() {
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
   const [generationAbortController, setGenerationAbortController] = useState<AbortController | null>(null);
 
-  // Register global navigate callback so background toast "View" works
+  // Register global callbacks so background processes can refresh UI
   useEffect(() => {
     globalNavigateToIntent = (intentId: string) => {
       setActiveTab('intents');
       setSelectedIntentId(intentId);
     };
-    return () => { globalNavigateToIntent = null; };
-  }, []);
+    globalRefreshIntents = () => fetchIntents();
+    return () => { globalNavigateToIntent = null; globalRefreshIntents = null; };
+  }, [fetchIntents]);
 
 
   const selectedIntent = intents.find(i => i.id === selectedIntentId);
