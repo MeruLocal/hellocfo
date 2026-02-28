@@ -106,10 +106,19 @@ export interface ResponseConfig {
   followUpQuestions: string[];
 }
 
+export interface AISuggestion {
+  summary: string;
+  personaRelevance: Record<string, number>;
+  gaps: { toolName: string; description: string; fallbackSuggestion?: string }[];
+  suggestedAt: string;
+  steps?: any[];
+}
+
 export interface ResolutionFlow {
   dataPipeline: PipelineNode[];
   enrichments: Enrichment[];
   responseConfig: ResponseConfig;
+  aiSuggestion?: AISuggestion;
 }
 
 export interface Intent {

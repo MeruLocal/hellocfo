@@ -1455,16 +1455,22 @@ function DataPipelineTab({
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
   const [toolCheckResults, setToolCheckResults] = useState<Record<string, 'found' | 'missing'> | null>(null);
   
-  // AI Suggested Pipeline state — backed by module-level store for persistence
+  // AI Suggested Pipeline state — backed by module-level store for persistence + DB
+  const savedAiSuggestion = intent.resolutionFlow?.aiSuggestion;
   const [suggestedPipeline, setSuggestedPipeline] = useState<any | null>(() => {
     const existing = pendingSuggestions.get(intent.id);
-    return existing?.status === 'done' ? existing.data : null;
+    if (existing?.status === 'done') return existing.data;
+    // Fall back to DB-persisted aiSuggestion
+    if (savedAiSuggestion?.summary) return savedAiSuggestion;
+    return null;
   });
   const [isSuggesting, setIsSuggesting] = useState(() => {
     return pendingSuggestions.get(intent.id)?.status === 'pending';
   });
   const [showSuggestion, setShowSuggestion] = useState(() => {
-    return pendingSuggestions.get(intent.id)?.status === 'done';
+    if (pendingSuggestions.get(intent.id)?.status === 'done') return true;
+    // Auto-show if we have a saved AI suggestion
+    return !!savedAiSuggestion?.summary;
   });
 
   // Listen for background suggestion completion
