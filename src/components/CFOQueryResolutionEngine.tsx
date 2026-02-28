@@ -2832,33 +2832,51 @@ function IntentDetailScreen({
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-lg">
-            <ArrowLeft size={18} />
+    <div className="h-screen flex bg-white">
+      {/* Left sidebar: back + vertical tabs */}
+      <div className="w-56 border-r bg-gray-50 flex flex-col">
+        {/* Back button + intent name */}
+        <div className="p-4 border-b">
+          <button onClick={onBack} className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-3">
+            <ArrowLeft size={16} /> Back to Intents
           </button>
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">{formatIntentName(intent.name)}</h2>
-            <p className="text-sm text-gray-500">{intent.description || 'No description'}</p>
-          </div>
+          <h2 className="text-sm font-bold text-gray-900 truncate">{formatIntentName(intent.name)}</h2>
+          <p className="text-xs text-gray-500 truncate mt-0.5">{intent.description || 'No description'}</p>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Vertical tabs */}
+        <nav className="flex-1 py-2">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveDetailTab(tab.id)}
+              className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                activeDetailTab === tab.id
+                  ? 'bg-blue-50 text-blue-600 border-r-2 border-blue-600'
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              {tab.icon} {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Actions at bottom */}
+        <div className="p-3 border-t space-y-2">
           {hasUnsavedChanges && (
-            <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>
+            <span className="text-xs text-amber-600 font-medium block text-center">Unsaved changes</span>
           )}
           <button
             onClick={handleSave}
             disabled={!hasUnsavedChanges}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 flex items-center gap-2"
+            className="w-full px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 flex items-center justify-center gap-2"
           >
             <Save size={14} /> Save
           </button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <button className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
-                <Trash2 size={18} />
+              <button className="w-full px-3 py-2 text-red-500 hover:bg-red-50 rounded-lg text-sm flex items-center justify-center gap-2">
+                <Trash2 size={14} /> Delete
               </button>
             </AlertDialogTrigger>
             <AlertDialogContent>
@@ -2877,24 +2895,7 @@ function IntentDetailScreen({
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b px-6">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveDetailTab(tab.id)}
-            className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeDetailTab === tab.id
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab Content */}
+      {/* Main content area */}
       <div className="flex-1 overflow-auto p-6">
         {activeDetailTab === 'details' && (
           <IntentDetailsTab
