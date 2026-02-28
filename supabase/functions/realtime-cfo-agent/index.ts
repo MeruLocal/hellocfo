@@ -65,6 +65,9 @@ type SSEEventType =
   | "executing_tool"
   | "tool_result"
   | "mode_switch"
+  | "mcq_prompt"
+  | "mcq_resolved"
+  | "write_validation"
   | "response_generating"
   | "response_chunk"
   | "complete"
@@ -558,6 +561,7 @@ serve(async (req) => {
           } else if (hasWriteOperations(fastToolsUsed)) {
             await invalidateCacheForEntity(supabase as AnySupabaseClient, entityId, fastToolsUsed, reqId);
           }
+        } else {
           // ========== LLM PATH ==========
 
           // LAYER 1: Classify via keywords
@@ -849,7 +853,7 @@ serve(async (req) => {
         // Cleanup (StreamableMCPClient.close() is a no-op but kept for consistency)
         mcpClientInstance?.close();
         const responseTimeMs = Date.now() - startTime;
-        const effectiveConversationId = incomingConversationId || reqId;
+        // effectiveConversationId already declared above
         console.log(`[${reqId}] Done in ${(responseTimeMs / 1000).toFixed(2)}s`);
 
         // Persist conversation to unified_conversations
