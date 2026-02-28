@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.run-regression-tests]
 verify_jwt = false
+
+[functions.suggest-ideal-pipeline]
+verify_jwt = false

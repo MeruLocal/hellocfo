@@ -1216,6 +1216,11 @@ function DataPipelineTab({
   const pipeline = intent.resolutionFlow?.dataPipeline || [];
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
   const [toolCheckResults, setToolCheckResults] = useState<Record<string, 'found' | 'missing'> | null>(null);
+  
+  // AI Suggested Pipeline state
+  const [suggestedPipeline, setSuggestedPipeline] = useState<any | null>(null);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [showSuggestion, setShowSuggestion] = useState(false);
 
   // Validate pipeline tools against MCP tools master
   const checkPipelineTools = useCallback(() => {
@@ -1243,6 +1248,84 @@ function DataPipelineTab({
       }
     });
   }, [onChange, intent.resolutionFlow]);
+
+  // AI Suggest Ideal Pipeline
+  const suggestIdealPipeline = useCallback(async () => {
+    setIsSuggesting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('suggest-ideal-pipeline', {
+        body: {
+          intentName: intent.name,
+          description: intent.description,
+          trainingPhrases: intent.trainingPhrases,
+          entities: intent.entities,
+          currentPipeline: pipeline,
+          availableTools: mcpTools.map(t => t.id),
+        },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setSuggestedPipeline(data);
+      setShowSuggestion(true);
+      toast({ title: 'AI pipeline suggestion ready', description: `${data.steps?.length || 0} steps suggested` });
+    } catch (err: any) {
+      toast({ title: 'Failed to get suggestion', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsSuggesting(false);
+    }
+  }, [intent, pipeline, mcpTools]);
+
+  // Apply suggested pipeline (replace all)
+  const applyAllSuggested = useCallback(() => {
+    if (!suggestedPipeline?.steps) return;
+    const newPipeline: PipelineNode[] = suggestedPipeline.steps.map((step: any, i: number) => ({
+      nodeId: `ai_${Date.now()}_${i}`,
+      nodeType: step.nodeType,
+      sequence: i + 1,
+      mcpTool: step.nodeType === 'api_call' ? step.mcpTool : undefined,
+      parameters: [],
+      formula: step.nodeType === 'computation' ? (step.formula || '') : undefined,
+      condition: step.nodeType === 'conditional' ? (step.condition || '') : undefined,
+      outputVariable: step.outputVariable,
+      description: step.description,
+    }));
+    updatePipeline(newPipeline);
+    setShowSuggestion(false);
+    toast({ title: 'Pipeline replaced with AI suggestion' });
+  }, [suggestedPipeline, updatePipeline]);
+
+  // Merge only missing steps
+  const mergeMissingSuggested = useCallback(() => {
+    if (!suggestedPipeline?.steps) return;
+    const existingTools = new Set(pipeline.filter(n => n.mcpTool).map(n => n.mcpTool));
+    const existingVars = new Set(pipeline.map(n => n.outputVariable));
+    const newSteps = suggestedPipeline.steps.filter((step: any) => {
+      if (step.nodeType === 'api_call' && step.mcpTool && existingTools.has(step.mcpTool)) return false;
+      if (existingVars.has(step.outputVariable)) return false;
+      return true;
+    });
+    if (newSteps.length === 0) {
+      toast({ title: 'No new steps to merge', description: 'All suggested steps already exist' });
+      return;
+    }
+    const merged: PipelineNode[] = [
+      ...pipeline,
+      ...newSteps.map((step: any, i: number) => ({
+        nodeId: `ai_${Date.now()}_${i}`,
+        nodeType: step.nodeType,
+        sequence: pipeline.length + i + 1,
+        mcpTool: step.nodeType === 'api_call' ? step.mcpTool : undefined,
+        parameters: [],
+        formula: step.nodeType === 'computation' ? (step.formula || '') : undefined,
+        condition: step.nodeType === 'conditional' ? (step.condition || '') : undefined,
+        outputVariable: step.outputVariable,
+        description: step.description,
+      })),
+    ];
+    updatePipeline(merged);
+    setShowSuggestion(false);
+    toast({ title: `Merged ${newSteps.length} new steps into pipeline` });
+  }, [suggestedPipeline, pipeline, updatePipeline]);
 
   // Auto-fix pipeline nodes when mcpTools load or change
   useEffect(() => {
@@ -1348,6 +1431,14 @@ function DataPipelineTab({
     }
   };
 
+  const personaConfig = [
+    { key: 'bookkeeper', label: 'Bookkeeper', icon: '📒', color: 'bg-emerald-100 text-emerald-800' },
+    { key: 'accountant', label: 'Accountant', icon: '📊', color: 'bg-blue-100 text-blue-800' },
+    { key: 'cfo', label: 'CFO', icon: '💼', color: 'bg-purple-100 text-purple-800' },
+    { key: 'businessOwner', label: 'Owner', icon: '🏢', color: 'bg-amber-100 text-amber-800' },
+    { key: 'financialAdviser', label: 'Adviser', icon: '🎯', color: 'bg-rose-100 text-rose-800' },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -1356,6 +1447,14 @@ function DataPipelineTab({
           <p className="text-sm text-gray-500">Sequence of data fetching and computation steps</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={suggestIdealPipeline}
+            disabled={isSuggesting}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40 flex items-center gap-1.5"
+          >
+            {isSuggesting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {isSuggesting ? 'Analyzing...' : 'Suggest Ideal Pipeline'}
+          </button>
           <button
             onClick={checkPipelineTools}
             disabled={pipeline.filter(n => n.nodeType === 'api_call').length === 0}
@@ -1370,6 +1469,106 @@ function DataPipelineTab({
           />
         </div>
       </div>
+
+      {/* AI Suggested Pipeline Panel */}
+      {showSuggestion && suggestedPipeline && (
+        <div className="rounded-xl border-2 border-violet-200 overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-white">
+              <Sparkles size={16} />
+              <span className="font-semibold text-sm">AI Ideal Pipeline</span>
+              <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{suggestedPipeline.steps?.length || 0} steps</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={applyAllSuggested} className="px-3 py-1 text-xs font-medium bg-white text-violet-700 rounded-lg hover:bg-violet-50 flex items-center gap-1">
+                <Check size={12} /> Apply All
+              </button>
+              <button onClick={mergeMissingSuggested} className="px-3 py-1 text-xs font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 flex items-center gap-1">
+                <Plus size={12} /> Merge Missing
+              </button>
+              <button onClick={() => setShowSuggestion(false)} className="p-1 text-white/70 hover:text-white">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 bg-violet-50/50 space-y-4">
+            {/* Summary */}
+            {suggestedPipeline.summary && (
+              <p className="text-sm text-violet-800">{suggestedPipeline.summary}</p>
+            )}
+
+            {/* Persona Relevance */}
+            {suggestedPipeline.personaRelevance && (
+              <div className="flex flex-wrap gap-2">
+                {personaConfig.map(p => {
+                  const score = suggestedPipeline.personaRelevance?.[p.key] || 0;
+                  return (
+                    <div key={p.key} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${p.color}`}>
+                      <span>{p.icon}</span>
+                      <span>{p.label}</span>
+                      <span className="font-bold">{score}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Suggested Steps */}
+            <div className="space-y-2">
+              {(suggestedPipeline.steps || []).map((step: any, i: number) => {
+                const isToolMissing = step.nodeType === 'api_call' && step.toolAvailable === false;
+                return (
+                  <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${
+                    isToolMissing ? 'border-amber-200 bg-amber-50/50' : 'border-violet-200 bg-white'
+                  }`}>
+                    <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-violet-100 text-violet-700 text-xs font-bold flex-shrink-0">
+                      {i + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {getNodeIcon(step.nodeType)}
+                        <span className="font-medium text-sm">
+                          {step.nodeType === 'api_call' && `@${step.mcpTool || 'unknown'}`}
+                          {step.nodeType === 'computation' && '$Computation'}
+                          {step.nodeType === 'conditional' && '#Conditional'}
+                        </span>
+                        <ArrowRight size={12} className="text-gray-400" />
+                        <code className="text-xs bg-violet-100 px-1.5 py-0.5 rounded">{step.outputVariable}</code>
+                        {isToolMissing && (
+                          <span className="flex items-center gap-1 text-xs text-amber-600">
+                            <AlertTriangle size={12} /> Missing
+                          </span>
+                        )}
+                        {step.nodeType === 'api_call' && step.toolAvailable !== false && (
+                          <CheckCircle2 size={12} className="text-emerald-500" />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">{step.description}</p>
+                      {isToolMissing && step.fallbackSuggestion && (
+                        <p className="text-xs text-amber-700 mt-1 italic">💡 {step.fallbackSuggestion}</p>
+                      )}
+                      {step.personas && step.personas.length > 0 && (
+                        <div className="flex gap-1 mt-1.5">
+                          {step.personas.map((pKey: string) => {
+                            const pc = personaConfig.find(p => p.key === pKey);
+                            return pc ? (
+                              <span key={pKey} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                                {pc.icon} {pc.label}
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tool Check Results Banner */}
       {toolCheckResults && (() => {
@@ -1651,7 +1850,7 @@ function DataPipelineTab({
               </div>
               <div className="flex items-center gap-2">
                 <GitBranch size={14} className="text-green-600" />
-                <span><strong>#Conditional</strong> - Branch logic</span>
+                <span><strong>#Conditional</strong> - Branch based on conditions</span>
               </div>
             </div>
           </div>
@@ -1661,938 +1860,26 @@ function DataPipelineTab({
   );
 }
 
-// Tab: Enrichments (AI Generated → Editable)
-function EnrichmentsTab({ 
-  intent, 
-  enrichmentTypes,
-  onChange,
-  onRegenerate,
-  isRegenerating
-}: { 
-  intent: Intent; 
-  enrichmentTypes: EnrichmentType[];
-  onChange: (updates: Partial<Intent>) => void;
-  onRegenerate: () => void;
-  isRegenerating: boolean;
-}) {
-  const enrichments = intent.resolutionFlow?.enrichments || [];
-
-  const updateEnrichments = (newEnrichments: Enrichment[]) => {
-    onChange({
-      resolutionFlow: {
-        ...intent.resolutionFlow!,
-        enrichments: newEnrichments
-      }
-    });
-  };
-
-  const addEnrichment = (type: string) => {
-    const enrichmentType = enrichmentTypes.find(e => e.id === type);
-    const newEnrichment: Enrichment = {
-      id: `e${Date.now()}`,
-      type,
-      config: {},
-      description: enrichmentType?.description || ''
-    };
-    updateEnrichments([...enrichments, newEnrichment]);
-  };
-
-  const removeEnrichment = (id: string) => {
-    updateEnrichments(enrichments.filter(e => e.id !== id));
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="font-medium text-gray-900">Enrichments</h3>
-          <p className="text-sm text-gray-500">Intelligence functions applied to data</p>
-        </div>
-        <AIBadge 
-          confidence={intent.aiConfidence} 
-          onRegenerate={onRegenerate}
-          isRegenerating={isRegenerating}
-        />
-      </div>
-
-      {!intent.resolutionFlow ? (
-        <div className="text-center py-12 bg-gray-50 rounded-lg">
-          <Sparkles size={48} className="mx-auto mb-4 text-gray-300" />
-          <p className="text-gray-500 text-lg">No enrichments configured</p>
-          <p className="text-gray-400 text-sm mt-1">Click "Regenerate" to have AI select enrichments</p>
-        </div>
-      ) : (
-        <>
-          <div className="space-y-2">
-            {enrichments.map((enrichment) => {
-              const type = enrichmentTypes.find(t => t.id === enrichment.type);
-              return (
-                <div key={enrichment.id} className="flex items-center gap-3 p-3 border rounded-lg bg-white">
-                  <span className="text-xl">{type?.icon || '✨'}</span>
-                  <div className="flex-1">
-                    <div className="font-medium text-sm">{type?.name || enrichment.type}</div>
-                    <div className="text-xs text-gray-500">{enrichment.description}</div>
-                  </div>
-                  <button
-                    onClick={() => removeEnrichment(enrichment.id)}
-                    className="p-1.5 text-red-500 hover:bg-red-50 rounded"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="grid grid-cols-5 gap-2">
-            {enrichmentTypes.map(type => {
-              const isAdded = enrichments.some(e => e.type === type.id);
-              return (
-                <button
-                  key={type.id}
-                  onClick={() => !isAdded && addEnrichment(type.id)}
-                  disabled={isAdded}
-                  className={`p-2 border rounded-lg text-center transition-colors ${
-                    isAdded 
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                      : 'hover:bg-gray-50 hover:border-blue-500'
-                  }`}
-                >
-                  <span className="text-lg">{type.icon}</span>
-                  <div className="text-xs mt-1 truncate">{type.name}</div>
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Tab: Response Config (AI Generated → Editable)
-function ResponseConfigTab({ 
-  intent, 
-  onChange,
-  onRegenerate,
-  isRegenerating,
-  responseTypes
-}: { 
-  intent: Intent; 
-  onChange: (updates: Partial<Intent>) => void;
-  onRegenerate: () => void;
-  isRegenerating: boolean;
-  responseTypes: ResponseType[];
-}) {
-  const responseConfig = intent.resolutionFlow?.responseConfig;
-  const [newQuestion, setNewQuestion] = useState('');
-
-  const updateResponseConfig = (updates: Partial<ResponseConfig>) => {
-    if (!intent.resolutionFlow) return;
-    onChange({
-      resolutionFlow: {
-        ...intent.resolutionFlow,
-        responseConfig: {
-          ...intent.resolutionFlow.responseConfig,
-          ...updates
-        }
-      }
-    });
-  };
-
-  const addFollowUp = () => {
-    if (newQuestion.trim() && responseConfig) {
-      updateResponseConfig({
-        followUpQuestions: [...(responseConfig.followUpQuestions || []), newQuestion.trim()]
-      });
-      setNewQuestion('');
-    }
-  };
-
-  const removeFollowUp = (index: number) => {
-    if (responseConfig) {
-      updateResponseConfig({
-        followUpQuestions: (responseConfig.followUpQuestions || []).filter((_, i) => i !== index)
-      });
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="font-medium text-gray-900">Response Configuration</h3>
-          <p className="text-sm text-gray-500">Template for generating the final response</p>
-        </div>
-        <AIBadge 
-          confidence={intent.aiConfidence} 
-          onRegenerate={onRegenerate}
-          isRegenerating={isRegenerating}
-        />
-      </div>
-
-      {!responseConfig ? (
-        <div className="text-center py-12 bg-gray-50 rounded-lg">
-          <Code size={48} className="mx-auto mb-4 text-gray-300" />
-          <p className="text-gray-500 text-lg">No response template configured</p>
-          <p className="text-gray-400 text-sm mt-1">Click "Regenerate" to have AI create a template</p>
-        </div>
-      ) : (
-        <>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Response Type</label>
-            <select
-              value={responseConfig.type}
-              onChange={(e) => updateResponseConfig({ type: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg bg-white"
-            >
-              {(responseTypes || []).map(t => (
-                <option key={t.id} value={t.id}>{t.name} - {t.description}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Response Template</label>
-            <textarea
-              value={responseConfig.template}
-              onChange={(e) => updateResponseConfig({ template: e.target.value })}
-              rows={12}
-              className="w-full px-3 py-2 border rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Template with {variables}, {#if conditions}, {#each loops}..."
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Use {'{variable}'}, {'{variable | currency}'}, {'{#if condition}'}, {'{#each items}'} syntax
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Follow-up Questions</label>
-            <div className="space-y-2 mb-3">
-              {(responseConfig.followUpQuestions || []).map((q, i) => (
-                <div key={i} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={q}
-                    onChange={(e) => {
-                      const updated = [...responseConfig.followUpQuestions];
-                      updated[i] = e.target.value;
-                      updateResponseConfig({ followUpQuestions: updated });
-                    }}
-                    className="flex-1 px-3 py-2 border rounded-lg text-sm"
-                  />
-                  <button
-                    onClick={() => removeFollowUp(i)}
-                    className="p-2 text-red-500 hover:bg-red-50 rounded"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newQuestion}
-                onChange={(e) => setNewQuestion(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addFollowUp()}
-                placeholder="Add follow-up question..."
-                className="flex-1 px-3 py-2 border rounded-lg text-sm"
-              />
-              <button
-                onClick={addFollowUp}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-              >
-                Add
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Tab: Test (Run test query)
-function TestTab({ 
-  intent,
-  businessContext,
-  countryConfigs
-}: { 
-  intent: Intent;
-  businessContext: BusinessContext;
-  countryConfigs: CountryConfig[];
-}) {
-  const [query, setQuery] = useState('');
-  const [isRunning, setIsRunning] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const sampleQueries = intent.trainingPhrases.slice(0, 3);
-
-  // Extract entities from query based on intent entity definitions
-  const extractEntities = (testQuery: string, entities: Entity[]): Record<string, any> => {
-    const extracted: Record<string, any> = {};
-    
-    entities.forEach(entity => {
-      // Try to extract entity values from query
-      const entityPlaceholder = `{{${entity.name}}}`;
-      
-      // Find if any training phrase contains this entity and try to match pattern
-      for (const phrase of intent.trainingPhrases) {
-        if (phrase.includes(entityPlaceholder)) {
-          // Simple extraction: look for numbers, dates, or known patterns
-          if (entity.type === 'number' || entity.type === 'amount') {
-            const numberMatch = testQuery.match(/\b(\d+(?:\.\d+)?)\b/);
-            if (numberMatch) {
-              extracted[entity.name] = parseFloat(numberMatch[1]);
-            }
-          } else if (entity.type === 'period') {
-            const periodPatterns = ['MTD', 'QTD', 'YTD', '7d', '30d', '90d', 'week', 'month', 'quarter', 'year'];
-            for (const period of periodPatterns) {
-              if (testQuery.toLowerCase().includes(period.toLowerCase())) {
-                extracted[entity.name] = period;
-                break;
-              }
-            }
-          } else if (entity.type === 'date_range') {
-            const dateMatch = testQuery.match(/(\w+\s+\d{4})\s*(?:to|-)\s*(\w+\s+\d{4})/i);
-            if (dateMatch) {
-              extracted[entity.name] = { start: dateMatch[1], end: dateMatch[2] };
-            }
-          }
-          break;
-        }
-      }
-      
-      // Apply default value if not extracted and has default
-      if (extracted[entity.name] === undefined && entity.defaultValue) {
-        extracted[entity.name] = entity.defaultValue;
-      }
-    });
-    
-    return extracted;
-  };
-
-  // Calculate match confidence based on training phrases similarity
-  const calculateConfidence = (testQuery: string): number => {
-    const queryWords = testQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    let bestMatch = 0;
-    
-    for (const phrase of intent.trainingPhrases) {
-      // Remove entity placeholders for comparison
-      const cleanPhrase = phrase.replace(/\{\{[^}]+\}\}/g, '').toLowerCase();
-      const phraseWords = cleanPhrase.split(/\s+/).filter(w => w.length > 2);
-      
-      // Count matching words
-      const matchingWords = queryWords.filter(qw => 
-        phraseWords.some(pw => pw.includes(qw) || qw.includes(pw))
-      );
-      
-      const similarity = matchingWords.length / Math.max(queryWords.length, phraseWords.length, 1);
-      bestMatch = Math.max(bestMatch, similarity);
-    }
-    
-    return Math.min(0.98, Math.max(0.5, bestMatch * 0.9 + 0.1));
-  };
-
-  // Process pipeline nodes
-  const processPipeline = (pipeline: PipelineNode[], entities: Record<string, any>): Record<string, any> => {
-    const pipelineResults: Record<string, any> = {};
-    
-    pipeline.forEach(node => {
-      if (node.nodeType === 'api_call') {
-        // Simulate API call result
-        pipelineResults[node.outputVariable] = {
-          status: 'success',
-          tool: node.mcpTool,
-          params: node.parameters,
-          data: `[Simulated data from ${node.mcpTool}]`
-        };
-      } else if (node.nodeType === 'computation') {
-        pipelineResults[node.outputVariable] = {
-          formula: node.formula,
-          result: '[Computed value]'
-        };
-      } else if (node.nodeType === 'conditional') {
-        pipelineResults[node.outputVariable] = {
-          condition: node.condition,
-          result: true
-        };
-      }
-    });
-    
-    return pipelineResults;
-  };
-
-  // Process enrichments
-  const processEnrichments = (enrichments: Enrichment[]): Record<string, any> => {
-    const enrichmentResults: Record<string, any> = {};
-    
-    enrichments.forEach(enrichment => {
-      enrichmentResults[enrichment.type] = {
-        applied: true,
-        config: enrichment.config,
-        result: `[${enrichment.type} analysis applied]`
-      };
-    });
-    
-    return enrichmentResults;
-  };
-
-  // Generate response from template
-  const generateResponse = (template: string, data: Record<string, any>): string => {
-    if (!template) return 'No response template configured';
-    
-    let response = template;
-    
-    // Replace simple variables {variableName}
-    response = response.replace(/\{(\w+)(?:\s*\|\s*\w+(?::\d+)?)?\}/g, (match, varName) => {
-      return data[varName] !== undefined ? String(data[varName]) : `[${varName}]`;
-    });
-    
-    // Handle conditionals {#if condition}...{/if}
-    response = response.replace(/\{#if\s+[^}]+\}[\s\S]*?\{\/if\}/g, '[Conditional content]');
-    
-    // Handle loops {#each items}...{/each}
-    response = response.replace(/\{#each\s+[^}]+\}[\s\S]*?\{\/each\}/g, '[Loop content]');
-    
-    return response;
-  };
-
-  const runTest = async (testQuery: string) => {
-    setIsRunning(true);
-    setQuery(testQuery);
-    setError(null);
-    
-    const startTime = Date.now();
-    
-    try {
-      // Step 1: Extract entities
-      const extractedEntities = extractEntities(testQuery, intent.entities);
-      
-      // Step 2: Calculate match confidence
-      const confidence = calculateConfidence(testQuery);
-      
-      // Step 3: Process pipeline
-      const pipeline = intent.resolutionFlow?.dataPipeline || [];
-      const pipelineResults = processPipeline(pipeline, extractedEntities);
-      
-      // Step 4: Process enrichments
-      const enrichments = intent.resolutionFlow?.enrichments || [];
-      const enrichmentResults = processEnrichments(enrichments);
-      
-      // Step 5: Generate response
-      const responseTemplate = intent.resolutionFlow?.responseConfig?.template || '';
-      const allData = { ...extractedEntities, ...pipelineResults, ...enrichmentResults };
-      const responsePreview = generateResponse(responseTemplate, allData);
-      
-      const executionTime = Date.now() - startTime;
-      
-      setResult({
-        matchedIntent: { name: intent.name, confidence },
-        entities: extractedEntities,
-        pipelineSteps: pipeline.length,
-        pipelineResults,
-        enrichmentsApplied: enrichments.length,
-        enrichmentResults,
-        executionTime: `${(executionTime / 1000).toFixed(2)}s`,
-        response: responsePreview,
-        followUpQuestions: intent.resolutionFlow?.responseConfig?.followUpQuestions || []
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Test execution failed');
-    } finally {
-      setIsRunning(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="font-medium text-gray-900">Test Intent</h3>
-        <p className="text-sm text-gray-500">Test this intent with sample or custom queries</p>
-      </div>
-
-      {/* Sample Queries */}
-      {sampleQueries.length > 0 && (
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Sample Queries</label>
-          <div className="space-y-2">
-            {sampleQueries.map((q, i) => (
-              <button
-                key={i}
-                onClick={() => runTest(q)}
-                disabled={isRunning}
-                className="w-full text-left px-3 py-2 border rounded-lg text-sm hover:bg-gray-50 flex items-center justify-between transition-colors disabled:opacity-50"
-              >
-                <span>{q}</span>
-                <Play size={14} className="text-gray-400" />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Custom Query */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Custom Query</label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Enter a test query..."
-            className="flex-1 px-3 py-2 border rounded-lg"
-          />
-          <button
-            onClick={() => runTest(query)}
-            disabled={isRunning || !query.trim()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-            Run Test
-          </button>
-        </div>
-      </div>
-
-      {/* Context */}
-      <div className="p-3 bg-gray-50 rounded-lg">
-        <div className="text-sm font-medium text-gray-700 mb-2">Context</div>
-        <div className="flex gap-4 text-sm text-gray-600">
-          <span>{countryConfigs.find(c => c.code === businessContext.country)?.flag} {businessContext.country}</span>
-          <span>📊 {businessContext.entitySize}</span>
-          <span>🏭 {businessContext.industry}</span>
-          <span>💰 {businessContext.currency}</span>
-        </div>
-      </div>
-
-      {/* Error Display */}
-      {error && (
-        <div className="border border-red-200 rounded-lg overflow-hidden bg-red-50">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <AlertCircle size={16} className="text-red-600" />
-            <span className="font-medium text-red-700">Test Failed</span>
-          </div>
-          <div className="px-4 pb-4">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Results */}
-      {result && (
-        <div className="border rounded-lg overflow-hidden">
-          <div className="px-4 py-3 bg-green-50 border-b flex items-center gap-2">
-            <Check size={16} className="text-green-600" />
-            <span className="font-medium text-green-700">Test Complete</span>
-            <span className="text-sm text-green-600 ml-auto">⏱️ {result.executionTime}</span>
-          </div>
-          <div className="p-4 space-y-4">
-            {/* Matched Intent */}
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Matched Intent</div>
-              <div className="font-medium">
-                {result.matchedIntent.name}
-                <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                  result.matchedIntent.confidence >= 0.8 ? 'bg-green-100 text-green-700' :
-                  result.matchedIntent.confidence >= 0.6 ? 'bg-yellow-100 text-yellow-700' :
-                  'bg-red-100 text-red-700'
-                }`}>
-                  {Math.round(result.matchedIntent.confidence * 100)}% confidence
-                </span>
-              </div>
-            </div>
-            
-            {/* Extracted Tool Parameters */}
-            {Object.keys(result.entities).length > 0 && (
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Extracted Tool Parameters</div>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  {Object.entries(result.entities).map(([key, value]) => (
-                    <div key={key} className="flex items-center gap-2 text-sm">
-                      <span className="font-mono text-purple-600">{key}:</span>
-                      <span className="font-mono text-gray-700">{JSON.stringify(value)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Pipeline Execution */}
-            {result.pipelineSteps > 0 && (
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Pipeline Execution ({result.pipelineSteps} steps)</div>
-                <div className="bg-blue-50 p-3 rounded-lg space-y-2">
-                  {Object.entries(result.pipelineResults).map(([key, value]: [string, any]) => (
-                    <div key={key} className="text-sm">
-                      <span className="font-mono text-blue-600">{key}:</span>
-                      <span className="ml-2 text-gray-600">
-                        {value.tool ? `Called @${value.tool}` : value.formula ? `Computed: ${value.formula}` : 'Evaluated'}
-                      </span>
-                      <Check size={12} className="inline ml-2 text-green-500" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Enrichments */}
-            {result.enrichmentsApplied > 0 && (
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Enrichments Applied ({result.enrichmentsApplied})</div>
-                <div className="flex flex-wrap gap-2">
-                  {Object.keys(result.enrichmentResults).map(type => (
-                    <span key={type} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs flex items-center gap-1">
-                      <Sparkles size={10} />
-                      {type}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Response Preview */}
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Response Preview</div>
-              <pre className="text-sm bg-gray-50 p-3 rounded-lg overflow-auto whitespace-pre-wrap border">{result.response}</pre>
-            </div>
-            
-            {/* Follow-up Questions */}
-            {result.followUpQuestions && result.followUpQuestions.length > 0 && (
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Follow-up Questions</div>
-                <div className="space-y-1">
-                  {result.followUpQuestions.map((q: string, i: number) => (
-                    <button
-                      key={i}
-                      onClick={() => runTest(q)}
-                      className="block w-full text-left px-3 py-2 text-sm bg-gray-50 hover:bg-gray-100 rounded border transition-colors"
-                    >
-                      💬 {q}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================================================
-// INTENT DETAIL SCREEN
-// ============================================================================
-
-interface IntentDetailScreenProps {
-  intent: Intent;
-  modules: Module[];
-  mcpTools: MCPTool[];
-  enrichmentTypes: EnrichmentType[];
-  entityTypes: EntityType[];
-  responseTypes: ResponseType[];
-  countryConfigs: CountryConfig[];
-  businessContext: BusinessContext;
-  onBack: () => void;
-  onSave: (intent: Intent) => void;
-  onDelete: (id: string) => void;
-  onRegenerate: (intentId: string, section?: string, options?: { phraseCount?: number }) => Promise<Partial<Intent>>;
-}
-
-function IntentDetailScreen({
-  intent: initialIntent,
-  modules,
-  mcpTools,
-  enrichmentTypes,
-  entityTypes,
-  responseTypes,
-  countryConfigs,
-  businessContext,
-  onBack,
-  onSave,
-  onDelete,
-  onRegenerate
-}: IntentDetailScreenProps) {
-  const [activeTab, setActiveTab] = useState('details');
-  const [editingIntent, setEditingIntent] = useState<Intent>(initialIntent);
-  const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
-  const [hasChanges, setHasChanges] = useState(false);
-  const { getIntentAnalytics, isLoading: isAnalyticsLoading } = useToolAnalytics();
-
-  useEffect(() => {
-    setEditingIntent(initialIntent);
-    setHasChanges(false);
-  }, [initialIntent]);
-
-  const handleChange = (updates: Partial<Intent>) => {
-    setEditingIntent(prev => ({ ...prev, ...updates }));
-    setHasChanges(true);
-  };
-
-  const handleSave = () => {
-    onSave({
-      ...editingIntent,
-      updatedAt: new Date().toISOString()
-    });
-    setHasChanges(false);
-  };
-
-  const handleRegenerate = async (section?: string, options?: { phraseCount?: number }) => {
-    setIsRegenerating(section || 'all');
-    try {
-      const generated = await onRegenerate(editingIntent.id, section, options);
-      const merged = { ...editingIntent, ...generated };
-      setEditingIntent(merged);
-      // Auto-save after AI generation
-      onSave({ ...merged, updatedAt: new Date().toISOString() });
-      setHasChanges(false);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to regenerate';
-      console.error('Regenerate failed:', err);
-      toast({ title: 'AI Generation Error', description: message, variant: 'destructive' });
-    } finally {
-      setIsRegenerating(null);
-    }
-  };
-
-  const selectedModule = modules.find(m => m.id === editingIntent.moduleId);
-
-  const tabs = [
-    { id: 'details', label: 'Details', icon: <FileText size={16} /> },
-    { id: 'training', label: 'Training Phrases', icon: <MessageSquare size={16} /> },
-    { id: 'entities', label: 'Tool Parameters', icon: <Variable size={16} /> },
-    { id: 'pipeline', label: 'Data Pipeline', icon: <Database size={16} /> },
-    { id: 'enrichments', label: 'Enrichments', icon: <Sparkles size={16} /> },
-    { id: 'response', label: 'Response', icon: <Code size={16} /> },
-    { id: 'usage', label: 'Usage', icon: <BarChart3 size={16} /> },
-    { id: 'test', label: 'Test', icon: <TestTube size={16} /> }
-  ];
-
-  return (
-    <div className="flex h-screen bg-gray-50">
-      {/* Left Panel */}
-      <div className="w-80 bg-white border-r flex flex-col">
-        <div className="p-4 border-b">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
-          >
-            <ArrowLeft size={18} /> Back to List
-          </button>
-          <h2 className="text-lg font-bold text-gray-900 truncate">
-            {editingIntent.name || 'New Intent'}
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">
-            {selectedModule?.icon} {selectedModule?.name}
-          </p>
-        </div>
-
-        {/* Status */}
-        <div className="p-4 border-b">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-gray-600">Status</span>
-            {editingIntent.generatedBy === 'ai' ? (
-              <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs flex items-center gap-1">
-                <Check size={12} /> AI Generated
-              </span>
-            ) : editingIntent.generatedBy === 'pending' ? (
-              <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
-                ⏳ Pending Generation
-              </span>
-            ) : (
-              <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
-                ✏️ Manual
-              </span>
-            )}
-          </div>
-          
-          {editingIntent.aiConfidence && (
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-gray-600">AI Confidence</span>
-              <span className="text-sm font-medium">{Math.round(editingIntent.aiConfidence * 100)}%</span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600">Active</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={editingIntent.isActive}
-                onChange={(e) => handleChange({ isActive: e.target.checked })}
-                className="sr-only peer"
-              />
-              <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-            </label>
-          </div>
-        </div>
-
-        {/* Regenerate All */}
-        {editingIntent.generatedBy !== 'pending' && (
-          <div className="p-4 border-b">
-            <button
-              onClick={() => handleRegenerate('all')}
-              disabled={isRegenerating !== null}
-              className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg flex items-center justify-center gap-2 hover:bg-purple-700 disabled:opacity-50"
-            >
-              {isRegenerating === 'all' ? (
-                <Loader2 size={16} className="animate-spin" />
-              ) : (
-                <RefreshCw size={16} />
-              )}
-              Regenerate All with AI
-            </button>
-          </div>
-        )}
-
-        {/* Tab Navigation */}
-        <nav className="flex-1 py-2 overflow-y-auto">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`w-full px-4 py-2.5 flex items-center gap-2 text-sm transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-700'
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {tab.icon} {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Actions */}
-        <div className="p-4 border-t space-y-2">
-          <button
-            onClick={handleSave}
-            disabled={!hasChanges}
-            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Save size={16} /> Save Changes
-          </button>
-          <button
-            onClick={() => {
-              if (confirm('Delete this intent?')) {
-                onDelete(editingIntent.id);
-              }
-            }}
-            className="w-full px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg flex items-center justify-center gap-2"
-          >
-            <Trash2 size={16} /> Delete Intent
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-4xl">
-          {/* Unsaved Changes Warning */}
-          {hasChanges && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2 text-amber-700">
-              <AlertCircle size={16} />
-              <span className="text-sm">You have unsaved changes</span>
-            </div>
-          )}
-
-          {/* Tab Content */}
-          {activeTab === 'details' && (
-            <IntentDetailsTab 
-              intent={editingIntent} 
-              modules={modules}
-              onChange={handleChange} 
-            />
-          )}
-          
-          {activeTab === 'training' && (
-            <TrainingPhrasesTab
-              intent={editingIntent}
-              onChange={handleChange}
-              onRegenerate={(count) => handleRegenerate('training', { phraseCount: count })}
-              isRegenerating={isRegenerating === 'training'}
-            />
-          )}
-          
-          {activeTab === 'entities' && (
-            <EntitiesTab
-              intent={editingIntent}
-              onChange={handleChange}
-              onRegenerate={() => handleRegenerate('entities')}
-              isRegenerating={isRegenerating === 'entities'}
-              entityTypes={entityTypes}
-            />
-          )}
-          
-          {activeTab === 'pipeline' && (
-            <DataPipelineTab
-              intent={editingIntent}
-              mcpTools={mcpTools}
-              onChange={handleChange}
-              onRegenerate={() => handleRegenerate('pipeline')}
-              isRegenerating={isRegenerating === 'pipeline'}
-            />
-          )}
-          
-          {activeTab === 'enrichments' && (
-            <EnrichmentsTab
-              intent={editingIntent}
-              enrichmentTypes={enrichmentTypes}
-              onChange={handleChange}
-              onRegenerate={() => handleRegenerate('enrichments')}
-              isRegenerating={isRegenerating === 'enrichments'}
-            />
-          )}
-          
-          {activeTab === 'response' && (
-            <ResponseConfigTab
-              intent={editingIntent}
-              onChange={handleChange}
-              onRegenerate={() => handleRegenerate('response')}
-              isRegenerating={isRegenerating === 'response'}
-              responseTypes={responseTypes}
-            />
-          )}
-          
-          {activeTab === 'usage' && (
-            <IntentUsageTab
-              intentName={editingIntent.name}
-              analytics={getIntentAnalytics(editingIntent.name)}
-              isLoading={isAnalyticsLoading}
-            />
-          )}
-
-          {activeTab === 'test' && (
-            <TestTab
-              intent={editingIntent}
-              businessContext={businessContext}
-              countryConfigs={countryConfigs}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// INTENT LIST VIEW
-// ============================================================================
-
-interface IntentListViewProps {
+// Intent List View
+function IntentListView({ 
+  intents, modules, searchTerm, filterModule, filterStatus,
+  onSearchChange, onFilterModuleChange, onFilterStatusChange,
+  onSelectIntent, onAddIntent, onDeleteIntent, onGenerateFlow,
+  onImport, onExportCSV, onExportJSON, onDownloadTemplate, onOpenAIGenerator,
+  isGenerating, isImporting, generationProgress
+}: {
   intents: Intent[];
   modules: Module[];
   searchTerm: string;
   filterModule: string | null;
   filterStatus: 'all' | 'configured' | 'pending';
-  onSearchChange: (term: string) => void;
-  onFilterModuleChange: (module: string | null) => void;
-  onFilterStatusChange: (status: 'all' | 'configured' | 'pending') => void;
+  onSearchChange: (v: string) => void;
+  onFilterModuleChange: (v: string | null) => void;
+  onFilterStatusChange: (v: 'all' | 'configured' | 'pending') => void;
   onSelectIntent: (id: string) => void;
   onAddIntent: () => void;
   onDeleteIntent: (id: string) => void;
-  onGenerateFlow: (intentId: string, section?: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all') => void;
+  onGenerateFlow: (id: string) => void;
   onImport: (file: File) => void;
   onExportCSV: () => void;
   onExportJSON: () => void;
@@ -2601,167 +1888,40 @@ interface IntentListViewProps {
   isGenerating: string | null;
   isImporting: boolean;
   generationProgress: { current: number; total: number };
-}
-
-function IntentListView({
-  intents,
-  modules,
-  searchTerm,
-  filterModule,
-  filterStatus,
-  onSearchChange,
-  onFilterModuleChange,
-  onFilterStatusChange,
-  onSelectIntent,
-  onAddIntent,
-  onDeleteIntent,
-  onGenerateFlow,
-  onImport,
-  onExportCSV,
-  onExportJSON,
-  onDownloadTemplate,
-  onOpenAIGenerator,
-  isGenerating,
-  isImporting,
-  generationProgress
-}: IntentListViewProps) {
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [intentSubTab, setIntentSubTab] = React.useState<'intents' | 'cases'>('intents');
-  const [casesGenProgress, setCasesGenProgress] = React.useState<{ running: boolean; current: number; total: number; created: number; skipped: number; failed: number }>({ running: false, current: 0, total: 0, created: 0, skipped: 0, failed: 0 });
-  const [casesGenCount, setCasesGenCount] = React.useState<number>(10);
-  const [showCasesGenInput, setShowCasesGenInput] = React.useState(false);
-  const [selectedIntentIds, setSelectedIntentIds] = React.useState<Set<string>>(new Set());
-  const [bulkGenProgress, setBulkGenProgress] = React.useState<{ running: boolean; current: number; total: number; completed: number; failed: number }>({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
-  const [refImporting, setRefImporting] = React.useState(false);
-  const [refImportResult, setRefImportResult] = React.useState<{ inserted: number; updated: number; total: number } | null>(null);
+}) {
+  const [activeSubTab, setActiveSubTab] = useState<'intents' | 'cases'>('intents');
+  const [selectedIntentIds, setSelectedIntentIds] = useState<Set<string>>(new Set());
+  const [bulkGenProgress, setBulkGenProgress] = useState({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
 
   const allSelected = intents.length > 0 && selectedIntentIds.size === intents.length;
   const someSelected = selectedIntentIds.size > 0 && selectedIntentIds.size < intents.length;
 
   const toggleSelectAll = () => {
-    if (allSelected) {
-      setSelectedIntentIds(new Set());
-    } else {
-      setSelectedIntentIds(new Set(intents.map(i => i.id)));
-    }
+    if (allSelected) setSelectedIntentIds(new Set());
+    else setSelectedIntentIds(new Set(intents.map(i => i.id)));
   };
 
   const toggleSelectIntent = (id: string) => {
-    setSelectedIntentIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    const next = new Set(selectedIntentIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIntentIds(next);
   };
 
-  const handleBulkGenerate = async (section: 'training' | 'entities' | 'pipeline' | 'enrichments' | 'response' | 'all' = 'all') => {
-    if (bulkGenProgress.running || selectedIntentIds.size === 0) return;
-    const selected = intents.filter(i => selectedIntentIds.has(i.id));
-    setBulkGenProgress({ running: true, current: 0, total: selected.length, completed: 0, failed: 0 });
-
-    let completed = 0;
-    let failed = 0;
-
-    for (let i = 0; i < selected.length; i++) {
+  const handleBulkGenerate = async (section: string) => {
+    const ids = Array.from(selectedIntentIds);
+    if (ids.length === 0) return;
+    setBulkGenProgress({ running: true, current: 0, total: ids.length, completed: 0, failed: 0 });
+    for (let i = 0; i < ids.length; i++) {
       setBulkGenProgress(prev => ({ ...prev, current: i + 1 }));
       try {
-        await onGenerateFlow(selected[i].id, section);
-        completed++;
-      } catch {
-        failed++;
+        onGenerateFlow(ids[i]);
+        setBulkGenProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+      } catch (_e) {
+        setBulkGenProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
       }
-      setBulkGenProgress(prev => ({ ...prev, completed, failed }));
     }
-
     setBulkGenProgress(prev => ({ ...prev, running: false }));
     setSelectedIntentIds(new Set());
-    const sectionLabel = section === 'all' ? 'full config' : section;
-    toast({ 
-      title: 'Bulk Generation Complete', 
-      description: `${completed} succeeded, ${failed} failed out of ${selected.length} intents (${sectionLabel})` 
-    });
-  };
-
-  const handleGenerateFromCases = async () => {
-    if (casesGenProgress.running) return;
-    const count = Math.min(Math.max(1, casesGenCount), 50);
-    const casesToProcess = TEST_CASES.slice(0, count);
-
-    const batchSize = 8;
-    const totalBatches = Math.ceil(casesToProcess.length / batchSize);
-    setCasesGenProgress({ running: true, current: 0, total: totalBatches, created: 0, skipped: 0, failed: 0 });
-    setShowCasesGenInput(false);
-
-    try {
-      const { supabase } = await import('@/integrations/supabase/client');
-      const { data, error } = await supabase.functions.invoke('generate-intents-from-cases', {
-        body: { testCases: casesToProcess, batchSize },
-      });
-
-      if (error) throw error;
-
-      const summary = data?.summary || {};
-      setCasesGenProgress(prev => ({
-        ...prev,
-        running: false,
-        current: totalBatches,
-        created: summary.created || 0,
-        skipped: summary.skipped || 0,
-        failed: summary.failed || 0,
-      }));
-
-      toast({ title: 'Generation complete', description: `Created: ${summary.created}, Skipped: ${summary.skipped}, Failed: ${summary.failed}` });
-    } catch (err) {
-      console.error('Generate from cases error:', err);
-      setCasesGenProgress(prev => ({ ...prev, running: false }));
-      toast({ title: 'Generation failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
-    }
-  };
-  // Import reference data from pre-built JSON files
-  const handleImportReferenceData = async () => {
-    if (refImporting) return;
-    setRefImporting(true);
-    setRefImportResult(null);
-    try {
-      // Fetch both batch files
-      const [batch1Res, batch2Res] = await Promise.all([
-        fetch('/data/batch1_intents_with_phrases.json'),
-        fetch('/data/batch2_intents_with_phrases.json'),
-      ]);
-      const batch1 = await batch1Res.json();
-      const batch2 = await batch2Res.json();
-      const allIntents = [...batch1, ...batch2];
-
-      // Call edge function to upsert
-      const { data, error } = await supabase.functions.invoke('bulk-upsert-intents', {
-        body: { intents: allIntents },
-      });
-
-      if (error) throw error;
-
-      setRefImportResult({ inserted: data.inserted, updated: data.updated, total: data.total });
-      toast({
-        title: 'Reference data imported',
-        description: `${data.inserted} inserted, ${data.updated} updated out of ${data.total} intents`,
-      });
-
-      // Refresh intents list
-      window.location.reload();
-    } catch (err) {
-      console.error('Reference import error:', err);
-      toast({ title: 'Import failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
-    } finally {
-      setRefImporting(false);
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onImport(file);
-      e.target.value = '';
-    }
   };
 
   return (
@@ -2769,193 +1929,43 @@ function IntentListView({
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Intent Library</h1>
-          <p className="text-muted-foreground mt-1">Manage query intents and AI-generated configurations</p>
+          <h2 className="text-xl font-bold text-gray-900">Intent Management</h2>
+          <p className="text-sm text-gray-500">Configure chatbot intents and their AI-generated resolution flows</p>
         </div>
-        <div className="flex gap-2">
-          {/* Sub-tab toggle */}
-          <div className="flex gap-1 bg-muted p-1 rounded-lg mr-2">
-            <button
-              onClick={() => setIntentSubTab('intents')}
-              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
-                intentSubTab === 'intents'
-                  ? 'bg-background shadow text-foreground font-medium'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <MessageSquare size={14} /> Intents ({intents.length})
+        <div className="flex items-center gap-2">
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            <button onClick={() => setActiveSubTab('intents')} className={`px-3 py-1.5 rounded text-sm transition-colors ${activeSubTab === 'intents' ? 'bg-white shadow text-gray-900' : 'text-gray-600'}`}>
+              Intents
             </button>
-            <button
-              onClick={() => setIntentSubTab('cases')}
-              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 transition-colors ${
-                intentSubTab === 'cases'
-                  ? 'bg-background shadow text-foreground font-medium'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <ListOrdered size={14} /> Test Cases ({TEST_CASES.length})
+            <button onClick={() => setActiveSubTab('cases')} className={`px-3 py-1.5 rounded text-sm transition-colors ${activeSubTab === 'cases' ? 'bg-white shadow text-gray-900' : 'text-gray-600'}`}>
+              Test Cases
             </button>
           </div>
-          {intentSubTab === 'intents' && (
-            <>
-          {/* Import Dropdown */}
-          <div className="relative group">
-            <button className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-200">
-              <Upload size={16} /> Import
-              <ChevronDown size={14} />
-            </button>
-            <div className="absolute right-0 mt-1 w-48 bg-white border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-              <button
-                onClick={onDownloadTemplate}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-              >
-                <Download size={14} /> Download Template
-              </button>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-              >
-                <Upload size={14} /> Import CSV
-              </button>
-            </div>
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          
-          {/* Export Dropdown */}
-          <div className="relative group">
-            <button className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-200">
-              <Download size={16} /> Export
-              <ChevronDown size={14} />
-            </button>
-            <div className="absolute right-0 mt-1 w-48 bg-white border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-              <button
-                onClick={onExportCSV}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-              >
-                <FileSpreadsheet size={14} /> Export CSV
-              </button>
-              <button
-                onClick={onExportJSON}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-              >
-                <FileJson size={14} /> Export Full Config
-              </button>
-            </div>
-          </div>
-          
-          <div className="relative">
-            <button
-              onClick={() => setShowCasesGenInput(!showCasesGenInput)}
-              disabled={casesGenProgress.running}
-              className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50"
-            >
-              {casesGenProgress.running ? <Loader2 size={16} className="animate-spin" /> : <ListOrdered size={16} />}
-              {casesGenProgress.running ? 'Generating...' : `Generate from Cases (${TEST_CASES.length})`}
-            </button>
-            {showCasesGenInput && !casesGenProgress.running && (
-              <div className="absolute top-full mt-2 right-0 bg-white border border-border rounded-lg shadow-lg p-4 z-50 w-72">
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Number of cases to generate (max 50)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={casesGenCount}
-                  onChange={(e) => setCasesGenCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
-                  className="w-full px-3 py-2 border border-input rounded-md text-sm mb-3 bg-background"
-                />
-                <p className="text-xs text-muted-foreground mb-3">
-                  Will process cases 1–{Math.min(casesGenCount, 50)} of {TEST_CASES.length} total.
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleGenerateFromCases}
-                    className="flex-1 px-3 py-2 bg-emerald-600 text-white rounded-md text-sm hover:bg-emerald-700"
-                  >
-                    Start Generation
-                  </button>
-                  <button
-                    onClick={() => setShowCasesGenInput(false)}
-                    className="px-3 py-2 border border-border rounded-md text-sm hover:bg-muted"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={onOpenAIGenerator}
-            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg text-sm flex items-center gap-2 hover:from-purple-700 hover:to-indigo-700"
-          >
-            <Wand2 size={16} /> Generate with AI
+          <button onClick={onOpenAIGenerator} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2">
+            <Brain size={16} /> AI Generator
           </button>
-
-          <button
-            onClick={handleImportReferenceData}
-            disabled={refImporting}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {refImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            {refImporting ? 'Importing...' : 'Import Reference Data'}
-          </button>
-          
-          <button
-            onClick={onAddIntent}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm flex items-center gap-2 hover:bg-purple-700"
-          >
+          <button onClick={onAddIntent} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2">
             <Plus size={16} /> Add Intent
           </button>
-            </>
-          )}
+          <div className="relative group">
+            <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><MoreVertical size={18} /></button>
+            <div className="absolute right-0 mt-1 w-48 bg-white border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+              <div className="py-1">
+                <label className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                  <Upload size={14} className="inline mr-2" /> Import CSV
+                  <input type="file" accept=".csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); }} className="hidden" />
+                </label>
+                <button onClick={onExportCSV} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"><Download size={14} className="inline mr-2" /> Export CSV</button>
+                <button onClick={onExportJSON} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"><FileJson size={14} className="inline mr-2" /> Export JSON</button>
+                <button onClick={onDownloadTemplate} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"><FileSpreadsheet size={14} className="inline mr-2" /> Download Template</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {intentSubTab === 'intents' ? (
+      {activeSubTab === 'intents' ? (
         <>
-      {/* Cases Generation Progress */}
-      {casesGenProgress.running && (
-        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-          <div className="flex items-center gap-3">
-            <Loader2 size={20} className="animate-spin text-emerald-600" />
-            <div className="flex-1">
-              <p className="font-medium text-emerald-700">
-                Generating intents from {TEST_CASES.length} test cases via Azure OpenAI...
-              </p>
-              <p className="text-xs text-emerald-600 mt-1">
-                This may take several minutes. Do not close this page.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-      {!casesGenProgress.running && casesGenProgress.created > 0 && (
-        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-          <p className="font-medium text-emerald-700">
-            ✅ Generation complete: {casesGenProgress.created} created, {casesGenProgress.skipped} skipped, {casesGenProgress.failed} failed
-          </p>
-        </div>
-      )}
-
-      {/* Reference Import Result */}
-      {refImportResult && (
-        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between">
-          <p className="font-medium text-emerald-700">
-            ✅ Reference import complete: {refImportResult.inserted} inserted, {refImportResult.updated} updated (total {refImportResult.total})
-          </p>
-          <button onClick={() => setRefImportResult(null)} className="text-xs text-emerald-500 hover:underline">Dismiss</button>
-        </div>
-      )}
-
-
       {(isImporting || generationProgress.total > 0) && (
         <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
           <div className="flex items-center gap-3">
@@ -3414,6 +2424,176 @@ function ToolGapAnalysisPanel({ tools }: { tools: MCPTool[] }) {
           </div>
         </CollapsibleContent>
       </Collapsible>
+    </div>
+  );
+}
+
+// Intent Detail Screen - Tabbed editor for a single intent
+function IntentDetailScreen({
+  intent: initialIntent,
+  modules,
+  mcpTools,
+  enrichmentTypes,
+  entityTypes,
+  responseTypes,
+  countryConfigs,
+  businessContext,
+  onBack,
+  onSave,
+  onDelete,
+  onRegenerate,
+}: {
+  intent: Intent;
+  modules: Module[];
+  mcpTools: MCPTool[];
+  enrichmentTypes: EnrichmentType[];
+  entityTypes: EntityType[];
+  responseTypes: ResponseType[];
+  countryConfigs: CountryConfig[];
+  businessContext: BusinessContext;
+  onBack: () => void;
+  onSave: (intent: Intent) => void;
+  onDelete: (id: string) => void;
+  onRegenerate: (intentId: string, section?: string, options?: { phraseCount?: number }) => Promise<Partial<Intent>>;
+}) {
+  const [intent, setIntent] = useState<Intent>(initialIntent);
+  const [activeDetailTab, setActiveDetailTab] = useState('details');
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  useEffect(() => {
+    setIntent(initialIntent);
+  }, [initialIntent]);
+
+  const handleChange = (updates: Partial<Intent>) => {
+    setIntent(prev => ({ ...prev, ...updates }));
+    setHasUnsavedChanges(true);
+  };
+
+  const handleSave = () => {
+    onSave(intent);
+    setHasUnsavedChanges(false);
+  };
+
+  const handleRegenerate = async (section?: string) => {
+    setIsRegenerating(true);
+    try {
+      const updates = await onRegenerate(intent.id, section);
+      if (updates) {
+        setIntent(prev => ({ ...prev, ...updates }));
+        setHasUnsavedChanges(true);
+      }
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  const tabs = [
+    { id: 'details', label: 'Details', icon: <FileText size={14} /> },
+    { id: 'training', label: 'Training Phrases', icon: <MessageSquare size={14} /> },
+    { id: 'entities', label: 'Entities', icon: <Box size={14} /> },
+    { id: 'pipeline', label: 'Data Pipeline', icon: <GitBranch size={14} /> },
+  ];
+
+  return (
+    <div className="h-screen flex flex-col bg-white">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-lg">
+            <ArrowLeft size={18} />
+          </button>
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">{formatIntentName(intent.name)}</h2>
+            <p className="text-sm text-gray-500">{intent.description || 'No description'}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {hasUnsavedChanges && (
+            <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={!hasUnsavedChanges}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 flex items-center gap-2"
+          >
+            <Save size={14} /> Save
+          </button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                <Trash2 size={18} />
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete Intent</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to delete "{formatIntentName(intent.name)}"? This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => { onDelete(intent.id); onBack(); }}>Delete</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b px-6">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveDetailTab(tab.id)}
+            className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeDetailTab === tab.id
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab.icon} {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 overflow-auto p-6">
+        {activeDetailTab === 'details' && (
+          <IntentDetailsTab
+            intent={intent}
+            modules={modules}
+            onChange={handleChange}
+          />
+        )}
+        {activeDetailTab === 'training' && (
+          <TrainingPhrasesTab
+            intent={intent}
+            onChange={handleChange}
+            onRegenerate={() => handleRegenerate('training')}
+            isRegenerating={isRegenerating}
+          />
+        )}
+        {activeDetailTab === 'entities' && (
+          <EntitiesTab
+            intent={intent}
+            onChange={handleChange}
+            entityTypes={entityTypes}
+            onRegenerate={() => handleRegenerate('entities')}
+            isRegenerating={isRegenerating}
+          />
+        )}
+        {activeDetailTab === 'pipeline' && (
+          <DataPipelineTab
+            intent={intent}
+            mcpTools={mcpTools}
+            onChange={handleChange}
+            onRegenerate={() => handleRegenerate('pipeline')}
+            isRegenerating={isRegenerating}
+          />
+        )}
+      </div>
     </div>
   );
 }
