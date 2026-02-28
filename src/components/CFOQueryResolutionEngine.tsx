@@ -63,7 +63,7 @@ import {
   AlertCircle, ArrowRight, FileJson, Zap, ArrowLeft, FileSpreadsheet,
   Globe, Building2, Filter, MoreVertical, Eye, TestTube, RefreshCw,
   ListOrdered, Variable, FileText, Users, LogOut, Terminal, BarChart3,
-  CheckCircle2, LockKeyhole, LayoutGrid, List, AlertTriangle
+  CheckCircle2, LockKeyhole, LayoutGrid, List, AlertTriangle, Undo2
 } from 'lucide-react';
 import ApiConsole from '@/components/ApiConsole';
 import { AIIntentGeneratorModal } from '@/components/AIIntentGeneratorModal';
@@ -2958,20 +2958,28 @@ function IntentDetailScreen({
   const [intent, setIntent] = useState<Intent>(initialIntent);
   const [activeDetailTab, setActiveDetailTab] = useState('details');
   const [isRegenerating, setIsRegenerating] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [previousIntent, setPreviousIntent] = useState<Intent | null>(null);
 
   useEffect(() => {
     setIntent(initialIntent);
+    setPreviousIntent(null);
   }, [initialIntent]);
 
   const handleChange = (updates: Partial<Intent>) => {
-    setIntent(prev => ({ ...prev, ...updates }));
-    setHasUnsavedChanges(true);
+    setPreviousIntent(intent); // snapshot for undo
+    const updated = { ...intent, ...updates };
+    setIntent(updated);
+    // Auto-save immediately
+    onSave(updated);
+    toast({ title: 'Saved ✓', duration: 1500 });
   };
 
-  const handleSave = () => {
-    onSave(intent);
-    setHasUnsavedChanges(false);
+  const handleUndo = () => {
+    if (!previousIntent) return;
+    setIntent(previousIntent);
+    onSave(previousIntent);
+    setPreviousIntent(null);
+    toast({ title: 'Undone ✓', duration: 1500 });
   };
 
   const handleRegenerate = async (section?: string) => {
@@ -3028,15 +3036,12 @@ function IntentDetailScreen({
 
         {/* Actions at bottom */}
         <div className="p-3 border-t space-y-2">
-          {hasUnsavedChanges && (
-            <span className="text-xs text-amber-600 font-medium block text-center">Unsaved changes</span>
-          )}
           <button
-            onClick={handleSave}
-            disabled={!hasUnsavedChanges}
-            className="w-full px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 flex items-center justify-center gap-2"
+            onClick={handleUndo}
+            disabled={!previousIntent}
+            className="w-full px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-40 flex items-center justify-center gap-2"
           >
-            <Save size={14} /> Save
+            <Undo2 size={14} /> Undo Last Change
           </button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
