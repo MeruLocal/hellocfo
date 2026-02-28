@@ -4178,27 +4178,6 @@ export default function CFOQueryResolutionEngine() {
     );
   }
 
-  // If an intent is selected, show the detail view (use stableSelectedIntent to prevent unmount during refetch)
-  if (selectedIntentId && stableSelectedIntent && businessContext) {
-    return (
-      <IntentDetailScreen
-        key={selectedIntentId}
-        intent={stableSelectedIntent}
-        modules={modules}
-        mcpTools={allMcpTools}
-        enrichmentTypes={enrichmentTypes}
-        entityTypes={entityTypes}
-        responseTypes={responseTypes}
-        countryConfigs={countryConfigs}
-        businessContext={businessContext}
-        onBack={() => setSelectedIntentId(null)}
-        onSave={handleSaveIntent}
-        onDelete={handleDeleteIntent}
-        onRegenerate={regenerateSection}
-      />
-    );
-  }
-
   // Main view with sidebar
   return (
     <div className="flex h-screen bg-gray-50">
@@ -4209,8 +4188,6 @@ export default function CFOQueryResolutionEngine() {
           <p className="text-xs text-slate-400 mt-1">Query Resolution Platform v3.0</p>
         </div>
 
-
-
         {/* Navigation */}
         <nav className="flex-1 py-3 overflow-y-auto">
           {/* AI Engine */}
@@ -4219,7 +4196,7 @@ export default function CFOQueryResolutionEngine() {
             { id: 'intents', label: 'Intent Library', icon: <MessageSquare size={18} />, count: intents.length },
             { id: 'test', label: 'Test Console', icon: <FlaskConical size={18} /> },
           ].map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+            <button key={tab.id} onClick={() => { setActiveTab(tab.id); setSelectedIntentId(null); }} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
               <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
               {tab.count !== undefined && <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs">{tab.count}</span>}
             </button>
@@ -4234,7 +4211,7 @@ export default function CFOQueryResolutionEngine() {
               </CollapsibleTrigger>
               <CollapsibleContent>
                 {configTabs.map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                  <button key={tab.id} onClick={() => { setActiveTab(tab.id); setSelectedIntentId(null); }} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
                     <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
                     {'loading' in tab && (tab as any).loading ? (
                       <span className="px-1.5 py-0.5 bg-slate-600 rounded text-xs flex items-center gap-1">
@@ -4257,11 +4234,11 @@ export default function CFOQueryResolutionEngine() {
               { id: 'api-console', label: 'API Console', icon: <Terminal size={18} /> },
               { id: 'master-plan', label: 'Master Plan', icon: <FileText size={18} /> },
             ].map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+              <button key={tab.id} onClick={() => { setActiveTab(tab.id); setSelectedIntentId(null); }} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === tab.id ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
                 <span className="flex items-center gap-2">{tab.icon} {tab.label}</span>
               </button>
             ))}
-            <button onClick={() => setActiveTab('pipeline-debug')} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'pipeline-debug' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+            <button onClick={() => { setActiveTab('pipeline-debug'); setSelectedIntentId(null); }} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'pipeline-debug' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
               <span className="flex items-center gap-2"><GitBranch size={18} /> Pipeline Debugger</span>
               <span className="text-[10px] px-1.5 py-0.5 bg-emerald-600/20 text-emerald-400 rounded">NEW</span>
             </button>
@@ -4271,7 +4248,7 @@ export default function CFOQueryResolutionEngine() {
           {isAdmin && (
             <div className="mt-2 border-t border-slate-700/50">
               <p className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Admin</p>
-              <button onClick={() => setActiveTab('users')} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'users' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+              <button onClick={() => { setActiveTab('users'); setSelectedIntentId(null); }} className={`w-full px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${activeTab === 'users' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
                 <span className="flex items-center gap-2"><Users size={18} /> Users</span>
               </button>
             </div>
@@ -4300,10 +4277,7 @@ export default function CFOQueryResolutionEngine() {
             </div>
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <button
-                  className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
-                  title="Sign out"
-                >
+                <button className="p-2 hover:bg-slate-700 rounded-lg transition-colors" title="Sign out">
                   <LogOut size={16} className="text-slate-400" />
                 </button>
               </AlertDialogTrigger>
@@ -4315,15 +4289,8 @@ export default function CFOQueryResolutionEngine() {
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600">
-                    Cancel
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => signOut()}
-                    className="bg-red-600 hover:bg-red-700 text-white"
-                  >
-                    Sign out
-                  </AlertDialogAction>
+                  <AlertDialogCancel className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600">Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => signOut()} className="bg-red-600 hover:bg-red-700 text-white">Sign out</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -4333,7 +4300,23 @@ export default function CFOQueryResolutionEngine() {
 
       {/* Main Content */}
       <div className="flex-1 overflow-auto">
-        {activeTab === 'intents' && (
+        {activeTab === 'intents' && selectedIntentId && stableSelectedIntent && businessContext ? (
+          <IntentDetailScreen
+            key={selectedIntentId}
+            intent={stableSelectedIntent}
+            modules={modules}
+            mcpTools={allMcpTools}
+            enrichmentTypes={enrichmentTypes}
+            entityTypes={entityTypes}
+            responseTypes={responseTypes}
+            countryConfigs={countryConfigs}
+            businessContext={businessContext}
+            onBack={() => setSelectedIntentId(null)}
+            onSave={handleSaveIntent}
+            onDelete={handleDeleteIntent}
+            onRegenerate={regenerateSection}
+          />
+        ) : activeTab === 'intents' ? (
           <IntentListView
             intents={filteredIntents}
             modules={modules}
@@ -4357,7 +4340,7 @@ export default function CFOQueryResolutionEngine() {
             generationProgress={generationProgress}
             mcpTools={allMcpTools}
           />
-        )}
+        ) : null}
         
         {activeTab === 'mcp' && (
           <MCPToolsView 
