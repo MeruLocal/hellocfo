@@ -708,10 +708,11 @@ const autoSaveAISuggestion = async (intentId: string, aiData: any) => {
         personaRelevance: aiData.personaRelevance || {},
         suggestedAt: new Date().toISOString(),
         stepsAdded: newSteps.length,
+        steps: aiData.steps || [],
         gaps: (aiData.steps || [])
           .filter((s: any) => s.toolAvailable === false)
           .map((s: any) => ({
-            tool: s.mcpTool,
+            toolName: s.mcpTool,
             description: s.description,
             fallback: s.fallbackSuggestion,
           })),
