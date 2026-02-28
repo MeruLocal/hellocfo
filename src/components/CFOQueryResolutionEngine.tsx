@@ -2010,7 +2010,7 @@ function IntentListView({
   onSearchChange, onFilterModuleChange, onFilterStatusChange,
   onSelectIntent, onAddIntent, onDeleteIntent, onGenerateFlow,
   onImport, onExportCSV, onExportJSON, onDownloadTemplate, onOpenAIGenerator,
-  isGenerating, isImporting, generationProgress
+  isGenerating, isImporting, generationProgress, mcpTools
 }: {
   intents: Intent[];
   modules: Module[];
@@ -2032,6 +2032,7 @@ function IntentListView({
   isGenerating: string | null;
   isImporting: boolean;
   generationProgress: { current: number; total: number };
+  mcpTools: MCPTool[];
 }) {
   const [activeSubTab, setActiveSubTab] = useState<'intents' | 'cases'>('intents');
   const [selectedIntentIds, setSelectedIntentIds] = useState<Set<string>>(new Set());
@@ -2065,6 +2066,37 @@ function IntentListView({
       }
     }
     setBulkGenProgress(prev => ({ ...prev, running: false }));
+    setSelectedIntentIds(new Set());
+  };
+
+  const handleBulkSuggestPipeline = () => {
+    const ids = Array.from(selectedIntentIds);
+    if (ids.length === 0) return;
+    const toolNames = mcpTools.map(t => t.id);
+    let queued = 0;
+    for (const id of ids) {
+      const intent = intents.find(i => i.id === id);
+      if (!intent) continue;
+      const resFlow = intent.resolutionFlow as any;
+      const currentPipeline = resFlow?.dataPipeline || [];
+      fireSuggestionInBackground(
+        intent.id,
+        intent.name,
+        {
+          intentName: intent.name,
+          description: intent.description,
+          trainingPhrases: intent.trainingPhrases,
+          entities: intent.entities,
+          currentPipeline,
+          availableTools: toolNames,
+        },
+        globalNavigateToIntent || undefined
+      );
+      queued++;
+    }
+    sonnerToast.info(`Queued AI pipeline suggestions for ${queued} intents`, {
+      description: 'Results will appear as toast notifications when ready',
+    });
     setSelectedIntentIds(new Set());
   };
 
@@ -2253,6 +2285,11 @@ function IntentListView({
                   </button>
                   <button onClick={() => handleBulkGenerate('response')} className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center gap-2">
                     <Layers size={14} className="text-cyan-500" /> Response Config
+                  </button>
+                  <div className="border-t my-1" />
+                  <p className="px-4 py-1 text-[10px] uppercase tracking-wider text-gray-400 font-semibold">AI Analysis</p>
+                  <button onClick={handleBulkSuggestPipeline} className="w-full text-left px-4 py-2 hover:bg-violet-50 flex items-center gap-2">
+                    <Sparkles size={14} className="text-violet-600" /> Suggest Ideal Pipeline
                   </button>
                 </div>
               </div>
@@ -4163,6 +4200,7 @@ export default function CFOQueryResolutionEngine() {
             isGenerating={isGenerating}
             isImporting={isImporting}
             generationProgress={generationProgress}
+            mcpTools={allMcpTools}
           />
         )}
         
