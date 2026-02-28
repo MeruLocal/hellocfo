@@ -1,0 +1,11 @@
+INSERT INTO modules (id, name, icon, color, sort_order, is_active, sub_modules) VALUES
+  ('analytics', 'Analytics & KPIs', '📊', 'purple', 50, true, '[{"id":"kpis","name":"KPIs"},{"id":"trends","name":"Trends"},{"id":"working_capital","name":"Working Capital"},{"id":"cash_analysis","name":"Cash Analysis"},{"id":"tax_planning","name":"Tax Planning"},{"id":"alerts","name":"Alerts"},{"id":"executive_summary","name":"Executive Summary"}]'::jsonb),
+  ('audit', 'Audit & Compliance', '🔍', 'orange', 51, true, '[{"id":"audit_trail","name":"Audit Trail"},{"id":"compliance_checks","name":"Compliance Checks"},{"id":"data_verification","name":"Data Verification"},{"id":"audit_reports","name":"Audit Reports"}]'::jsonb),
+  ('banking', 'Banking', '🏦', 'blue', 52, true, '[{"id":"bank_accounts","name":"Bank Accounts"},{"id":"bank_reconciliation","name":"Bank Reconciliation"},{"id":"bank_transactions","name":"Bank Transactions"},{"id":"bank_transfers","name":"Bank Transfers"},{"id":"cash_management","name":"Cash Management"},{"id":"bank_feeds","name":"Bank Feeds"}]'::jsonb),
+  ('budgets', 'Budgets & Forecasting', '📋', 'green', 53, true, '[{"id":"budget_tracking","name":"Budget Tracking"},{"id":"budget_variance","name":"Budget Variance"},{"id":"forecasting","name":"Forecasting"}]'::jsonb),
+  ('chart_of_accounts', 'Chart of Accounts', '📒', 'teal', 54, true, '[{"id":"account_management","name":"Account Management"}]'::jsonb),
+  ('contacts', 'Contacts', '👥', 'indigo', 55, true, '[{"id":"customers","name":"Customers"},{"id":"vendors","name":"Vendors"}]'::jsonb),
+  ('journal_entries', 'Journal Entries', '📝', 'amber', 56, true, '[{"id":"manual_journals","name":"Manual Journals"},{"id":"recurring_journals","name":"Recurring Journals"},{"id":"provisions","name":"Provisions & Accruals"}]'::jsonb),
+  ('system', 'System & Help', '⚙️', 'gray', 99, true, '[{"id":"help","name":"Help"},{"id":"settings","name":"Settings"},{"id":"diagnostics","name":"Diagnostics"}]'::jsonb),
+  ('tds_tcs', 'TDS & TCS', '🧾', 'red', 57, true, '[{"id":"tds","name":"TDS"},{"id":"tcs","name":"TCS"},{"id":"advance_tax","name":"Advance Tax"}]'::jsonb)
+ON CONFLICT (id) DO NOTHING;
