@@ -1,91 +1,54 @@
 
 
-## Plan: AI Tool Gap Analysis Panel (using Azure OpenAI)
+# AI-Suggested Ideal Pipeline Feature
 
-### Overview
-Add a collapsible panel at the bottom of the MCP Tools view that uses your existing Azure OpenAI (GPT-5.2) to analyze your current tool inventory against standard accounting software capabilities and GAAP/IFRS requirements, identifying missing tools you should add.
+## Overview
+Add an "AI Suggest Ideal Pipeline" section inside the Data Pipeline tab that uses AI (via Lovable AI gateway) to analyze the current intent and generate an optimal, best-in-class data pipeline. The AI considers five financial personas: Bookkeeper, Accountant, CFO, Business Owner, and Financial Adviser.
 
-### Architecture
+## How It Works
+1. User clicks a "Suggest Ideal Pipeline" button (with a Sparkles icon) in the Data Pipeline header area
+2. The system sends the intent name, description, training phrases, entities, current pipeline, and available MCP tools to a backend function
+3. AI analyzes what a world-class financial chatbot would need for that intent across all 5 personas
+4. Results appear in a collapsible panel below the header showing:
+   - A persona-aware analysis summary (which personas benefit most)
+   - The suggested ideal pipeline steps in a visual card layout
+   - Each step shows: node type, tool name, output variable, description, and a "persona relevance" badge
+   - An "Apply Suggested Pipeline" button to replace the current pipeline with the AI suggestion
+   - A "Merge" button to add only missing steps to the existing pipeline
 
-```text
-[MCP Tools View]
-       |
-       v
-[Analyze Gaps button] --> Edge Function (analyze-tool-gaps)
-                              |
-                              v
-                     Azure OpenAI GPT-5.2 (same secrets)
-                              |
-                              v
-                     Structured gap analysis response
-                              |
-                              v
-                     [Gap Analysis Panel - grouped by category]
-```
+## Visual Design
+- Purple/violet themed section (to differentiate from the blue Check Tools and orange AI Badge)
+- Collapsible panel with a gradient header showing "AI Ideal Pipeline" with persona icons
+- Each suggested node displayed as a card with tool availability status (cross-checked against MCP inventory)
+- Missing tools flagged with amber warning + fallback suggestion
 
-### Changes
+## Technical Details
 
-#### 1. Create Edge Function: `supabase/functions/analyze-tool-gaps/index.ts`
-- Uses existing `OPENAI_GPT_5_2_API_KEY` and `OPENAI_GPT_5_2_BASE_URL` secrets (same as intent generation)
-- Receives current tool names from frontend
-- Sends a detailed accounting-domain system prompt comparing against: AR, AP, GL, Banking, Inventory, Payroll, Tax/GST, Fixed Assets, Budgeting, Audit Trail, Multi-currency, Reporting
-- References standard software capabilities (Tally, QuickBooks, Xero, Zoho Books, SAP)
-- Uses tool-calling to return structured output: array of `{ category, priority, missingTools: [{ name, description, rationale }] }`
+### 1. New Edge Function: `supabase/functions/suggest-ideal-pipeline/index.ts`
+- Accepts: intent name, description, training phrases, entities, current pipeline, available MCP tool names
+- Uses Lovable AI gateway (`google/gemini-3-flash-preview`) -- no extra API key needed
+- System prompt instructs the AI to think as 5 personas and design the most comprehensive pipeline
+- Returns structured JSON via tool calling: array of suggested pipeline nodes with persona tags
 - Handles 429/402 errors gracefully
 
-#### 2. Modify: `src/components/CFOQueryResolutionEngine.tsx`
-- Add a collapsible "AI Tool Gap Analysis" section at the bottom of `MCPToolsView`
-- "Analyze Gaps" button triggers the edge function with current tool names
-- Results displayed grouped by accounting category with priority badges:
-  - **Critical** (red) -- core accounting gaps
-  - **Recommended** (amber) -- important but not blocking
-  - **Nice-to-have** (blue) -- enhancements
-- Loading spinner during analysis
-- Results cached in component state
+### 2. UI Changes in `src/components/CFOQueryResolutionEngine.tsx` (DataPipelineTab)
+- Add state: `suggestedPipeline`, `isSuggesting`, `showSuggestion`
+- Add "Suggest Ideal Pipeline" button next to "Check Tools"
+- Add collapsible results panel between the tool check banner and the pipeline nodes
+- Panel shows:
+  - Persona relevance summary (5 small badges: Bookkeeper, Accountant, CFO, Owner, Adviser)
+  - Suggested pipeline steps as read-only cards with node type icons
+  - Each card shows tool availability status (green check / amber warning)
+  - "Apply All" button replaces current pipeline
+  - "Merge Missing" button adds only steps not already present
+  - "Dismiss" button to close
 
-#### 3. Update `supabase/config.toml`
-- Add `[functions.analyze-tool-gaps]` with `verify_jwt = false`
-
-### UI Design
-
-```text
-+----------------------------------------------------------+
-| AI Tool Gap Analysis                    [Analyze Gaps]    |
-| Compare your tools against accounting standards           |
-+----------------------------------------------------------+
-| Fixed Assets (3 missing)                         CRITICAL |
-|   - create_fixed_asset: Register new fixed assets         |
-|   - depreciation_schedule: Calculate depreciation         |
-|   - dispose_asset: Record asset disposal                  |
-|                                                           |
-| Payroll (2 missing)                          RECOMMENDED  |
-|   - process_payroll: Run payroll for employees            |
-|   - get_payroll_summary: View payroll reports             |
-|                                                           |
-| Audit Trail (1 missing)                      NICE-TO-HAVE |
-|   - get_audit_log: View change history for records        |
-+----------------------------------------------------------+
-```
-
-### Files
-
-| File | Action |
-|------|--------|
-| `supabase/functions/analyze-tool-gaps/index.ts` | **Create** -- Edge function using Azure OpenAI GPT-5.2 |
-| `src/components/CFOQueryResolutionEngine.tsx` | **Modify** -- Add gap analysis panel to MCP Tools view |
-| `supabase/config.toml` | **Auto-updated** -- Add function entry |
-
-### Technical Details
-
-**Azure OpenAI Integration (same pattern as existing functions):**
-- Reads `OPENAI_GPT_5_2_BASE_URL` and `OPENAI_GPT_5_2_API_KEY` from Deno env
-- Applies same URL normalization (protocol fix, `/chat/completions` suffix)
-- Uses `api-key` header for Azure authentication
-- Tool-calling for structured JSON extraction (no raw JSON parsing needed)
-
-**System Prompt Strategy:**
-- Lists 15+ standard accounting modules with expected tool coverage
-- References GAAP/IFRS requirements for completeness
-- Compares against Tally, QuickBooks, Xero, Zoho Books module lists
-- Categorizes gaps by priority based on how fundamental the module is
-
+### 3. AI Prompt Strategy
+The system prompt will instruct the model to:
+- Analyze the intent from 5 financial personas' perspectives
+- Suggest pre-requisite data fetches (e.g., fetching vendor list before analyzing spend)
+- Include computation nodes for KPIs, ratios, and trend calculations
+- Add conditional nodes for threshold-based branching (e.g., alert if cash runway < 3 months)
+- Only reference tools from the provided MCP inventory list
+- Flag where tools are missing and suggest workarounds
+- Return structured output with persona relevance tags per step
