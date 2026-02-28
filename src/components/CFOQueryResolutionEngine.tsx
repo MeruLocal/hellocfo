@@ -2447,7 +2447,7 @@ function IntentListView({
                   onClick={() => onSelectIntent(intent.id)}
                   className={`grid grid-cols-12 gap-4 px-4 py-3 items-center hover:bg-gray-50 cursor-pointer transition-colors ${isSelected ? 'bg-indigo-50/50' : ''}`}
                 >
-                  <div className="col-span-1 flex items-center">
+                  <div className="col-span-1 flex items-center" onClick={(e) => { e.stopPropagation(); toggleSelectIntent(intent.id); }}>
                     <input
                       type="checkbox"
                       checked={isSelected}
