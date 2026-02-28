@@ -503,7 +503,7 @@ const buildAliasLookup = (): Record<string, string> => {
 const ALIAS_TO_TOOL = buildAliasLookup();
 
 // ============================================================================
-// MODULE-LEVEL BACKGROUND SUGGESTION STORE
+// MODULE-LEVEL BACKGROUND SUGGESTION STORE & QUEUE
 // Persists across component mount/unmount so navigation doesn't cancel the call
 // ============================================================================
 interface PendingSuggestion {
@@ -515,16 +515,118 @@ interface PendingSuggestion {
 }
 
 const pendingSuggestions = new Map<string, PendingSuggestion>();
-// Listeners for components that want to be notified when a suggestion completes
 const suggestionListeners = new Map<string, (result: PendingSuggestion) => void>();
 
+// --- Sequential Queue for bulk suggestions ---
+interface QueueItem {
+  intentId: string;
+  intentName: string;
+  body: any;
+  onNavigate?: (intentId: string) => void;
+}
+
+interface SuggestionQueueState {
+  items: QueueItem[];
+  processing: boolean;
+  current: number;
+  total: number;
+  completed: number;
+  failed: number;
+  currentIntentName: string;
+  cancelled: boolean;
+}
+
+const suggestionQueue: SuggestionQueueState = {
+  items: [],
+  processing: false,
+  current: 0,
+  total: 0,
+  completed: 0,
+  failed: 0,
+  currentIntentName: '',
+  cancelled: false,
+};
+
+const queueStateListeners = new Set<() => void>();
+const notifyQueueListeners = () => queueStateListeners.forEach(fn => fn());
+
+const processQueue = async () => {
+  if (suggestionQueue.processing) return;
+  suggestionQueue.processing = true;
+  suggestionQueue.cancelled = false;
+  notifyQueueListeners();
+
+  while (suggestionQueue.items.length > 0 && !suggestionQueue.cancelled) {
+    const item = suggestionQueue.items.shift()!;
+    suggestionQueue.current++;
+    suggestionQueue.currentIntentName = item.intentName;
+    notifyQueueListeners();
+
+    if (pendingSuggestions.get(item.intentId)?.status === 'done') {
+      suggestionQueue.completed++;
+      notifyQueueListeners();
+      continue;
+    }
+
+    pendingSuggestions.set(item.intentId, { status: 'pending', intentId: item.intentId, intentName: item.intentName });
+
+    try {
+      const { data, error } = await supabase.functions.invoke('suggest-ideal-pipeline', { body: item.body });
+      if (error || data?.error) {
+        const errMsg = error?.message || data?.error || 'Unknown error';
+        pendingSuggestions.set(item.intentId, { status: 'error', error: errMsg, intentId: item.intentId, intentName: item.intentName });
+        suggestionQueue.failed++;
+      } else {
+        pendingSuggestions.set(item.intentId, { status: 'done', data, intentId: item.intentId, intentName: item.intentName });
+        suggestionQueue.completed++;
+        sonnerToast.success(`AI pipeline ready for "${item.intentName}"`, {
+          description: `${data.steps?.length || 0} steps suggested`,
+          duration: 8000,
+          action: item.onNavigate ? { label: 'View', onClick: () => item.onNavigate!(item.intentId) } : undefined,
+        });
+      }
+    } catch (_e) {
+      pendingSuggestions.set(item.intentId, { status: 'error', error: 'Network error', intentId: item.intentId, intentName: item.intentName });
+      suggestionQueue.failed++;
+    }
+
+    const listener = suggestionListeners.get(item.intentId);
+    if (listener) listener(pendingSuggestions.get(item.intentId)!);
+    notifyQueueListeners();
+
+    // 2s pause between requests to avoid rate limits
+    if (suggestionQueue.items.length > 0 && !suggestionQueue.cancelled) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  suggestionQueue.processing = false;
+  suggestionQueue.currentIntentName = '';
+  notifyQueueListeners();
+};
+
+const cancelQueue = () => {
+  suggestionQueue.cancelled = true;
+  suggestionQueue.items.length = 0;
+  notifyQueueListeners();
+};
+
+const resetQueueStats = () => {
+  suggestionQueue.current = 0;
+  suggestionQueue.total = 0;
+  suggestionQueue.completed = 0;
+  suggestionQueue.failed = 0;
+  suggestionQueue.cancelled = false;
+  notifyQueueListeners();
+};
+
+// Single-intent fire (used by individual intent suggest button)
 const fireSuggestionInBackground = (
   intentId: string,
   intentName: string,
   body: any,
   onNavigate?: (intentId: string) => void
 ) => {
-  // If already pending for this intent, skip
   if (pendingSuggestions.get(intentId)?.status === 'pending') return;
   
   pendingSuggestions.set(intentId, { status: 'pending', intentId, intentName });
@@ -545,7 +647,6 @@ const fireSuggestionInBackground = (
         } : undefined,
       });
     }
-    // Notify any mounted listener
     const listener = suggestionListeners.get(intentId);
     if (listener) listener(pendingSuggestions.get(intentId)!);
   });
@@ -2037,6 +2138,14 @@ function IntentListView({
   const [activeSubTab, setActiveSubTab] = useState<'intents' | 'cases'>('intents');
   const [selectedIntentIds, setSelectedIntentIds] = useState<Set<string>>(new Set());
   const [bulkGenProgress, setBulkGenProgress] = useState({ running: false, current: 0, total: 0, completed: 0, failed: 0 });
+  const [queueProgress, setQueueProgress] = useState({ ...suggestionQueue });
+
+  // Subscribe to queue state changes
+  useEffect(() => {
+    const listener = () => setQueueProgress({ ...suggestionQueue });
+    queueStateListeners.add(listener);
+    return () => { queueStateListeners.delete(listener); };
+  }, []);
 
   const allSelected = intents.length > 0 && selectedIntentIds.size === intents.length;
   const someSelected = selectedIntentIds.size > 0 && selectedIntentIds.size < intents.length;
@@ -2074,33 +2183,33 @@ function IntentListView({
     if (ids.length === 0) return;
     const toolNames = mcpTools.map(t => t.id);
 
-    // Stagger requests with 3-second delay to avoid 429 rate limits and BOOT_ERRORs
-    let queued = 0;
-    ids.forEach((id, index) => {
+    // Reset queue stats and populate queue items
+    resetQueueStats();
+    const queueItems: QueueItem[] = [];
+    for (const id of ids) {
       const intent = intents.find(i => i.id === id);
-      if (!intent) return;
+      if (!intent) continue;
       const resFlow = intent.resolutionFlow as any;
       const currentPipeline = resFlow?.dataPipeline || [];
-      setTimeout(() => {
-        fireSuggestionInBackground(
-          intent.id,
-          intent.name,
-          {
-            intentName: intent.name,
-            description: intent.description,
-            trainingPhrases: intent.trainingPhrases,
-            entities: intent.entities,
-            currentPipeline,
-            availableTools: toolNames,
-          },
-          globalNavigateToIntent || undefined
-        );
-      }, index * 3000); // 3s stagger between each call
-      queued++;
-    });
-    sonnerToast.info(`Queued AI pipeline suggestions for ${queued} intents`, {
-      description: `Requests are staggered over ~${Math.ceil(queued * 3 / 60)} min to avoid rate limits`,
-    });
+      queueItems.push({
+        intentId: intent.id,
+        intentName: intent.name,
+        body: {
+          intentName: intent.name,
+          description: intent.description,
+          trainingPhrases: intent.trainingPhrases,
+          entities: intent.entities,
+          currentPipeline,
+          availableTools: toolNames,
+        },
+        onNavigate: globalNavigateToIntent || undefined,
+      });
+    }
+
+    suggestionQueue.items.push(...queueItems);
+    suggestionQueue.total = queueItems.length;
+    notifyQueueListeners();
+    processQueue();
     setSelectedIntentIds(new Set());
   };
 
@@ -2247,6 +2356,48 @@ function IntentListView({
             ✅ Bulk generation complete: {bulkGenProgress.completed} succeeded, {bulkGenProgress.failed} failed
           </p>
           <button onClick={() => setBulkGenProgress({ running: false, current: 0, total: 0, completed: 0, failed: 0 })} className="text-xs text-blue-500 hover:underline">Dismiss</button>
+        </div>
+      )}
+
+      {/* AI Pipeline Suggestion Queue Progress */}
+      {queueProgress.processing && queueProgress.total > 0 && (
+        <div className="mb-6 p-4 bg-violet-50 border border-violet-200 rounded-lg">
+          <div className="flex items-center gap-3">
+            <Loader2 size={20} className="animate-spin text-violet-600" />
+            <div className="flex-1">
+              <p className="font-medium text-violet-700">
+                AI Pipeline Queue: {queueProgress.current} of {queueProgress.total}
+              </p>
+              <p className="text-xs text-violet-500 mt-0.5">
+                Processing: <span className="font-medium">{queueProgress.currentIntentName}</span>
+              </p>
+              <div className="mt-2">
+                <div className="h-2.5 bg-violet-200 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-violet-600 transition-all duration-500 rounded-full"
+                    style={{ width: `${(queueProgress.current / queueProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-violet-600 mt-1">
+                  ✅ {queueProgress.completed} done · ❌ {queueProgress.failed} failed · ⏳ {queueProgress.total - queueProgress.current} remaining
+                </p>
+              </div>
+            </div>
+            <button 
+              onClick={cancelQueue} 
+              className="px-3 py-1.5 text-xs font-medium bg-violet-200 text-violet-700 rounded-lg hover:bg-violet-300 flex items-center gap-1"
+            >
+              <X size={12} /> Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {!queueProgress.processing && queueProgress.total > 0 && (queueProgress.completed > 0 || queueProgress.failed > 0) && (
+        <div className="mb-6 p-4 bg-violet-50 border border-violet-200 rounded-lg flex items-center justify-between">
+          <p className="font-medium text-violet-700">
+            {queueProgress.cancelled ? '⏹️ Queue cancelled' : '✅ AI pipeline suggestions complete'}: {queueProgress.completed} succeeded, {queueProgress.failed} failed
+          </p>
+          <button onClick={resetQueueStats} className="text-xs text-violet-500 hover:underline">Dismiss</button>
         </div>
       )}
 
