@@ -2969,10 +2969,16 @@ function IntentDetailScreen({
   const [activeDetailTab, setActiveDetailTab] = useState('details');
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [previousIntent, setPreviousIntent] = useState<Intent | null>(null);
+  const prevIntentIdRef = React.useRef(initialIntent.id);
 
   useEffect(() => {
     setIntent(initialIntent);
     setPreviousIntent(null);
+    // Only reset tab when switching to a different intent
+    if (prevIntentIdRef.current !== initialIntent.id) {
+      setActiveDetailTab('details');
+      prevIntentIdRef.current = initialIntent.id;
+    }
   }, [initialIntent]);
 
   const handleChange = (updates: Partial<Intent>) => {
