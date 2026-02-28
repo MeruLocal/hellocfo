@@ -2073,29 +2073,33 @@ function IntentListView({
     const ids = Array.from(selectedIntentIds);
     if (ids.length === 0) return;
     const toolNames = mcpTools.map(t => t.id);
+
+    // Stagger requests with 3-second delay to avoid 429 rate limits and BOOT_ERRORs
     let queued = 0;
-    for (const id of ids) {
+    ids.forEach((id, index) => {
       const intent = intents.find(i => i.id === id);
-      if (!intent) continue;
+      if (!intent) return;
       const resFlow = intent.resolutionFlow as any;
       const currentPipeline = resFlow?.dataPipeline || [];
-      fireSuggestionInBackground(
-        intent.id,
-        intent.name,
-        {
-          intentName: intent.name,
-          description: intent.description,
-          trainingPhrases: intent.trainingPhrases,
-          entities: intent.entities,
-          currentPipeline,
-          availableTools: toolNames,
-        },
-        globalNavigateToIntent || undefined
-      );
+      setTimeout(() => {
+        fireSuggestionInBackground(
+          intent.id,
+          intent.name,
+          {
+            intentName: intent.name,
+            description: intent.description,
+            trainingPhrases: intent.trainingPhrases,
+            entities: intent.entities,
+            currentPipeline,
+            availableTools: toolNames,
+          },
+          globalNavigateToIntent || undefined
+        );
+      }, index * 3000); // 3s stagger between each call
       queued++;
-    }
+    });
     sonnerToast.info(`Queued AI pipeline suggestions for ${queued} intents`, {
-      description: 'Results will appear as toast notifications when ready',
+      description: `Requests are staggered over ~${Math.ceil(queued * 3 / 60)} min to avoid rate limits`,
     });
     setSelectedIntentIds(new Set());
   };

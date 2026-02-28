@@ -60,7 +60,24 @@ Return your analysis using the suggest_pipeline tool.`;
 
 Provide a comprehensive pipeline that would make this the best-in-class financial chatbot for this intent.`;
 
-    const response = await fetch(endpoint, {
+    // Retry wrapper with exponential backoff for rate limits
+    const fetchWithRetry = async (url: string, options: RequestInit, retries = 3): Promise<Response> => {
+      for (let attempt = 0; attempt < retries; attempt++) {
+        const res = await fetch(url, options);
+        if (res.status === 429 && attempt < retries - 1) {
+          const retryAfter = parseInt(res.headers.get('retry-after') || '0', 10);
+          const delay = retryAfter > 0 ? retryAfter * 1000 : Math.pow(2, attempt + 1) * 2000;
+          console.log(`Rate limited (429), retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        return res;
+      }
+      // Should not reach here, but just in case
+      return fetch(url, options);
+    };
+
+    const response = await fetchWithRetry(endpoint, {
       method: "POST",
       headers: {
         "api-key": apiKey,
